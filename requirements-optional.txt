@@ -1,0 +1,29 @@
+# Install only what you use.
+pyarrow                   # parquet, faster text columns, Delta tables
+xlrd                      # legacy .xls
+pyxlsb                    # .xlsb
+python-docx               # docs: Word
+pdfplumber                # docs: PDF text and tables
+defusedxml                # parse: safer XML parsing
+requests                  # api, notify, web.requests_session
+beautifulsoup4            # htmlparse.html_select (CSS selectors)
+playwright                # web (then: playwright install chromium, or Browser(channel="msedge"))
+selenium                  # webdriver (Edge: msedgedriver.exe matching your Edge version)
+requests-negotiate-sspi   # api.windows_auth_session (Windows SSO to intranet sites)
+pytesseract               # ocr (also install the Tesseract app)
+Pillow                    # ocr image clean-up
+pypdfium2                 # ocr: PDF pages to images, text layer check
+winocr                    # ocr.windows_ocr (Windows 10/11 built-in OCR)
+sqlalchemy                # db
+pyodbc                    # db: SQL Server / Azure SQL / Fabric (plus ODBC Driver 18)
+deltalake                 # lake: Delta tables, OneLake
+azure-identity            # lake / db: Entra ID tokens
+extract-msg               # mail.read_msg (.msg files)
+pywin32                   # excel_app, outlook (Windows)
+oletools                  # excel_app.vba_extract
+pywinauto                 # desktop (Windows)
+pyautogui                 # desktop pixels
+pyperclip                 # desktop clipboard
+opencv-python             # pyautogui image confidence=
+keyring                   # config.get_secret from Windows Credential Manager
+pytest                    # tests

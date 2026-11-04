@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "toolbank"
+version = "0.1.0"
+description = "Generic automation functions: data prep, Excel, OCR, browsers, APIs, email, SQL, Fabric, triggers"
+requires-python = ">=3.10"
+dependencies = ["pandas>=2.0", "openpyxl>=3.1", "pyyaml>=6.0"]
+
+[tool.setuptools.packages.find]
+include = ["toolbank*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
