@@ -1,11 +1,13 @@
 r"""
 Robot template: copy, rename, fill the three TODOs.
 Run:  python my_robot.py --env dev [--dry-run] [--business-date 2026-03-06]
-Exit: 0 ok · 2 business exceptions or bad input (send report to owner) · 3 system failure (re-run)
-      4 config error · 5 robot error (needs a fix) · 6 already running (a second copy was started)
+Exit: 0 ok · 2 business exceptions or bad input (send the report to the owner; if the input was rejected before the
+      report exists, run.log.jsonl says why) · 3 system failure (re-run: the checkpoint resumes) · 4 config error
+      5 robot error (needs a fix) · 6 already running (a second copy was started)
 Schedule: schtasks_create("CoE\\my_robot", r'"C:\path\python.exe" "C:\bots\my_robot.py" --env prod', dry_run=False)
 """
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -18,7 +20,7 @@ ROBOT = "my_robot"
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("--env", default="dev")
+    ap.add_argument("--env", default=os.environ.get("BOT_ENV", "dev"))
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--business-date", default=None)
     ap.add_argument("--config-dir", default="config")
@@ -33,7 +35,7 @@ def main(argv=None):
     rd = run_dir(ROBOT, args.business_date, root=cfg.get("workdir", "work"))
     log = get_logger(rd / "run.log.jsonl")
     cp = Checkpoint(rd / "checkpoint.json")
-    log.info("start", extra={"event": "start", "status": args.env})
+    log.info("start", extra={"event": "start", "status": args.env, "dry_run": args.dry_run})
     try:
         with single_instance(ROBOT, lock_dir=rd):      # scheduler fired twice -> second copy exits 6
             return run(args, cfg, rd, log, cp)
@@ -67,9 +69,9 @@ def run(args, cfg, rd, log, cp):
                                            {"metric": "done", "value": len(done)},
                                            {"metric": "exceptions", "value": len(failures)}]),
                   "Results": pd.DataFrame(results), "Exceptions": failures}
-        act(safe_write_excel, out, sheets, overwrite=True, dry_run=args.dry_run)   # TODO: add email/upload
+        act(safe_write_excel, out, sheets, overwrite=True, dry_run=args.dry_run, log=log.info)   # TODO: email/upload
         log.info("end", extra={"event": "end", "rows": len(df), "count": len(failures)})
-        return 2 if len(failures) else 0
+        return 3 if failures["retryable"].any() else 2 if len(failures) else 0   # retryable -> re-run resumes
     except Exception as e:                       # classified: BusinessError 2, SystemError_ 3, anything else 5
         err, info = classify(e), error_info(e)
         log.error(str(err), extra={"code": err.code, "where": info["where"], "type": info["type"]}, exc_info=True)

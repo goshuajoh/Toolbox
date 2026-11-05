@@ -3,7 +3,9 @@ import pandas as pd
 
 
 def summarize(df, by, **aggs):
-    """Group and aggregate: summarize(df, ['ccy'], total=('amount','sum'), n=('ref','count'))."""
+    """Group and aggregate: summarize(df, ['ccy'], total=('amount','sum'), n=('ref','count')). A ['amount', 'sum']
+    list (as a YAML recipe gives it) works like the tuple."""
+    aggs = {k: tuple(v) if isinstance(v, list) else v for k, v in aggs.items()}
     return df.groupby(by, dropna=False).agg(**aggs).reset_index()
 
 

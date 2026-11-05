@@ -186,8 +186,11 @@ def first_last(df, by, order_col):
 
 def filter_rows(df, *conditions, how="all", case=False):
     """Alteryx Filter with several conditions: filter_rows(df, ("ccy", "in", "USD,SGD"), ("amount", ">", 1e6)).
-    how='all' (AND) or 'any' (OR); operators as rules.OPS. Returns (matching, not_matching)."""
+    One condition may be given flat: filter_rows(df, "ccy", "in", "USD,SGD"). how='all' (AND) or 'any' (OR);
+    operators as rules.OPS. Returns (matching, not_matching)."""
     from .rules import condition
+    if conditions and all(not isinstance(c, (list, tuple)) for c in conditions):
+        conditions = [conditions]
     masks = [condition(df, *(list(c) + [None])[:3], case=case) for c in conditions]
     if not masks:
         return df, df.iloc[0:0]

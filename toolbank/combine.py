@@ -5,7 +5,20 @@ from functools import reduce
 import numpy as np
 import pandas as pd
 
-from .clean import normalise_name
+from .clean import _INVISIBLE, normalise_name
+
+
+def _key_text(s, case):
+    """Lookup keys as comparable text: whole-number floats without '.0' (an Excel id column with one blank cell
+    is float), datetimes in one format, NBSP / repeated spaces collapsed, trimmed, upper-cased unless case."""
+    if pd.api.types.is_float_dtype(s):
+        nn = s.dropna()
+        if len(nn) and np.isfinite(nn).all() and (nn == nn.round()).all():
+            s = s.astype("Int64")
+    elif pd.api.types.is_datetime64_any_dtype(s):
+        s = s.dt.strftime("%Y-%m-%d %H:%M:%S")
+    t = s.astype("string").str.replace(_INVISIBLE, " ", regex=True).str.replace(r"\s+", " ", regex=True).str.strip()
+    return t if case else t.str.upper()
 
 
 def join3(left, right, left_on, right_on=None, suffixes=("", "_r"), validate=None):
@@ -20,27 +33,29 @@ def join3(left, right, left_on, right_on=None, suffixes=("", "_r"), validate=Non
 
 def lookup(df, ref, key, cols, ref_key=None, default=None, as_text=True, allow_duplicates=False, case=False):
     """XLOOKUP: add/overwrite cols from ref by key. Keys compared as trimmed text, ignoring case and repeated
-    spaces like Excel (case=True to match exactly; as_text=False to compare raw values).
-    Raises on duplicate keys in ref (VLOOKUP silently takes the first)."""
+    spaces like Excel, 1234567 == 1234567.0 == '1234567' (case=True to match exactly; as_text=False to compare
+    raw values). A blank key never matches. default fills keys not found in ref; a blank value in ref stays
+    blank. Raises on duplicate keys in ref (VLOOKUP silently takes the first), naming the spellings that clash."""
     ref_key = ref_key or key
     cols = [cols] if isinstance(cols, str) else list(cols)
-
-    def norm(s):
-        if not as_text:
-            return s
-        s = s.astype("string").str.replace(r"\s+", " ", regex=True).str.strip()
-        return s if case else s.str.upper()
+    norm = (lambda s: _key_text(s, case)) if as_text else (lambda s: s)
     r = ref.assign(_k=norm(ref[ref_key]))
-    dups = r["_k"].duplicated() & r["_k"].notna()
-    if dups.any() and not allow_duplicates:
-        raise ValueError(f"lookup table has {int(dups.sum())} duplicate keys, e.g. {r.loc[dups, '_k'].head(3).tolist()}")
+    r = r[r["_k"].notna()]
+    dup = r["_k"].duplicated(keep=False)
+    if dup.any() and not allow_duplicates:
+        groups = r.loc[dup].groupby("_k", sort=False)[ref_key].agg(lambda x: list(dict.fromkeys(x.astype(str))))
+        raise ValueError(f"lookup table has {len(groups)} duplicate keys"
+                         + (" after trimming / upper-casing" if as_text and not case else "")
+                         + f": {dict(list(groups.items())[:3])}; pass case=True to keep them distinct or "
+                         "allow_duplicates=True to take the first")
     r = r.drop_duplicates("_k").set_index("_k")
     out = df.copy()
     k = norm(out[key])
+    found = k.notna() & k.isin(r.index)
     for c in cols:
         out[c] = k.map(r[c])
         if default is not None:
-            out[c] = out[c].fillna(default)
+            out[c] = out[c].where(found, default)
     return out
 
 

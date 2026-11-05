@@ -9,23 +9,48 @@ from openpyxl import load_workbook
 from .clean import clean_headers, require_columns
 
 
+def _finish(df, required, source):
+    return require_columns(clean_headers(df.dropna(how="all")), required, source=source)
+
+
+def _excel_kw(kw, sheet, header_row):
+    """Accept the pandas spellings too: sheet_name= and header= (0-based) instead of sheet / header_row."""
+    sheet = kw.pop("sheet_name", sheet)
+    if "header" in kw:
+        h = kw.pop("header")
+        if not isinstance(h, int) or isinstance(h, bool):
+            raise ValueError("header= must be one 0-based row number; for stacked headers use read_multirow_header")
+        header_row = h + 1
+    return sheet, header_row
+
+
+def _read_excel(path, sheet, header_row, required, engine, kw):
+    sheet, header_row = _excel_kw(kw, sheet, header_row)
+    raw = pd.read_excel(path, sheet_name=sheet, header=header_row - 1, engine=engine, **kw)
+    name = Path(path).name
+    if isinstance(raw, dict):                 # sheet=None or a list of sheets: one frame per sheet
+        return {n: _finish(d, required, f"{name}[{n}]") for n, d in raw.items()}
+    return _finish(raw, required, name)
+
+
 def read_sheet(path, sheet=0, header_row=1, required=(), **kw):
     """Excel sheet with header on row N (1-based); blank rows dropped, headers tidied (clean_headers).
     required = columns that must exist, matched tolerant of case / spaces / punctuation and renamed to the
-    spelling you asked for; missing -> MissingColumns naming the near misses."""
-    df = pd.read_excel(path, sheet_name=sheet, header=header_row - 1, engine="openpyxl", **kw).dropna(how="all")
-    return require_columns(clean_headers(df), required, source=Path(path).name)
+    spelling you asked for; missing -> MissingColumns naming the near misses. sheet=None or a list -> {sheet: df}."""
+    return _read_excel(path, sheet, header_row, required, "openpyxl", kw)
 
 
 def read_csv_smart(path, required=(), **kw):
-    """CSV with unknown encoding (BOM/cp1252/latin-1) and delimiter (, ; tab |); headers tidied and `required`
-    checked as in read_sheet. An empty file -> ValueError (a BusinessError once classified), not a crash."""
+    """CSV with unknown encoding (BOM/cp1252/latin-1) and delimiter (, ; tab |; or sep= to force one); headers
+    tidied and `required` checked as in read_sheet. An empty file -> ValueError (a BusinessError once
+    classified), not a crash."""
+    forced = kw.pop("sep", kw.pop("delimiter", None))
     for enc in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
         try:
             with open(path, "r", encoding=enc, newline="") as fh:
                 sample = fh.read(8192)
             try:
-                delim = csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
+                delim = forced or csv.Sniffer().sniff(sample, delimiters=",;\t|").delimiter
             except csv.Error:
                 delim = ","
             df = pd.read_csv(path, sep=delim, encoding=enc, **kw)
@@ -42,20 +67,19 @@ def read_csv_smart(path, required=(), **kw):
 def read_any(path, sheet=0, header_row=1, required=(), **kw):
     """Read xlsx/xlsm/xls/xlsb/csv/txt/parquet by extension (xls needs xlrd, xlsb needs pyxlsb); headers tidied
     and `required` checked as in read_sheet."""
-    p = Path(path); ext = p.suffix.lower(); h = header_row - 1
+    p = Path(path); ext = p.suffix.lower()
     if ext in (".xlsx", ".xlsm"):
-        return read_sheet(p, sheet, header_row, required, **kw)
-    if ext in (".csv", ".txt"):
-        return read_csv_smart(p, required, header=h, **kw)
+        return _read_excel(p, sheet, header_row, required, "openpyxl", kw)
     if ext == ".xls":
-        df = pd.read_excel(p, sheet_name=sheet, header=h, engine="xlrd", **kw)
-    elif ext == ".xlsb":
-        df = pd.read_excel(p, sheet_name=sheet, header=h, engine="pyxlsb", **kw)
-    elif ext == ".parquet":
-        df = pd.read_parquet(p, **kw)
-    else:
-        raise ValueError(f"unsupported file type {ext}")
-    return require_columns(clean_headers(df), required, source=p.name)
+        return _read_excel(p, sheet, header_row, required, "xlrd", kw)
+    if ext == ".xlsb":
+        return _read_excel(p, sheet, header_row, required, "pyxlsb", kw)
+    if ext in (".csv", ".txt"):
+        kw.setdefault("header", header_row - 1)
+        return read_csv_smart(p, required, **kw)
+    if ext == ".parquet":
+        return require_columns(clean_headers(pd.read_parquet(p, **kw)), required, source=p.name)
+    raise ValueError(f"unsupported file type {ext}")
 
 
 def list_sheets(path):

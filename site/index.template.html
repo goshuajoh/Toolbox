@@ -243,12 +243,12 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
 
   // ---------- theme ----------
   const root = document.documentElement;
-  const savedTheme = store.get('theme', null);
+  const savedTheme = store.get('toolbank.theme', null);
   if (savedTheme) root.dataset.theme = savedTheme;
   $('#theme').addEventListener('click', () => {
     const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
     root.dataset.theme = dark ? 'light' : 'dark';
-    store.set('theme', root.dataset.theme);
+    store.set('toolbank.theme', root.dataset.theme);
   });
 
   // ---------- static bits ----------
@@ -343,14 +343,15 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
   });
 
   // ---------- script builder ----------
-  let steps = store.get('steps', []);
+  let steps = store.get('toolbank.steps', []);
+  if (!Array.isArray(steps)) steps = [];
   function addStep(f) {
     const values = {};
     f.params.forEach(p => { if (p.kind !== 'varkw' && p.name !== 'df') values[p.name] = ''; });
     steps.push({fn: f.name, values});
     save(); renderSteps(); showTab('build');
   }
-  function save() { store.set('steps', steps); }
+  function save() { store.set('toolbank.steps', steps); }
   function takesFrame(f, i) { return f.params.length && f.params[0].name === 'df' && f.params[0].kind === 'pos' && (i > 0 || $('#starts-with-frame').checked); }
   function renderSteps() {
     $('#step-count').textContent = steps.length ? `${steps.length}` : '';
@@ -365,21 +366,29 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
   }
   function pyCall(s, i) {
     const f = byName[s.fn];
-    const args = [], missing = [];
     const frame = takesFrame(f, i);
-    const series = !frame && f.params[0] && f.params[0].name === 'series';
+    const dfFirst = f.kind !== 'class' && f.params[0] && f.params[0].name === 'df' && f.params[0].kind === 'pos';
+    const series = !frame && !dfFirst && f.params[0] && f.params[0].name === 'series';
+    const varIdx = f.params.findIndex(p => p.kind === 'varargs');
+    const args = [], missing = [];
     if (frame) args.push('df');
+    else if (dfFirst) { args.push('df=TODO'); missing.push('df (start with a reader, or tick "starts with a frame")'); }
     f.params.forEach((p, k) => {
       if (p.kind === 'varkw' || p.name === 'df') return;
-      if (series && k === 0) { args.push(`df[${(s.values.series || "'column'")}]`); return; }
+      if (series && k === 0) { const col = (s.values.series || '').trim(); if (!col) missing.push('series'); args.push(`df[${col || "'column'"}]`); return; }
       const v = (s.values[p.name] || '').trim();
       if (p.kind === 'varargs') { if (v) args.push(v); return; }
-      if (!v) { if (p.default == null) { args.push(`${p.name}=TODO`); missing.push(p.name); } return; }
-      if (p.kind === 'pos' && k < 1 && !frame) args.push(v); else args.push(`${p.name}=${v}`);
+      const positional = p.kind === 'pos' && (varIdx >= 0 ? k < varIdx : (k < 1 && !frame));
+      if (!v) {
+        if (p.default == null) { args.push(positional ? 'TODO' : `${p.name}=TODO`); missing.push(p.name); }
+        else if (positional && varIdx >= 0) args.push(p.default);
+        return;
+      }
+      args.push(positional ? v : `${p.name}=${v}`);
     });
-    const call = `${s.fn}(${args.join(', ')})` + (missing.length ? `  # TODO: set ${missing.join(', ')}` : '');
+    const call = `${s.fn}(${args.join(', ')})${f.tuple ? '[0]' : ''}` + (missing.length ? `  # TODO: set ${missing.join(', ')}` : '');
     if (f.kind === 'class') return `${s.fn.toLowerCase()} = ${call}`;
-    if (frame || (!frame && i === 0 && !series && f.params[0] && f.params[0].name !== 'df' && /^read_|^json_to_df|^xml_to_df|^parse_mt940|^parse_camt053|^html_tables|^sql_read$|^read_delta$/.test(s.fn))) return `df = ${call}`;
+    if (frame || dfFirst || (i === 0 && !series && /^read_|^json_to_df|^xml_to_df|^parse_mt940|^parse_camt053|^html_tables|^sql_read$|^read_delta$/.test(s.fn))) return `df = ${call}`;
     if (series) return `df[${(s.values.series || "'column'")}] = ${call}`;
     return `result_${i + 1} = ${call}`;
   }
@@ -389,21 +398,42 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
     const series = f.params[0] && f.params[0].name === 'series';
     if (f.kind === 'class' || series) return `  # - ${s.fn}: not a frame step (see the Python version)`;
     const parts = [`fn: ${s.fn}`];
-    f.params.forEach((p, k) => {
+    f.params.forEach(p => {
       if (p.kind === 'varkw' || p.name === 'df') return;
       const v = (s.values[p.name] || '').trim();
       if (!v) { if (p.default == null) parts.push(`${p.name}: <required>`); return; }
+      if (p.kind === 'varargs') { parts.push(`${p.name}: ${/^\[/.test(v) ? yamlValue(v) : yamlValue('(' + v + ',)')}`); return; }
       parts.push(`${p.name}: ${yamlValue(v)}`);
     });
+    if (f.tuple) parts.push('pick: 0');
     if (!frame && i > 0) parts.push('as: result_' + (i + 1));
     return `  - {${parts.join(', ')}}`;
   }
+  function pyStr(lit, raw) {
+    const body = lit.slice(1, -1);
+    return raw ? body : body.replace(/\\(.)/g, (m, c) => ({n: '\n', t: '\t', r: '\r', '\\': '\\', "'": "'", '"': '"'}[c] !== undefined ? {n: '\n', t: '\t', r: '\r', '\\': '\\', "'": "'", '"': '"'}[c] : m));
+  }
+  const WORDS = {True: 'true', False: 'false', None: 'null'};
   function yamlValue(v) {
     const t = v.trim();
-    if (/^'[^']*'$/.test(t) || /^"[^"]*"$/.test(t)) return JSON.stringify(t.slice(1, -1));
-    if (/^(True|False|None)$/.test(t)) return {True: 'true', False: 'false', None: 'null'}[t];
-    if (/^-?\d+(\.\d+)?$/.test(t)) return t;
-    if (/^[\[\{(]/.test(t)) return t.replace(/'/g, '"').replace(/\bTrue\b/g, 'true').replace(/\bFalse\b/g, 'false').replace(/\bNone\b/g, 'null').replace(/^\((.*)\)$/, '[$1]');
+    const str = /^([rRuU]?)('(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*")$/.exec(t);
+    if (str) return JSON.stringify(pyStr(str[2], /[rR]/.test(str[1])));
+    if (WORDS[t] !== undefined) return WORDS[t];
+    if (/\d/.test(t) && /^[-+]?(\d[\d_]*)?(\.\d*)?([eE][-+]?\d+)?$/.test(t)) return String(Number(t.replace(/_/g, '')));
+    if (/^[\[\{(]/.test(t)) {
+      let out = '', i = 0;
+      while (i < t.length) {
+        const ch = t[i];
+        if (ch === "'" || ch === '"') {
+          const m = new RegExp(`^${ch}(?:[^${ch}\\\\]|\\\\.)*${ch}`).exec(t.slice(i));
+          if (m) { out += JSON.stringify(pyStr(m[0], false)); i += m[0].length; continue; }
+        }
+        const w = /^(True|False|None)\b/.exec(t.slice(i));
+        if (w) { out += WORDS[w[1]]; i += w[1].length; continue; }
+        out += ch === '(' ? '[' : ch === ')' ? ']' : ch; i++;
+      }
+      return out.replace(/,\s*([\]\}])/g, '$1');
+    }
     return JSON.stringify(t);
   }
   function renderCode() {
@@ -412,7 +442,7 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
     if (!steps.length) py.push('    pass');
     steps.forEach((s, i) => py.push('    ' + pyCall(s, i)));
     if (steps.length) py.push('    return df');
-    py.push('', '', 'if __name__ == "__main__":', frameFirst ? '    import sys\n    out = run(read_any(sys.argv[1]))' : '    out = run()', '    print(f"{len(out):,} rows x {out.shape[1]} cols")', '');
+    py.push('', '', 'if __name__ == "__main__":', frameFirst ? '    import sys\n    out = run(read_any(sys.argv[1]))' : '    out = run()', '    print(f"{len(out):,} rows x {out.shape[1]} cols" if isinstance(out, pd.DataFrame) else "done")', '');
     $('#code-py').textContent = py.join('\n');
     const y = ['name: my_robot', 'steps:'];
     if (!steps.length) y.push('  []');
@@ -432,11 +462,12 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
   $$('button[data-download]').forEach(b => b.addEventListener('click', () => download(b.dataset.download === 'py' ? 'my_robot.py' : 'my_robot.yaml', $(b.dataset.download === 'py' ? '#code-py' : '#code-yaml').textContent)));
 
   // ---------- start ----------
-  steps = steps.filter(s => byName[s.fn]);
+  steps = steps.filter(s => s && typeof s === 'object' && byName[s.fn] && s.values && typeof s.values === 'object');
   renderSteps();
   search();
   const hash = location.hash.replace('#', '');
   if (['find', 'modules', 'build', 'robot'].includes(hash)) showTab(hash);
+  window.addEventListener('hashchange', () => { const h = location.hash.replace('#', ''); if (['find', 'modules', 'build', 'robot'].includes(h)) showTab(h); });
 })();
 </script>
 </body>

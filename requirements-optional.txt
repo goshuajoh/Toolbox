@@ -27,3 +27,4 @@ pyperclip                 # desktop clipboard
 opencv-python             # pyautogui image confidence=
 keyring                   # config.get_secret from Windows Credential Manager
 pytest                    # tests
+croniter                  # tests: cross-check of triggers.cron_next

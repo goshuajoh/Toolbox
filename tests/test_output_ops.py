@@ -1,5 +1,8 @@
 import json
 from datetime import date, datetime
+from pathlib import Path
+
+import numpy as np
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -106,14 +109,18 @@ def test_logs_and_privacy(tmp_path):
     assert redact("ref GL-00012345 run 20261102-173536 date 2026-03-06") == "ref GL-00012345 run 20261102-173536 date 2026-03-06"
     log = get_logger(tmp_path / "run.jsonl", run_id="R1", console=False)
     log.info("loaded 0012345678", extra={"rows": 5, "event": "load"})
-    log.info("ctx", extra={"custom_key": "S1234567A", "n": {"a": 1}})
+    log.info("ctx", extra={"custom_key": "S1234567A", "n": {"a": 1, "acct": "0012345678"}, "ids": ["S1234567A"],
+                           "level": "high", "run_id": "sub", "nan": float("nan"), "np": np.int64(5), "flag": np.bool_(True),
+                           "p": Path("/x/S1234567A.xlsx")})
     try:
         1 / 0
     except ZeroDivisionError:
         log.error("boom", exc_info=True, extra={"code": "X"})
     rec, ctx, err = [json.loads(ln) for ln in (tmp_path / "run.jsonl").read_text().strip().splitlines()]
     assert rec["run_id"] == "R1" and rec["rows"] == 5 and "<account:***>" in rec["msg"]
-    assert ctx["custom_key"] == "<nric:***>" and ctx["n"] == {"a": 1}
+    assert ctx["custom_key"] == "<nric:***>" and ctx["n"] == {"a": 1, "acct": "<account:***>"}
+    assert ctx["ids"] == ["<nric:***>"] and ctx["level"] == "INFO" and ctx["run_id"] == "R1" and ctx["nan"] is None
+    assert ctx["np"] == 5 and ctx["flag"] is True and ctx["p"] == "/x/<nric:***>.xlsx"
     assert err["code"] == "X" and err["exc"].rstrip().endswith("ZeroDivisionError: division by zero")
     assert redact_frame(pd.DataFrame({"n": ["Joe", None]}), ["n"])["n"].tolist()[0] == "***"
     ds = describe_shape(pd.DataFrame({"ref": ["GL-000001", "GL-000002"], "amt": [123.0, 4567.0], "ok": [True, False],
@@ -224,11 +231,7 @@ def test_config_and_notify(tmp_path, monkeypatch):
 
 
 def test_template_robot_runs(tmp_path):
-    import importlib.util
-    from pathlib import Path
-    root = Path(__file__).resolve().parents[1]
-    spec = importlib.util.spec_from_file_location("robot_template", root / "templates" / "robot_template.py")
-    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    m = _template_module()
     pd.DataFrame({"id": ["A", "B"]}).to_excel(tmp_path / "in.xlsx", index=False)
     (tmp_path / "cfg").mkdir()
     (tmp_path / "cfg" / "default.yaml").write_text(f"input_path: {tmp_path / 'in.xlsx'}\nworkdir: {tmp_path / 'work'}\n")
@@ -244,7 +247,7 @@ def test_process_all_failure_details_and_stop():
             raise AttributeError("'NoneType' object has no attribute 'x'")
     lines = []
     done, fails = process_all([1, 2, 3], handler, log=lines.append)
-    assert done == [1, 3] and fails.columns.tolist() == ["item", "code", "message", "type", "where"]
+    assert done == [1, 3] and fails.columns.tolist() == ["item", "code", "message", "type", "where", "retryable"]
     assert fails.loc[0, "type"] == "BusinessError" and fails.loc[0, "where"].startswith("handler (test_output_ops.py:")
     assert lines == [f"skip 2: [BAD] bad row at {fails.loc[0, 'where']}"]
     with pytest.raises(RobotError) as e:                     # a code bug stops at once, with the item named
@@ -256,7 +259,8 @@ def test_process_all_failure_details_and_stop():
         raise RobotError("HTTP 401", code="AUTH", url="x")
     with pytest.raises(RobotError, match="HTTP 401") as e:
         process_all([1, 2], auth)
-    assert e.value.context == {"url": "x", "item": "1"}
+    assert e.value.context["url"] == "x" and e.value.context["item"] == "1"
+    assert e.value.context["where"].startswith("auth (test_output_ops.py:")
 
     def down(x):
         raise OSError("network down")
@@ -291,11 +295,91 @@ def test_retry_step_act_logging():
 def test_config_layers(tmp_path, monkeypatch):
     (tmp_path / "default.yaml").write_text("tolerance: 0.01\ndb:\n  host: h1\n  port: 1433\nids: ['0123']\n")
     (tmp_path / "uat.yaml").write_text("db:\n  host: h2\n")
-    for k, v in {"BOT_TOLERANCE": "0.5", "BOT_DB__PORT": "1434", "BOT_ACCT": "0123", "BOT_SEND": "no",
-                 "BOT_NAME": "x y"}.items():
+    for k, v in {"BOT_TOLERANCE": "0.5", "BOT_DB__PORT": "1434", "BOT_ACCT": "0123", "BOT_SEND": "false",
+                 "BOT_NAME": " x y ", "BOT_COUNTRY": "NO", "BOT_": "9"}.items():
         monkeypatch.setenv(k, v)
     assert load_config(tmp_path, "uat") == {"tolerance": 0.5, "db": {"host": "h2", "port": 1434}, "ids": ["0123"],
-                                            "acct": "0123", "send": False, "name": "x y", "env": "uat"}
+                                            "acct": "0123", "send": False, "name": "x y", "country": "NO", "env": "uat"}
+    (tmp_path / "ids.yaml").write_text("branch: 00123\nsheet: 01\ncountry: NO\nflag: on\nok: true\nn: 12\nx: 0x1A\n")
+    assert load_config(tmp_path, "ids") == {"tolerance": 0.5, "db": {"host": "h1", "port": 1434}, "ids": ["0123"],
+                                            "branch": "00123", "sheet": "01", "country": "NO", "flag": "on", "ok": True,
+                                            "n": 12, "x": 26, "acct": "0123", "send": False, "name": "x y", "env": "ids"}
     (tmp_path / "bad.yaml").write_text("- a\n- b\n")
     with pytest.raises(ValueError, match="mapping"):
         load_config(tmp_path, "bad")
+
+
+def test_process_all_records_system_failures_and_keys(tmp_path):
+    calls = {"n": 0}
+
+    def h(x):
+        if x == 2 and calls["n"] == 0:
+            calls["n"] += 1
+            raise PermissionError("file locked")
+        if x == 3:
+            raise BusinessError("bad", code="BAD")
+    cp = Checkpoint(tmp_path / "cp.json")
+    done, fails = process_all([1, 2, 3, 3, None, 4], h, checkpoint=cp, key=lambda x: x)
+    assert done == [1, 4] and sorted(cp.done) == ["1", "4"]            # failures are never checkpointed
+    assert fails["code"].tolist() == ["SYSTEM", "BAD", "DUPLICATE_KEY", "MISSING_KEY"]
+    assert fails["retryable"].tolist() == [True, False, False, False] and fails["item"].tolist()[:3] == [2, 3, 3]
+    done2, fails2 = process_all([1, 2, 3, 4], h, checkpoint=cp, key=lambda x: x)      # re-run: 2 now works, 3 fails again
+    assert done2 == [2] and fails2["code"].tolist() == ["BAD"] and sorted(cp.done) == ["1", "2", "4"]
+
+    def bug(row):
+        return row["id"] + 1
+    with pytest.raises(RobotError) as e:                                   # TypeError is a bug: stop at once
+        process_all([{"id": "A1"}, {"id": "A2"}], bug, key=lambda r: r["id"])
+    assert not isinstance(e.value, BusinessError) and e.value.context["item"] == "A1"
+    assert e.value.context["where"].startswith("bug (test_output_ops.py:")
+
+    def robot_mkdir():
+        import os
+        os.makedirs("/proc/nope/x")
+    try:
+        robot_mkdir()
+    except Exception as exc:
+        assert error_where(exc).startswith("robot_mkdir (test_output_ops.py:")   # not '<frozen os>'
+    with pytest.raises(ValueError, match="max_attempts"):
+        retry(max_attempts=0)
+    import functools
+    msgs = []
+    act(functools.partial(print, "x"), dry_run=True, log=msgs.append)
+    assert msgs == ["[dry-run] would call print(0 positional args, kwargs=[])"]
+
+
+def _template_module():
+    import importlib.util
+    root = Path(__file__).resolve().parents[1]
+    spec = importlib.util.spec_from_file_location("robot_template", root / "templates" / "robot_template.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def test_template_exit_codes(tmp_path, monkeypatch):
+    m = _template_module()
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    pd.DataFrame({"id": ["A", "B"]}).to_excel(tmp_path / "in.xlsx", index=False)
+    pd.DataFrame({"ref": ["A"]}).to_excel(tmp_path / "noid.xlsx", index=False)
+    (cfg / "default.yaml").write_text(f"input_path: {tmp_path / 'in.xlsx'}\nworkdir: {tmp_path / 'work'}\n")
+    (cfg / "prod.yaml").write_text(f"input_path: {tmp_path / 'noid.xlsx'}\nworkdir: {tmp_path / 'work'}\n")
+    (cfg / "gone.yaml").write_text(f"input_path: {tmp_path / 'nope.xlsx'}\nworkdir: {tmp_path / 'work'}\n")
+    args = ["--config-dir", str(cfg), "--business-date", "2026-03-06"]
+    assert m.main(args + ["--dry-run"]) == 0
+    log_file = tmp_path / "work" / "my_robot" / "2026-03-06" / "run.log.jsonl"
+    lines = [json.loads(ln) for ln in log_file.read_text().splitlines()]
+    assert not (tmp_path / "work" / "my_robot" / "2026-03-06" / "my_robot_report.xlsx").exists()
+    assert lines[0]["dry_run"] is True and any(ln["msg"].startswith("[dry-run] would call safe_write_excel") for ln in lines)
+    monkeypatch.setenv("BOT_ENV", "prod")                                  # BOT_ENV is honoured by --env's default
+    assert m.main(args) == 2                                               # missing required column -> owner
+    last = json.loads(log_file.read_text().splitlines()[-1])
+    assert last["code"] == "BAD_DATA" and "exc" in last and last["type"] == "MissingColumns"
+    monkeypatch.delenv("BOT_ENV")
+    assert m.main(args + ["--env", "gone"]) == 3                           # input file missing -> re-run
+    m.cleanse = lambda df: None.x
+    assert m.main(args) == 5                                               # a bug -> needs a fix
+    del m.cleanse
+    with single_instance("my_robot", lock_dir=tmp_path / "work" / "my_robot" / "2026-03-06"):
+        assert m.main(args) == 6

@@ -41,7 +41,9 @@ PIP = {"docx": "python-docx", "bs4": "beautifulsoup4", "PIL": "Pillow", "win32co
        "cv2": "opencv-python", "requests_negotiate_sspi": "requests-negotiate-sspi", "extract_msg": "extract-msg",
        "azure": "azure-identity", "urllib3": "requests", "msvcrt": None, "fcntl": None}
 CORE = {"pandas", "numpy", "openpyxl", "yaml", "toolbank"}
-EXIT_CODES = [(0, "OK"), (2, "business exceptions (send the report to the owner)"), (3, "system failure (re-run)"),
+EXIT_CODES = [(0, "OK"), (2, "business exceptions or bad input (send the report to the owner; if the input was "
+                  "rejected before the report exists, run.log.jsonl says why)"),
+              (3, "system failure (re-run: the checkpoint resumes)"),
               (4, "config error"), (5, "robot error (needs a fix)"), (6, "already running (a second copy was started)")]
 
 
@@ -58,7 +60,10 @@ def _summary(obj):
     return re.sub(r"\s+", " ", (inspect.getdoc(obj) or "").split("\n\n")[0]).strip()
 
 
-def _signature(obj, short=True):
+def _signature(obj, short=True, method=False):
+    if method:
+        params = list(inspect.signature(obj).parameters.values())[1:]       # drop self
+        return re.sub(r"\s+", " ", str(inspect.Signature(params)))
     if inspect.isclass(obj):
         if short:
             return "(…)"
@@ -100,10 +105,15 @@ def _needs(obj):
 
 
 def _default_text(v):
+    """A default value as Python text the builder can paste back: classes and functions by name, no addresses."""
+    if inspect.isclass(v):
+        return v.__name__
     if inspect.isfunction(v) or inspect.isbuiltin(v) or inspect.ismethod(v):
         return getattr(v, "__name__", "…")
     r = repr(v)
-    return r if len(r) <= 60 else r[:57] + "…"
+    r = re.sub(r"<class '(?:[\w.]+\.)?(\w+)'>", r"\1", r)
+    r = re.sub(r"<(?:built-in )?(?:function|method) (\w+)[^>]*>", r"\1", r)
+    return re.sub(r" at 0x[0-9a-fA-F]+", "", r)
 
 
 def _params(obj):
@@ -120,6 +130,13 @@ def _params(obj):
         kind = {p.VAR_POSITIONAL: "varargs", p.VAR_KEYWORD: "varkw", p.KEYWORD_ONLY: "kwonly"}.get(p.kind, "pos")
         out.append({"name": p.name, "kind": kind, "default": None if p.default is p.empty else _default_text(p.default)})
     return out
+
+
+def _returns_tuple(obj):
+    """True when the docstring says the function returns a tuple ('Returns (a, b)', '-> (a, b)', '(a, b)...'), so
+    the script builder adds [0] / pick: 0."""
+    doc = inspect.getdoc(obj) or ""
+    return not inspect.isclass(obj) and bool(re.search(r"(?:Returns|->)\s*\(|^\(", doc))
 
 
 def _public(mod):
@@ -143,11 +160,11 @@ def catalog():
         for n, o in _public(mod):
             item = {"name": n, "kind": "class" if inspect.isclass(o) else "function", "signature": _signature(o, short=False),
                     "summary": _summary(o), "doc": inspect.getdoc(o) or "", "line": _line(o), "needs": _needs(o),
-                    "params": _params(o), "methods": []}
+                    "params": _params(o), "methods": [], "tuple": _returns_tuple(o)}
             if inspect.isclass(o):
                 for mn, mo in vars(o).items():
                     if inspect.isfunction(mo) and not mn.startswith("_") and _summary(mo):
-                        item["methods"].append({"name": mn, "signature": _signature(mo), "summary": _summary(mo),
+                        item["methods"].append({"name": mn, "signature": _signature(mo, method=True), "summary": _summary(mo),
                                                 "doc": inspect.getdoc(mo) or "", "line": _line(mo)})
             funcs.append(item)
         mods.append({"name": m, "title": TITLES.get(m, m), "file": f"toolbank/{m}.py",
@@ -158,7 +175,8 @@ def catalog():
 def vba_modules():
     out = []
     for f in sorted((ROOT / "vba").glob("*.bas")):
-        desc = next((ln.lstrip("' ").strip() for ln in f.read_text().splitlines() if ln.startswith("'")), "")
+        text = f.read_text(encoding="utf-8", errors="replace")
+        desc = next((ln.lstrip("' ").strip() for ln in text.splitlines() if ln.startswith("'")), "")
         out.append({"file": f.name, "summary": desc})
     return out
 
@@ -170,7 +188,8 @@ def needs_table(readme_text):
     for line in section.splitlines():
         m = re.match(r"^\|\s*(.+?)\s*\|\s*(.+?)\s*\|$", line)
         if m and not m.group(1).startswith(("I need", "---")):
-            rows.append({"need": m.group(1), "modules": re.findall(r"`([\w/.]+)`", m.group(2))})
+            found = re.findall(r"`([\w/.]+)`", m.group(2))
+            rows.append({"need": m.group(1), "modules": [x for x in found if x in toolbank._MODULES]})
     return rows
 
 

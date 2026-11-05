@@ -10,68 +10,98 @@ from .identifiers import CURRENCIES
 
 _INVISIBLE = "[ ​‌‍﻿\t\r\n]+"   # not raw: pyarrow (RE2) needs real characters
 _DASHES = "[−–—‐‑]"              # unicode minus, en/em dash, hyphens typed by Word
-_CCY_SYMBOLS = r"US\$|S\$|HK\$|A\$|C\$|NZ\$|NT\$|RM\b|[$€£¥₹₩]"
-_CCY_CODES = "|".join(sorted(CURRENCIES))
+# letters glued to digits ('USD1,200', '100DR') are still a code, so letter look-arounds instead of \b
+_CCY_SYMBOLS = r"US\$|S\$|HK\$|A\$|C\$|NZ\$|NT\$|(?<![A-Z])RM(?![A-Z])|[$€£¥₹₩]"
+_CCY_CODES = "(?<![A-Z])(?:" + "|".join(sorted(CURRENCIES)) + ")(?![A-Z])"
+_DEBIT = r"(?<![A-Z])(?:DR|DEBIT)(?![A-Z])\.?"
+_DEBIT_CREDIT = r"(?<![A-Z])(?:DR|CR|DEBIT|CREDIT)(?![A-Z])\.?"
+
+
+def _text(series):
+    """Values as Python text in an object Series ('' for blanks), so .str methods use Python's re (look-arounds
+    and unicode classes), never pyarrow's RE2."""
+    def one(v):
+        if v is None or v is pd.NA or v is pd.NaT or (isinstance(v, float) and np.isnan(v)):
+            return ""
+        return str(v)
+    return pd.Series([one(v) for v in series], index=series.index, dtype=object)
 
 
 def to_number(series):
-    """Lenient number parse for bank exports -> float64; unparsable -> NaN. Handles '1,234.50', '(10.00)',
-    '100.00-' (trailing minus), '1,000 DR' / 'CR' (DR = negative), 'S$ 12', 'USD 1,200', NBSP and unicode
-    minus signs. Decimal mark as in parse_amount: '1,234' is thousands, '1.234,56' / '10,5' decimal comma."""
+    """Lenient number parse for bank exports -> float64; unparsable -> NaN. Handles '1,234.50', '(1,000)',
+    '100.00-' (trailing minus), '1,000 DR' / 'CR' (DR = negative, a sign is applied once), 'S$ 12', 'USD1,200',
+    NBSP and unicode minus signs; 'inf' -> NaN. Decimal mark as in parse_amount: '1,234' is thousands,
+    '1.234,56' / '10,5' decimal comma."""
     if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
         return series.astype("float64")
-    s = series.astype("string").str.replace(_INVISIBLE, " ", regex=True).str.strip().str.upper()
+    s = _text(series).str.replace(_INVISIBLE, " ", regex=True).str.strip().str.upper()
     s = s.str.replace(_DASHES, "-", regex=True)
-    s = s.str.replace(rf"{_CCY_SYMBOLS}|\b(?:{_CCY_CODES})\b", " ", regex=True)
-    dr = s.str.contains(r"\b(?:DR|DEBIT)\b\.?", regex=True, na=False)
-    s = s.str.replace(r"\b(?:DR|CR|DEBIT|CREDIT)\b\.?", " ", regex=True)
-    s = s.str.replace(r"['\s]", "", regex=True).fillna("")
+    s = s.str.replace(rf"{_CCY_SYMBOLS}|{_CCY_CODES}", " ", regex=True)
+    dr = s.str.contains(_DEBIT, regex=True)
+    s = s.str.replace(_DEBIT_CREDIT, " ", regex=True)
+    s = s.str.replace(r"['\s]", "", regex=True)
+    paren = s.str.match(r"^\(.*\)$")
+    s = s.str.replace(r"^\((.*)\)$", r"\1", regex=True)
+    trailing = s.str.match(r"^.+-$")
+    s = s.str.replace(r"^(.+)-$", r"\1", regex=True)
+    leading = s.str.match(r"^[-+]?-")
+    s = s.str.replace(r"^[-+]+", "", regex=True)                    # sign applied once, at the end
     both = s.str.contains(".", regex=False) & s.str.contains(",", regex=False)
     dec_comma = ((both & (s.str.rfind(",") > s.str.rfind("."))) |                  # 1.234,56
                  (~both & (s.str.count(",") == 1) & ~s.str.contains(r",\d{3}$")) |  # 10,5 (not 1,234)
-                 (~both & (s.str.count(r"\.") > 1))).fillna(False).astype(bool)      # 1.234.567
+                 (~both & (s.str.count(r"\.") > 1)))                                 # 1.234.567
     s = s.where(~dec_comma, s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
     s = s.str.replace(",", "", regex=False)
-    paren = s.str.match(r"^\(.*\)$", na=False)
-    s = s.str.replace(r"^\((.*)\)$", r"\1", regex=True)
-    trailing = s.str.match(r"^.+-$", na=False)
-    s = s.str.replace(r"^(.+)-$", r"\1", regex=True)
-    s = s.str.replace(r"^\+", "", regex=True)
     out = pd.to_numeric(s, errors="coerce").astype("float64")
-    neg = (dr | paren | trailing).to_numpy(dtype=bool)
+    out = out.mask(np.isinf(out))
+    neg = (dr | paren | trailing | leading).to_numpy(dtype=bool)
     return out.where(~neg, -out)
 
 
+def _naive(values):
+    """Datetime values as timezone-naive datetime64[us] (zone-aware text is converted to UTC first)."""
+    if getattr(values.dt, "tz", None) is not None:
+        values = values.dt.tz_convert(None)
+    return values.astype("datetime64[us]")
+
+
 def to_date(series, dayfirst=True):
-    """Dates from whatever the file holds -> datetime64; unparsable -> NaT. ISO / year-first text (2026/08/09)
-    is read year-first, everything else day-first (06/03/2026 = 6 March) value by value. Also 20260306
-    (yyyymmdd, text or number) and Excel serial numbers (46087) that leak into CSV exports."""
+    """Dates from whatever the file holds -> datetime64[us]; unparsable -> NaT. ISO / year-first text
+    (2026-3-6, 2026/08/09) is read year-first, everything else day-first (06/03/2026 = 6 March) value by value.
+    Also 20260306 (yyyymmdd, text or number), Excel serial numbers (46087, 46087.5) that leak into CSV exports,
+    and ISO text with a zone ('...T14:30:00Z', '+08:00' -> UTC wall clock). 9999-12-31 'open-ended' dates are
+    kept where pandas supports them (pandas 3), a date without a year -> NaT."""
     if pd.api.types.is_datetime64_any_dtype(series):
         return series
+    out = pd.Series(pd.NaT, index=series.index, dtype="datetime64[us]")
     if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
         n = pd.to_numeric(series, errors="coerce")
-        out = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
         serial, ymd = n.between(10_000, 99_999), n.between(19_000_101, 99_991_231)
-        out[serial] = excel_serial_to_date(n[serial])
-        out[ymd] = yyyymmdd_to_date(n[ymd].astype("int64"))
+        if serial.any():
+            out[serial] = _naive(excel_serial_to_date(n[serial]))
+        if ymd.any():
+            out[ymd] = _naive(yyyymmdd_to_date(n[ymd].astype("int64")))
         return out
     s = series.astype("string").str.strip().fillna("")
-    out = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
-    iso = s.str.match(r"^\d{4}-\d{2}-\d{2}").astype(bool)
+    iso = s.str.match(r"^\d{4}-\d{1,2}-\d{1,2}").astype(bool)
+    zoned = iso & s.str.contains(r"(?:Z|[+-]\d{2}:?\d{2})$", regex=True).astype(bool)
     ymd = (~iso) & s.str.match(r"^\d{4}[/.]\d{1,2}[/.]\d{1,2}").astype(bool)     # 2026/08/09 is year-first
-    digits8 = (~iso) & s.str.match(r"^(19|20)\d{6}(\.0+)?$").astype(bool)       # 20260306
-    serial = (~iso) & (~digits8) & s.str.match(r"^\d{5}(\.0+)?$").astype(bool)    # 46087
+    digits8 = (~iso) & s.str.match(r"^\d{8}(\.0+)?$").astype(bool)               # 20260306
+    serial = (~iso) & (~digits8) & s.str.match(r"^\d{5}(\.\d+)?$").astype(bool)   # 46087 / 46087.5
     rest = (~iso) & (~ymd) & (~digits8) & (~serial) & (s != "").astype(bool)
-    if iso.any():
-        out[iso] = pd.to_datetime(s[iso], errors="coerce", format="ISO8601")
+    if (iso & ~zoned).any():
+        out[iso & ~zoned] = _naive(pd.to_datetime(s[iso & ~zoned], errors="coerce", format="ISO8601"))
+    if zoned.any():
+        out[zoned] = _naive(pd.to_datetime(s[zoned], errors="coerce", format="ISO8601", utc=True))
     if ymd.any():
-        out[ymd] = pd.to_datetime(s[ymd], errors="coerce", yearfirst=True, dayfirst=False, format="mixed")
+        out[ymd] = _naive(pd.to_datetime(s[ymd], errors="coerce", yearfirst=True, dayfirst=False, format="mixed"))
     if digits8.any():
-        out[digits8] = yyyymmdd_to_date(s[digits8])
+        out[digits8] = _naive(yyyymmdd_to_date(s[digits8]))
     if serial.any():
-        out[serial] = excel_serial_to_date(s[serial])
+        out[serial] = _naive(excel_serial_to_date(s[serial]))
     if rest.any():
-        out[rest] = pd.to_datetime(s[rest], errors="coerce", dayfirst=dayfirst, format="mixed")
+        parsed = pd.to_datetime(s[rest], errors="coerce", dayfirst=dayfirst, format="mixed")
+        out[rest] = _naive(parsed.where(parsed.dt.year >= 1900))          # '6 Mar' (no year) is not a date
     return out
 
 
@@ -238,31 +268,37 @@ class MissingColumns(KeyError, ValueError):
 
 def norm_label(text):
     """Canonical form of a header or label for tolerant matching: accents stripped, case folded, NBSP / tabs /
-    punctuation -> single spaces, trimmed. 'Trade  Date:' == 'TRADE_DATE' == 'trade date'; blank -> ''."""
+    punctuation -> single spaces, trimmed; letters of any script are kept ('金額' stays '金額').
+    'Trade  Date:' == 'TRADE_DATE' == 'trade date'; blank -> ''."""
     if text is None or (not isinstance(text, str) and pd.isna(text)):
         return ""
     s = "".join(c for c in unicodedata.normalize("NFKD", str(text)) if not unicodedata.combining(c))
-    return re.sub(r"[^0-9a-zA-Z]+", " ", s).strip().lower()
+    return re.sub(r"[\W_]+", " ", s).strip().casefold()
 
 
 def clean_headers(df):
     """Tidy column names as exports deliver them: text, NBSP / tabs / newlines -> one space, trimmed,
-    blank or 'Unnamed: 3' -> col_4, duplicates numbered ('Amount', 'Amount' -> 'Amount', 'Amount_2')."""
+    blank or 'Unnamed: 3' -> col_4, duplicates numbered ('Amount', 'Amount' -> 'Amount', 'Amount_2'; a number
+    already taken is skipped, so names are always unique)."""
     out = df.copy()
-    seen, names = {}, []
+    used, names = set(), []
     for i, c in enumerate(out.columns, start=1):
         name = "" if c is None or (not isinstance(c, str) and pd.isna(c)) else str(c)
         name = re.sub(r"\s+", " ", re.sub(_INVISIBLE, " ", name)).strip()
         if not name or name.startswith("Unnamed:"):
             name = f"col_{i}"
-        seen[name] = seen.get(name, 0) + 1
-        names.append(name if seen[name] == 1 else f"{name}_{seen[name]}")
+        cand, k = name, 1
+        while cand in used:
+            k += 1
+            cand = f"{name}_{k}"
+        used.add(cand)
+        names.append(cand)
     out.columns = names
     return out
 
 
 def _suggest(wanted, columns, n=3):
-    by_norm = {norm_label(c): c for c in columns}
+    by_norm = {norm_label(c): c for c in columns if norm_label(c)}
     hits = difflib.get_close_matches(norm_label(wanted), list(by_norm), n=n, cutoff=0.6)
     return [by_norm[h] for h in hits]
 
@@ -287,7 +323,9 @@ def find_column(df, name, required=True):
 
 
 def resolve_columns(df, names):
-    """{wanted: actual} for several names (see find_column); every missing name is reported in one error."""
+    """{wanted: actual} for several names (see find_column); every missing name is reported in one error, and
+    two wanted names that land on the same column are an error too."""
+    names = [names] if isinstance(names, str) else list(names)
     found, missing = {}, []
     for n in names:
         actual = find_column(df, n, required=False)
@@ -300,6 +338,10 @@ def resolve_columns(df, names):
         near = "; ".join(f"{m!r} -> {h}" for m, h in hints.items() if h)
         raise MissingColumns(f"missing columns {missing}" + (f"; did you mean {near}?" if near else "")
                              + f"; found {list(df.columns)}")
+    clashes = {a: [w for w, x in found.items() if x == a] for a in set(found.values())}
+    clashes = {a: ws for a, ws in clashes.items() if len(ws) > 1}
+    if clashes:
+        raise MissingColumns(f"several wanted names resolve to the same column: {clashes}")
     return found
 
 
@@ -314,7 +356,7 @@ def require_columns(df, names, source=""):
         found = resolve_columns(df, names)
     except MissingColumns as e:
         raise MissingColumns(f"{source}: {e}" if source else str(e)) from None
-    return df.rename(columns={actual: wanted for wanted, actual in found.items() if actual != wanted})
+    return df.rename(columns={actual: str(wanted) for wanted, actual in found.items() if actual != str(wanted)})
 
 
 def standard_columns(df, aliases, strict=False, keep_others=True):

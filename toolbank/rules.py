@@ -69,27 +69,29 @@ def _list(value):
 
 
 def condition(df, column, op, value=None, case=False):
-    """Boolean mask for one condition, e.g. condition(df, 'ccy', 'in', 'USD,SGD'). Blanks never match
-    (except 'is null'). Text comparisons ignore case unless case=True. Ops: see OPS."""
+    """Boolean mask for one condition, e.g. condition(df, 'ccy', 'in', 'USD,SGD'). Blanks (NA, '' or spaces)
+    never match, also not 'not in' / '!=' / 'not contains' / 'is false'; only 'is null' matches them. Text
+    comparisons ignore case unless case=True. Ops: see OPS."""
     if column not in df.columns:
         raise KeyError(f"rule column {column!r} not in data; columns are {list(df.columns)}")
     s = df[column]
     op = _ALIASES.get(str(op).strip().lower(), str(op).strip().lower())
     text = _is_text(s)
     norm = (lambda x: x.astype("string").str.strip().str.upper()) if text and not case else (lambda x: x)
+    blank = (s.isna() | (s.astype("string").str.strip() == "").fillna(False)) if text else s.isna()
     if op == "is null":
-        m = s.isna() | (s.astype("string").str.strip() == "") if text else s.isna()
+        m = blank
     elif op == "not null":
-        m = ~condition(df, column, "is null")
+        m = ~blank
     elif op in ("is true", "is false"):
         t = s.map(truthy)
-        m = t if op == "is true" else ~t & s.notna()
+        m = t if op == "is true" else ~t & ~blank
     elif op in ("in", "not in"):
         vals = [_cast(s, v) for v in _list(value)]
         if text and not case:
             vals = [str(v).upper() for v in vals]
         m = norm(s).isin(vals)
-        m = m if op == "in" else (~m & s.notna())
+        m = m if op == "in" else (~m & ~blank)
     elif op == "between":
         lo, hi = [_cast(s, v) for v in _list(value)[:2]]
         m = s.between(lo, hi)
@@ -107,11 +109,11 @@ def condition(df, column, op, value=None, case=False):
             m = tt.str.startswith(vv) if op == "startswith" else tt.str.endswith(vv)
         m = m.fillna(False)
         if op == "not contains":
-            m = ~m & s.notna()
+            m = ~m & ~blank
     elif op in ("==", "!=", ">", ">=", "<", "<="):
         v = _cast(s, value)
         if v is None:
-            m = s.isna() if op == "==" else s.notna()
+            m = blank if op == "==" else ~blank
         else:
             left, right = (norm(s), str(v).upper()) if text and not case and op in ("==", "!=") else (s, v)
             ops = {"==": lambda: left == right, "!=": lambda: left != right, ">": lambda: s > v,
@@ -121,7 +123,7 @@ def condition(df, column, op, value=None, case=False):
             except TypeError as e:
                 raise ValueError(f"cannot compare column {column!r} ({s.dtype}) {op} {value!r}") from e
             if op == "!=":
-                m = m & s.notna()
+                m = m & ~blank
     else:
         raise ValueError(f"unknown operator {op!r}; use one of {OPS}")
     return pd.Series(m, index=df.index).fillna(False).astype(bool)

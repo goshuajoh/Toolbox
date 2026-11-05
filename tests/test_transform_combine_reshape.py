@@ -131,3 +131,19 @@ def test_lookup_case_and_spaces():
     assert lookup(L, R, "ccy", "rate", default=0, case=True)["rate"].tolist() == [0, 0, 0]
     with pytest.raises(ValueError, match="duplicate"):
         lookup(L, pd.DataFrame({"ccy": ["USD", "usd"], "rate": [1, 2]}), "ccy", "rate")
+
+
+def test_lookup_blank_keys_defaults_and_types():
+    rates = pd.DataFrame({"ccy": ["USD", "EUR", None, "XYZ"], "rate": [1.35, 1.45, 999.0, np.nan]})
+    trades = pd.DataFrame({"ccy": ["USD", None, "   ", "XYZ", "QQQ"]})
+    out = lookup(trades, rates, "ccy", "rate", default=0)["rate"]
+    assert out.tolist()[:3] == [1.35, 0.0, 0.0] and pd.isna(out.iloc[3]) and out.iloc[4] == 0   # blank in ref stays blank
+    ids = pd.DataFrame({"acct": [1234567.0, np.nan]})
+    assert lookup(ids, pd.DataFrame({"acct": ["1234567"], "nm": ["Alice"]}), "acct", "nm")["nm"].tolist()[0] == "Alice"
+    T = pd.DataFrame({"d": pd.to_datetime(["2026-03-06 14:30", "2026-03-07"], format="mixed")})
+    X = pd.DataFrame({"d": pd.to_datetime(["2026-03-07"]), "rate": [1.5]})
+    assert lookup(T, X, "d", "rate")["rate"].tolist()[1] == 1.5
+    assert lookup(pd.DataFrame({"k": ["Hong\u00a0Kong"]}), pd.DataFrame({"k": ["hong kong"], "v": [3]}), "k", "v")["v"].tolist() == [3]
+    with pytest.raises(ValueError, match=r"\{'ACME LTD': \['Acme  Ltd', 'ACME LTD', 'acme ltd '\]\}"):
+        lookup(pd.DataFrame({"k": ["a"]}), pd.DataFrame({"k": ["Acme  Ltd", "ACME LTD", "acme ltd "], "v": [1, 2, 3]}), "k", "v")
+    assert lookup(pd.DataFrame({"k": [None]}), pd.DataFrame({"k": [None, None], "v": [1, 2]}), "k", "v")["v"].isna().all()

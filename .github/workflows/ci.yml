@@ -20,7 +20,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest ruff pyarrow requests beautifulsoup4 defusedxml pdfplumber python-docx sqlalchemy reportlab
+          pip install -r requirements.txt pytest ruff pyarrow requests beautifulsoup4 defusedxml pdfplumber python-docx sqlalchemy reportlab croniter
       - name: Lint
         run: ruff check .
       - name: Test

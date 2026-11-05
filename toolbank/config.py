@@ -1,7 +1,34 @@
-"""Config from YAML (default + environment overlay + env vars) and secrets from env / Windows Credential Manager."""
+"""Config from YAML (default + environment overlay + env vars) and secrets from env / Windows Credential Manager.
+YAML is read with yaml_load: no YAML 1.1 surprises (00123 and 01 stay text, NO / on / yes stay text)."""
 import os
 import re
 from pathlib import Path
+
+
+def _loader():
+    """yaml.SafeLoader with YAML 1.2 core-schema numbers and booleans: only true / false are booleans
+    (not yes / no / on / off, so 'country: NO' is Norway) and a leading zero is not octal ('00123' stays text,
+    as account and branch codes must)."""
+    import yaml
+
+    class Loader(yaml.SafeLoader):
+        pass
+    drop = ("tag:yaml.org,2002:int", "tag:yaml.org,2002:bool")
+    Loader.yaml_implicit_resolvers = {ch: [(t, r) for t, r in rs if t not in drop]
+                                      for ch, rs in yaml.SafeLoader.yaml_implicit_resolvers.items()}
+    Loader.add_implicit_resolver("tag:yaml.org,2002:int",
+                                 re.compile(r"^(?:[-+]?(?:0|[1-9][0-9_]*)|0x[0-9a-fA-F_]+|0o[0-7_]+)$"),
+                                 list("-+0123456789"))
+    Loader.add_implicit_resolver("tag:yaml.org,2002:bool", re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"),
+                                 list("tTfF"))
+    return Loader
+
+
+def yaml_load(text):
+    """YAML text -> Python, like yaml.safe_load but with YAML 1.2 numbers and booleans: '00123' and '01' stay
+    text, NO / on / yes stay text, only true / false are booleans. Use it for every config and recipe file."""
+    import yaml
+    return yaml.load(text, Loader=_loader())
 
 
 def _merge(base, over):
@@ -14,12 +41,12 @@ def _merge(base, over):
 
 def _typed(text):
     """Environment variable text -> the type YAML would give it, without YAML surprises: '3' -> 3, '0.5' -> 0.5,
-    'true' -> True, 'null' -> None; '0123' and anything else stay text (account numbers keep their zeros)."""
+    'true' / 'false' -> bool, 'null' -> None; '0123', 'NO', 'on' and anything else stay (trimmed) text."""
     s = text.strip()
     low = s.lower()
-    if low in ("true", "yes", "on"):
+    if low == "true":
         return True
-    if low in ("false", "no", "off"):
+    if low == "false":
         return False
     if low in ("null", "none", "~"):
         return None
@@ -27,26 +54,27 @@ def _typed(text):
         return int(s)
     if re.fullmatch(r"-?(0|[1-9]\d*)\.\d+([eE][-+]?\d+)?", s):
         return float(s)
-    return text
+    return s
 
 
 def load_config(config_dir="config", env=None, env_prefix="BOT_"):
     """default.yaml, then <env>.yaml merged on top (nested sections key by key), then BOT_<KEY> environment
     variables on top: BOT_RETRIES=3 -> cfg['retries'] = 3 (typed like YAML), BOT_DB__HOST=x -> cfg['db']['host'].
     Returns dict (cfg['env'] = the environment name)."""
-    import yaml
     env = env or os.environ.get(f"{env_prefix}ENV", "dev")
     cfg = {}
     for name in ("default.yaml", f"{env}.yaml"):
         p = Path(config_dir) / name
         if p.exists():
-            loaded = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+            loaded = yaml_load(p.read_text(encoding="utf-8")) or {}
             if not isinstance(loaded, dict):
                 raise ValueError(f"{p} must hold a mapping (key: value), not {type(loaded).__name__}")
             cfg = _merge(cfg, loaded)
     for k, v in os.environ.items():
         if k.startswith(env_prefix) and k != f"{env_prefix}ENV":
             path = [part.lower() for part in k[len(env_prefix):].split("__") if part]
+            if not path:
+                continue
             over = _typed(v)
             for part in reversed(path):
                 over = {part: over}

@@ -172,3 +172,50 @@ def test_readers_tolerant_required(tmp_path):
     (tmp_path / "h.csv").write_text("Ref;Amt\nA;1\n")
     assert read_any(tmp_path / "h.csv", required=["ref"]).columns.tolist() == ["ref", "Amt"]
     assert read_any(tmp_path / "a.xlsx", required=["amount sgd"]).columns.tolist()[1] == "amount sgd"
+
+
+def test_to_number_signs_codes_and_inf():
+    s = pd.Series(["(1,000)", "1,000-", "(1,234)", "($1,000)", "(10,000)", "-100 DR", "DR -100", "-100-", "USD1,200",
+                   "SGD1,234.50", "USD1200,50", "1,000.00DR", "1,000.00CR", "RM1,000", "inf", "-inf", "ARM100",
+                   "(1,000 DR)", "-1,000.00 DR", "(10.00)", "1,000 DR"])
+    out = to_number(s).tolist()
+    assert out[:8] == [-1000.0, -1000.0, -1234.0, -1000.0, -10000.0, -100.0, -100.0, -100.0]
+    assert out[8:14] == [1200.0, 1234.5, 1200.5, -1000.0, 1000.0, 1000.0]
+    assert all(pd.isna(x) for x in out[14:17]) and out[17:] == [-1000.0, -1000.0, -10.0, -1000.0]
+
+
+def test_to_date_open_ended_tz_and_fractions():
+    d = to_date(pd.Series(["31.12.9999", "99991231", "9999-12-31", "6 Mar", "2026-3-6", "2026-03-6", "46087.5",
+                           "2026-03-06T14:30:00Z", "2026-03-06T14:30:00+08:00", "2026-03-06"]))
+    assert str(d.dtype) == "datetime64[us]" and pd.isna(d.iloc[3])
+    assert d.dt.strftime("%Y-%m-%d %H:%M").tolist()[:3] == ["9999-12-31 00:00"] * 3
+    assert d.dt.strftime("%Y-%m-%d %H:%M").tolist()[4:] == ["2026-03-06 00:00", "2026-03-06 00:00", "2026-03-06 12:00",
+                                                           "2026-03-06 14:30", "2026-03-06 06:30", "2026-03-06 00:00"]
+    n = to_date(pd.Series([99991231, 46087.5]))
+    assert n.dt.year.tolist() == [9999, 2026] and n.iloc[1].hour == 12
+
+
+def test_headers_unicode_and_duplicates():
+    assert norm_label("金額 ") == "金額" and norm_label("Débit / Crédit") == "debit credit"
+    assert find_column(pd.DataFrame({"金額 ": [1], "日期": [2]}), "金額") == "金額 "
+    assert clean_headers(pd.DataFrame(columns=["Amount", "Amount", "Amount_2"])).columns.tolist() == \
+        ["Amount", "Amount_2", "Amount_2_2"]
+    assert resolve_columns(pd.DataFrame({"ccy": [1]}), "ccy") == {"ccy": "ccy"}
+    with pytest.raises(MissingColumns, match="resolve to the same column"):
+        require_columns(pd.DataFrame({"Trade Date": [1]}), ["trade_date", "Trade Date"])
+    assert require_columns(pd.DataFrame({"2024": [1]}), [2024]).columns.tolist() == ["2024"]
+
+
+def test_readers_sheets_dict_and_pandas_spellings(tmp_path):
+    df = pd.DataFrame({"Ref": ["A1"], "Amt": [1.0]})
+    with pd.ExcelWriter(tmp_path / "two.xlsx") as w:
+        df.to_excel(w, sheet_name="S1", index=False)
+        df.to_excel(w, sheet_name="S2", index=False)
+    both = read_any(tmp_path / "two.xlsx", sheet=None, required=["ref"])
+    assert sorted(both) == ["S1", "S2"] and both["S2"].columns.tolist() == ["ref", "Amt"]
+    assert read_sheet(tmp_path / "two.xlsx", header=0, sheet_name="S2").columns.tolist() == ["Ref", "Amt"]
+    with pytest.raises(ValueError, match="read_multirow_header"):
+        read_sheet(tmp_path / "two.xlsx", header=[0, 1])
+    (tmp_path / "a.csv").write_text("Ref;Amt\nA;1\n")
+    assert read_any(tmp_path / "a.csv", header=0).columns.tolist() == ["Ref", "Amt"]
+    assert read_csv_smart(tmp_path / "a.csv", sep=";").columns.tolist() == ["Ref", "Amt"]

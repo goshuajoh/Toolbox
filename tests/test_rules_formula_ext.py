@@ -41,7 +41,7 @@ def test_condition_operators():
     assert c("desk", "not contains", "X") == [False, True, False, True, False]
     assert c("trade_date", ">=", "05/03/2026") == [False, False, False, True, True]
     assert c("urgent", "is true") == [True, False, False, False, True]
-    assert c("urgent", "is false") == [False, True, True, False, False]
+    assert c("urgent", "is false") == [False, True, False, False, False]      # blanks never match
     assert c("desk", "!=", "fx") == [False, True, False, True, False]
     assert condition(TRADES, "desk", "==", "fx", case=True).tolist() == [False] * 5
     with pytest.raises(KeyError):
@@ -279,3 +279,14 @@ def test_review_fixes_rules_and_dates(tmp_path):
     with pytest.raises(Exception):
         convert_tz(amb, "America/New_York", "UTC")
     assert convert_tz(amb, "America/New_York", "UTC", ambiguous="NaT").isna().all()
+
+
+def test_blanks_never_match_negated_ops():
+    df = pd.DataFrame({"ccy": ["USD", " ", "", None, "SGD"]})
+    for op, v in [("not in", "USD"), ("!=", "USD"), ("not contains", "US")]:
+        assert condition(df, "ccy", op, v).tolist() == [False, False, False, False, True], op
+    assert condition(df, "ccy", "is null").tolist() == [False, True, True, True, False]
+    assert condition(df, "ccy", "not null").tolist() == [True, False, False, False, True]
+    assert condition(df, "ccy", "==", None).tolist() == [False, True, True, True, False]
+    assert filter_rows(pd.DataFrame({"ccy": ["USD", "SGD"]}), "ccy", "==", "usd")[0]["ccy"].tolist() == ["USD"]
+    assert summarize(pd.DataFrame({"g": ["a", "a"], "v": [1, 2]}), ["g"], n=["v", "count"])["n"].tolist() == [2]

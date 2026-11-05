@@ -1,7 +1,9 @@
 """Errors, retry, item loop, checkpoint, dry run, step timer, run folder."""
 import functools
 import json
+import os
 import random
+import sys
 import sysconfig
 import time
 import traceback
@@ -35,18 +37,27 @@ class SystemError_(RobotError):
 
 
 def classify(exc):
-    """Map plain Python errors onto BusinessError / SystemError_."""
+    """Map plain Python errors onto the robot's three kinds: OSError / timeouts -> SystemError_ (retry);
+    ValueError / KeyError (what bad data raises) -> BusinessError BAD_DATA; anything else, TypeError and
+    AttributeError included (almost always a bug) -> plain RobotError (stop, needs a fix)."""
     if isinstance(exc, RobotError):
         return exc
     if isinstance(exc, (OSError, TimeoutError, ConnectionError)):
         return SystemError_(str(exc), code="SYSTEM")
-    if isinstance(exc, (ValueError, KeyError, TypeError)):
+    if isinstance(exc, (ValueError, KeyError)):
         return BusinessError(str(exc), code="BAD_DATA")
     return RobotError(str(exc))
 
 
-_LIB_DIRS = tuple(p for p in {sysconfig.get_paths().get(k) for k in ("stdlib", "platstdlib", "purelib", "platlib")}
-                  if p) + (str(Path(__file__).parent),)
+_LIB_DIRS = tuple(os.path.normcase(p) + os.sep for p in
+                  {sysconfig.get_paths().get(k) for k in ("stdlib", "platstdlib", "purelib", "platlib")}
+                  | {sys.prefix, sys.base_prefix, sys.exec_prefix} if p) + (os.path.normcase(str(Path(__file__).parent)) + os.sep,)
+
+
+def _is_lib(filename):
+    """True for frames of the standard library (also frozen '<frozen os>' / zipped), site-packages or toolbank."""
+    fn = os.path.normcase(filename)
+    return fn.startswith("<") or fn.startswith(_LIB_DIRS) or "site-packages" in fn or "dist-packages" in fn
 
 
 def error_where(exc):
@@ -55,7 +66,7 @@ def error_where(exc):
     frames = traceback.extract_tb(exc.__traceback__)
     if not frames:
         return ""
-    own = [f for f in frames if not f.filename.startswith(_LIB_DIRS) and "site-packages" not in f.filename]
+    own = [f for f in frames if not _is_lib(f.filename)]
     f = (own or frames)[-1]
     return f"{f.name} ({Path(f.filename).name}:{f.lineno})"
 
@@ -69,8 +80,12 @@ def error_info(exc):
 
 
 def retry(max_attempts=3, base_delay=1.0, backoff=2.0, retry_on=(SystemError_, OSError, TimeoutError), log=None):
-    """Decorator: retry with exponential backoff + jitter. Use on reads only, never around sends/submits.
-    log=print (or logger.warning) reports each retry: 'retry 2/3 in 2.1s after OSError: ...'."""
+    """Decorator: call the function up to max_attempts times (so 2 retries by default) with exponential backoff
+    + jitter. Use on reads only, never around sends/submits. log=print (or logger.warning) reports each retry:
+    'retry 1/2 in 2.1s after OSError: ...'."""
+    if not isinstance(max_attempts, int) or max_attempts < 1:
+        raise ValueError(f"max_attempts must be a whole number >= 1, not {max_attempts!r}")
+
     def deco(fn):
         @functools.wraps(fn)
         def wrapper(*a, **k):
@@ -89,17 +104,41 @@ def retry(max_attempts=3, base_delay=1.0, backoff=2.0, retry_on=(SystemError_, O
     return deco
 
 
+_FAILURE_COLS = ["item", "code", "message", "type", "where", "retryable"]
+
+
+def _blank_key(k):
+    return k is None or str(k).strip().lower() in ("", "nan", "none", "nat", "<na>")
+
+
 def process_all(items, handler, max_consecutive_system=3, checkpoint=None, key=str, log=None):
-    """Run handler(item) for each item. BusinessError -> recorded, continue. SystemError_ (and OSError etc.)
-    -> continue, but N in a row -> abort with SYSTEM_STREAK naming the last error. Any other RobotError or a
-    plain bug (AttributeError, auth failure, bad SQL...) -> stop at once, since every item would fail the same
-    way; the error carries item=<key>. Optional Checkpoint skips items already done. log=print reports each
-    failure as it happens. Returns (done_items, failures_df) with columns item, code, message, type, where."""
-    done, failures, streak = [], [], 0
+    """Run handler(item) for each item and record what happened, so the robot can report and resume:
+    BusinessError (data is wrong) -> recorded with retryable False and skipped; SystemError_ / OSError
+    (environment) -> recorded with retryable True, and N in a row -> abort with SYSTEM_STREAK naming the last
+    error; any other RobotError or a plain bug (AttributeError, auth failure, bad SQL...) -> stop at once, since
+    every item would fail the same way (the error carries item= and where=). Only successes are written to the
+    optional Checkpoint, so a re-run retries every failure and reports it again until it is fixed; with a
+    checkpoint a blank key or a key repeated in the same run is recorded as MISSING_KEY / DUPLICATE_KEY, never
+    silently skipped. log=print reports each failure as it happens.
+    Returns (done_items, failures_df) with columns item, code, message, type, where, retryable:
+    failures.retryable.any() -> re-run later (exit 3); other failures -> report to the owner (exit 2)."""
+    done, failures, streak, seen = [], [], 0, set()
+
+    def record(k, code, message, info=None, retryable=False):
+        failures.append({"item": k, "code": code, "message": message, "type": info["type"] if info else "",
+                         "where": info["where"] if info else "", "retryable": retryable})
     for item in items:
         k = key(item)
-        if checkpoint is not None and checkpoint.is_done(k):
-            continue
+        if checkpoint is not None:
+            if _blank_key(k):
+                record(k, "MISSING_KEY", "blank key: the item cannot be checkpointed or resumed")
+                continue
+            if str(k) in seen:
+                record(k, "DUPLICATE_KEY", "key already processed in this run: the item cannot be resumed")
+                continue
+            seen.add(str(k))
+            if checkpoint.is_done(k):
+                continue
         try:
             handler(item)
             done.append(item); streak = 0
@@ -109,28 +148,27 @@ def process_all(items, handler, max_consecutive_system=3, checkpoint=None, key=s
             err = classify(e)
             info = error_info(e)
             if isinstance(err, BusinessError):
-                failures.append({"item": k, "code": err.code, "message": err.message, "type": info["type"],
-                                 "where": info["where"]})
+                record(k, err.code, err.message, info)
                 streak = 0
                 if log is not None:
                     log(f"skip {k}: [{err.code}] {err.message} at {info['where']}")
-                if checkpoint is not None:
-                    checkpoint.mark_done(k)
             elif not err.retryable:
                 err.context.setdefault("item", k)
+                err.context.setdefault("where", info["where"])
                 if log is not None:
                     log(f"stop at {k}: [{err.code}] {err.message} at {info['where']}")
                 if err is e:
                     raise
                 raise err from e
             else:
+                record(k, err.code, err.message, info, retryable=True)
                 streak += 1
                 if log is not None:
                     log(f"system failure {streak}/{max_consecutive_system} at {k}: [{err.code}] {err.message}")
                 if streak >= max_consecutive_system:
                     raise SystemError_(f"{streak} consecutive system failures; last: {info['type']}: {err.message}",
                                        code="SYSTEM_STREAK", last_item=k, where=info["where"]) from e
-    return done, pd.DataFrame(failures, columns=["item", "code", "message", "type", "where"])
+    return done, pd.DataFrame(failures, columns=_FAILURE_COLS)
 
 
 class Checkpoint:
@@ -159,7 +197,8 @@ def act(fn, *args, dry_run=False, log=print, **kwargs):
     """Call a side-effecting function unless dry_run; then only log what would happen (argument names, not values:
     they may hold data)."""
     if dry_run:
-        log(f"[dry-run] would call {fn.__name__}({len(args)} positional args, kwargs={list(kwargs)})")
+        name = getattr(fn, "__name__", None) or getattr(getattr(fn, "func", None), "__name__", None) or repr(fn)
+        log(f"[dry-run] would call {name}({len(args)} positional args, kwargs={list(kwargs)})")
         return None
     return fn(*args, **kwargs)
 
