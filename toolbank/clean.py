@@ -1,32 +1,75 @@
-"""Type conversion, text cleansing, normalising keys/names, column selection."""
+"""Type conversion, text cleansing, normalising keys/names, column selection and tolerant column matching."""
+import difflib
 import re
+import unicodedata
 
 import numpy as np
 import pandas as pd
 
+from .identifiers import CURRENCIES
+
+_INVISIBLE = "[ ​‌‍﻿\t\r\n]+"   # not raw: pyarrow (RE2) needs real characters
+_DASHES = "[−–—‐‑]"              # unicode minus, en/em dash, hyphens typed by Word
+_CCY_SYMBOLS = r"US\$|S\$|HK\$|A\$|C\$|NZ\$|NT\$|RM\b|[$€£¥₹₩]"
+_CCY_CODES = "|".join(sorted(CURRENCIES))
+
 
 def to_number(series):
-    """'1,234.50' / '(10.00)' / 'S$ 12' -> float; unparsable -> NaN."""
-    s = series.astype(str).str.strip()
-    s = s.str.replace(r"^\((.*)\)$", r"-\1", regex=True)
-    s = s.str.replace(r"[,\s$€£¥]|S\$", "", regex=True)
-    return pd.to_numeric(s, errors="coerce")
+    """Lenient number parse for bank exports -> float64; unparsable -> NaN. Handles '1,234.50', '(10.00)',
+    '100.00-' (trailing minus), '1,000 DR' / 'CR' (DR = negative), 'S$ 12', 'USD 1,200', NBSP and unicode
+    minus signs. Decimal mark as in parse_amount: '1,234' is thousands, '1.234,56' / '10,5' decimal comma."""
+    if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
+        return series.astype("float64")
+    s = series.astype("string").str.replace(_INVISIBLE, " ", regex=True).str.strip().str.upper()
+    s = s.str.replace(_DASHES, "-", regex=True)
+    s = s.str.replace(rf"{_CCY_SYMBOLS}|\b(?:{_CCY_CODES})\b", " ", regex=True)
+    dr = s.str.contains(r"\b(?:DR|DEBIT)\b\.?", regex=True, na=False)
+    s = s.str.replace(r"\b(?:DR|CR|DEBIT|CREDIT)\b\.?", " ", regex=True)
+    s = s.str.replace(r"['\s]", "", regex=True).fillna("")
+    both = s.str.contains(".", regex=False) & s.str.contains(",", regex=False)
+    dec_comma = ((both & (s.str.rfind(",") > s.str.rfind("."))) |                  # 1.234,56
+                 (~both & (s.str.count(",") == 1) & ~s.str.contains(r",\d{3}$")) |  # 10,5 (not 1,234)
+                 (~both & (s.str.count(r"\.") > 1))).fillna(False).astype(bool)      # 1.234.567
+    s = s.where(~dec_comma, s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
+    s = s.str.replace(",", "", regex=False)
+    paren = s.str.match(r"^\(.*\)$", na=False)
+    s = s.str.replace(r"^\((.*)\)$", r"\1", regex=True)
+    trailing = s.str.match(r"^.+-$", na=False)
+    s = s.str.replace(r"^(.+)-$", r"\1", regex=True)
+    s = s.str.replace(r"^\+", "", regex=True)
+    out = pd.to_numeric(s, errors="coerce").astype("float64")
+    neg = (dr | paren | trailing).to_numpy(dtype=bool)
+    return out.where(~neg, -out)
 
 
 def to_date(series, dayfirst=True):
-    """ISO / year-first (2026/08/09) strings parsed year-first; everything else day-first, value by value.
-    Unparsable -> NaT."""
+    """Dates from whatever the file holds -> datetime64; unparsable -> NaT. ISO / year-first text (2026/08/09)
+    is read year-first, everything else day-first (06/03/2026 = 6 March) value by value. Also 20260306
+    (yyyymmdd, text or number) and Excel serial numbers (46087) that leak into CSV exports."""
     if pd.api.types.is_datetime64_any_dtype(series):
         return series
+    if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
+        n = pd.to_numeric(series, errors="coerce")
+        out = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
+        serial, ymd = n.between(10_000, 99_999), n.between(19_000_101, 99_991_231)
+        out[serial] = excel_serial_to_date(n[serial])
+        out[ymd] = yyyymmdd_to_date(n[ymd].astype("int64"))
+        return out
     s = series.astype("string").str.strip().fillna("")
     out = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
     iso = s.str.match(r"^\d{4}-\d{2}-\d{2}").astype(bool)
     ymd = (~iso) & s.str.match(r"^\d{4}[/.]\d{1,2}[/.]\d{1,2}").astype(bool)     # 2026/08/09 is year-first
-    rest = (~iso) & (~ymd) & (s != "").astype(bool)
+    digits8 = (~iso) & s.str.match(r"^(19|20)\d{6}(\.0+)?$").astype(bool)       # 20260306
+    serial = (~iso) & (~digits8) & s.str.match(r"^\d{5}(\.0+)?$").astype(bool)    # 46087
+    rest = (~iso) & (~ymd) & (~digits8) & (~serial) & (s != "").astype(bool)
     if iso.any():
         out[iso] = pd.to_datetime(s[iso], errors="coerce", format="ISO8601")
     if ymd.any():
         out[ymd] = pd.to_datetime(s[ymd], errors="coerce", yearfirst=True, dayfirst=False, format="mixed")
+    if digits8.any():
+        out[digits8] = yyyymmdd_to_date(s[digits8])
+    if serial.any():
+        out[serial] = excel_serial_to_date(s[serial])
     if rest.any():
         out[rest] = pd.to_datetime(s[rest], errors="coerce", dayfirst=dayfirst, format="mixed")
     return out
@@ -89,13 +132,16 @@ def auto_types(df, threshold=0.95):
     return out
 
 
-_INVISIBLE = "[\u00a0\u200b\u200c\u200d\ufeff\t\r\n]+"   # not raw: pyarrow (RE2) needs real characters
+_CASES = ("upper", "lower", "title", "capitalize", "casefold")
 
 
 def cleanse(df, cols=None, case=None, remove_punct=False, blanks_to_nan=True):
     """Text columns: NBSP/zero-width/tabs -> space, collapse spaces, trim; optional case
     ('upper'/'lower'/'title') and punctuation removal; '' -> NaN."""
+    if case is not None and case not in _CASES:
+        raise ValueError(f"case must be one of {_CASES}, not {case!r}")
     out = df.copy()
+    cols = [cols] if isinstance(cols, str) else cols
     cols = cols or [c for c in out.columns if out[c].dtype == object or pd.api.types.is_string_dtype(out[c])]
     for c in cols:
         mask = out[c].notna()
@@ -179,6 +225,118 @@ def normalise_name(series):
 def composite_key(df, cols, sep="|"):
     """One key column from several (for lookups/joins on multiple fields)."""
     return df[cols].astype("string").fillna("").agg(sep.join, axis=1)
+
+
+# ==================== COLUMN NAMES (case / space / punctuation tolerant) ====================
+
+class MissingColumns(KeyError, ValueError):
+    """Raised when required columns are not in a table; the message names the near misses."""
+
+    def __str__(self):
+        return str(self.args[0]) if self.args else ""
+
+
+def norm_label(text):
+    """Canonical form of a header or label for tolerant matching: accents stripped, case folded, NBSP / tabs /
+    punctuation -> single spaces, trimmed. 'Trade  Date:' == 'TRADE_DATE' == 'trade date'; blank -> ''."""
+    if text is None or (not isinstance(text, str) and pd.isna(text)):
+        return ""
+    s = "".join(c for c in unicodedata.normalize("NFKD", str(text)) if not unicodedata.combining(c))
+    return re.sub(r"[^0-9a-zA-Z]+", " ", s).strip().lower()
+
+
+def clean_headers(df):
+    """Tidy column names as exports deliver them: text, NBSP / tabs / newlines -> one space, trimmed,
+    blank or 'Unnamed: 3' -> col_4, duplicates numbered ('Amount', 'Amount' -> 'Amount', 'Amount_2')."""
+    out = df.copy()
+    seen, names = {}, []
+    for i, c in enumerate(out.columns, start=1):
+        name = "" if c is None or (not isinstance(c, str) and pd.isna(c)) else str(c)
+        name = re.sub(r"\s+", " ", re.sub(_INVISIBLE, " ", name)).strip()
+        if not name or name.startswith("Unnamed:"):
+            name = f"col_{i}"
+        seen[name] = seen.get(name, 0) + 1
+        names.append(name if seen[name] == 1 else f"{name}_{seen[name]}")
+    out.columns = names
+    return out
+
+
+def _suggest(wanted, columns, n=3):
+    by_norm = {norm_label(c): c for c in columns}
+    hits = difflib.get_close_matches(norm_label(wanted), list(by_norm), n=n, cutoff=0.6)
+    return [by_norm[h] for h in hits]
+
+
+def find_column(df, name, required=True):
+    """The actual column name for `name`, matched exactly first, then tolerant of case / spaces / punctuation
+    (norm_label). Two columns that both match -> MissingColumns (ambiguous). Not found -> MissingColumns naming
+    the near misses, or None when required=False."""
+    if name in df.columns:
+        return name
+    want = norm_label(name)
+    hits = [c for c in df.columns if norm_label(c) == want] if want else []
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        raise MissingColumns(f"column {name!r} is ambiguous: {hits}")
+    if not required:
+        return None
+    near = _suggest(name, df.columns)
+    hint = f"; did you mean {near}?" if near else ""
+    raise MissingColumns(f"missing column {name!r}{hint}; found {list(df.columns)}")
+
+
+def resolve_columns(df, names):
+    """{wanted: actual} for several names (see find_column); every missing name is reported in one error."""
+    found, missing = {}, []
+    for n in names:
+        actual = find_column(df, n, required=False)
+        if actual is None:
+            missing.append(n)
+        else:
+            found[n] = actual
+    if missing:
+        hints = {m: _suggest(m, df.columns) for m in missing}
+        near = "; ".join(f"{m!r} -> {h}" for m, h in hints.items() if h)
+        raise MissingColumns(f"missing columns {missing}" + (f"; did you mean {near}?" if near else "")
+                             + f"; found {list(df.columns)}")
+    return found
+
+
+def require_columns(df, names, source=""):
+    """Check that columns exist (tolerant of case / spaces / punctuation) and rename them to the spelling you
+    asked for, so the rest of the robot can use df['Trade Date'] whatever the file called it.
+    Missing -> MissingColumns (a BusinessError once classified) listing near misses and the columns found."""
+    names = [names] if isinstance(names, str) else list(names or [])
+    if not names:
+        return df
+    try:
+        found = resolve_columns(df, names)
+    except MissingColumns as e:
+        raise MissingColumns(f"{source}: {e}" if source else str(e)) from None
+    return df.rename(columns={actual: wanted for wanted, actual in found.items() if actual != wanted})
+
+
+def standard_columns(df, aliases, strict=False, keep_others=True):
+    """Rename columns to your standard names from a list of aliases, tolerant of case / spaces / punctuation:
+    aliases = {'trade_date': ['Trade Date', 'TradeDt', 'Trd Dt'], 'amount': ['Amount (SGD)', 'Amt']}.
+    The standard name itself always counts as an alias. strict=True raises MissingColumns when a standard
+    column is not found; keep_others=False drops columns that are not in the mapping."""
+    rename, missing = {}, []
+    for std, alts in aliases.items():
+        alts = [alts] if isinstance(alts, str) else list(alts)
+        hits = [c for a in [std, *alts] for c in [find_column(df, a, required=False)] if c is not None]
+        hits = list(dict.fromkeys(hits))
+        if len(hits) > 1:
+            raise MissingColumns(f"several columns match {std!r}: {hits}")
+        if hits:
+            rename[hits[0]] = std
+        else:
+            missing.append(std)
+    if missing and strict:
+        raise MissingColumns(f"missing columns {missing}; found {list(df.columns)}")
+    out = df.rename(columns=rename)
+    return out if keep_others else out[list(rename.values())]
 
 
 # ==================== NORMALISATION (standard values) ====================

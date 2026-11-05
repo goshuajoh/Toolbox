@@ -1,8 +1,8 @@
 r"""
 Robot template: copy, rename, fill the three TODOs.
 Run:  python my_robot.py --env dev [--dry-run] [--business-date 2026-03-06]
-Exit: 0 ok · 2 business exceptions (send report to owner) · 3 system failure (re-run) · 4 config error
-      5 robot error (needs a fix) · 6 already running (a second copy was started)
+Exit: 0 ok · 2 business exceptions or bad input (send report to owner) · 3 system failure (re-run)
+      4 config error · 5 robot error (needs a fix) · 6 already running (a second copy was started)
 Schedule: schtasks_create("CoE\\my_robot", r'"C:\path\python.exe" "C:\bots\my_robot.py" --env prod', dry_run=False)
 """
 import argparse
@@ -58,7 +58,8 @@ def run(args, cfg, rd, log, cp):
             # TODO: business rules -> raise BusinessError("why", code="SHORT_CODE")
             results.append({"id": row["id"], "status": "OK"})
 
-        done, failures = process_all([r for _, r in df.iterrows()], handle, checkpoint=cp, key=lambda r: r["id"])
+        done, failures = process_all([r for _, r in df.iterrows()], handle, checkpoint=cp, key=lambda r: r["id"],
+                                     log=log.warning)
 
         # ---------- CLEANUP: report ----------
         out = rd / f"{ROBOT}_report.xlsx"
@@ -69,12 +70,10 @@ def run(args, cfg, rd, log, cp):
         act(safe_write_excel, out, sheets, overwrite=True, dry_run=args.dry_run)   # TODO: add email/upload
         log.info("end", extra={"event": "end", "rows": len(df), "count": len(failures)})
         return 2 if len(failures) else 0
-    except RobotError as e:
-        log.error(str(e), extra={"code": e.code})
-        return 3 if e.retryable else 5
-    except Exception as e:
-        log.error(str(classify(e)), extra={"code": "UNHANDLED"})
-        return 3
+    except Exception as e:                       # classified: BusinessError 2, SystemError_ 3, anything else 5
+        err, info = classify(e), error_info(e)
+        log.error(str(err), extra={"code": err.code, "where": info["where"], "type": info["type"]}, exc_info=True)
+        return 2 if isinstance(err, BusinessError) else 3 if err.retryable else 5
 
 
 if __name__ == "__main__":

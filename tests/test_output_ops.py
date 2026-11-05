@@ -106,8 +106,15 @@ def test_logs_and_privacy(tmp_path):
     assert redact("ref GL-00012345 run 20261102-173536 date 2026-03-06") == "ref GL-00012345 run 20261102-173536 date 2026-03-06"
     log = get_logger(tmp_path / "run.jsonl", run_id="R1", console=False)
     log.info("loaded 0012345678", extra={"rows": 5, "event": "load"})
-    rec = json.loads((tmp_path / "run.jsonl").read_text().strip())
+    log.info("ctx", extra={"custom_key": "S1234567A", "n": {"a": 1}})
+    try:
+        1 / 0
+    except ZeroDivisionError:
+        log.error("boom", exc_info=True, extra={"code": "X"})
+    rec, ctx, err = [json.loads(ln) for ln in (tmp_path / "run.jsonl").read_text().strip().splitlines()]
     assert rec["run_id"] == "R1" and rec["rows"] == 5 and "<account:***>" in rec["msg"]
+    assert ctx["custom_key"] == "<nric:***>" and ctx["n"] == {"a": 1}
+    assert err["code"] == "X" and err["exc"].rstrip().endswith("ZeroDivisionError: division by zero")
     assert redact_frame(pd.DataFrame({"n": ["Joe", None]}), ["n"])["n"].tolist()[0] == "***"
     ds = describe_shape(pd.DataFrame({"ref": ["GL-000001", "GL-000002"], "amt": [123.0, 4567.0], "ok": [True, False],
                                       "d": pd.to_datetime(["2026-01-01", "2026-01-02"])}))
@@ -204,7 +211,7 @@ def test_config_and_notify(tmp_path, monkeypatch):
     (tmp_path / "uat.yaml").write_text("input_path: uat.xlsx\n")
     monkeypatch.setenv("BOT_TOLERANCE", "0.5")
     cfg = load_config(tmp_path, "uat")
-    assert cfg == {"input_path": "uat.xlsx", "tolerance": "0.5", "env": "uat"}
+    assert cfg == {"input_path": "uat.xlsx", "tolerance": 0.5, "env": "uat"}
     with pytest.raises(KeyError):
         require(cfg, "missing_key")
     monkeypatch.setenv("MY_SECRET", "s3")
@@ -227,3 +234,68 @@ def test_template_robot_runs(tmp_path):
     (tmp_path / "cfg" / "default.yaml").write_text(f"input_path: {tmp_path / 'in.xlsx'}\nworkdir: {tmp_path / 'work'}\n")
     assert m.main(["--config-dir", str(tmp_path / "cfg"), "--business-date", "2026-03-06"]) == 0
     assert (tmp_path / "work" / "my_robot" / "2026-03-06" / "my_robot_report.xlsx").exists()
+
+
+def test_process_all_failure_details_and_stop():
+    def handler(x):
+        if x == 2:
+            raise BusinessError("bad row", code="BAD")
+        if x == 5:
+            raise AttributeError("'NoneType' object has no attribute 'x'")
+    lines = []
+    done, fails = process_all([1, 2, 3], handler, log=lines.append)
+    assert done == [1, 3] and fails.columns.tolist() == ["item", "code", "message", "type", "where"]
+    assert fails.loc[0, "type"] == "BusinessError" and fails.loc[0, "where"].startswith("handler (test_output_ops.py:")
+    assert lines == [f"skip 2: [BAD] bad row at {fails.loc[0, 'where']}"]
+    with pytest.raises(RobotError) as e:                     # a code bug stops at once, with the item named
+        process_all([4, 5, 6], handler, log=lines.append)
+    assert e.value.context["item"] == "5" and isinstance(e.value.__cause__, AttributeError)
+    assert not isinstance(e.value, SystemError_) and lines[-1].startswith("stop at 5: [ERROR]")
+
+    def auth(x):
+        raise RobotError("HTTP 401", code="AUTH", url="x")
+    with pytest.raises(RobotError, match="HTTP 401") as e:
+        process_all([1, 2], auth)
+    assert e.value.context == {"url": "x", "item": "1"}
+
+    def down(x):
+        raise OSError("network down")
+    with pytest.raises(SystemError_, match="3 consecutive system failures; last: OSError: network down") as e:
+        process_all([1, 2, 3, 4], down)
+    assert e.value.context["last_item"] == "3" and e.value.context["where"].startswith("down (test_output_ops.py:")
+    info = error_info(e.value)
+    assert info["code"] == "SYSTEM_STREAK" and info["retryable"] and info["where"].startswith("test_process_all")
+    assert error_info(ValueError("x")) == {"type": "ValueError", "code": "BAD_DATA", "message": "x",
+                                           "retryable": False, "where": "", "context": {}}
+
+
+def test_retry_step_act_logging():
+    lines, calls = [], {"n": 0}
+
+    @retry(max_attempts=3, base_delay=0, log=lines.append)
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise PermissionError("locked")
+        return "ok"
+    assert flaky() == "ok" and len(lines) == 2
+    assert lines[-1].startswith("flaky: retry 2/2 in 0.0s after PermissionError: locked")
+    with pytest.raises(KeyError):
+        with step("load", lines.append):
+            pd.DataFrame({"a": [1]})["b"]
+    assert lines[-1].startswith("FAIL  load (") and "[BAD_DATA] 'b' at test_retry_step_act_logging" in lines[-1]
+    assert act(lambda: 1 / 0, dry_run=True, log=lines.append) is None
+    assert lines[-1] == "[dry-run] would call <lambda>(0 positional args, kwargs=[])"
+
+
+def test_config_layers(tmp_path, monkeypatch):
+    (tmp_path / "default.yaml").write_text("tolerance: 0.01\ndb:\n  host: h1\n  port: 1433\nids: ['0123']\n")
+    (tmp_path / "uat.yaml").write_text("db:\n  host: h2\n")
+    for k, v in {"BOT_TOLERANCE": "0.5", "BOT_DB__PORT": "1434", "BOT_ACCT": "0123", "BOT_SEND": "no",
+                 "BOT_NAME": "x y"}.items():
+        monkeypatch.setenv(k, v)
+    assert load_config(tmp_path, "uat") == {"tolerance": 0.5, "db": {"host": "h2", "port": 1434}, "ids": ["0123"],
+                                            "acct": "0123", "send": False, "name": "x y", "env": "uat"}
+    (tmp_path / "bad.yaml").write_text("- a\n- b\n")
+    with pytest.raises(ValueError, match="mapping"):
+        load_config(tmp_path, "bad")

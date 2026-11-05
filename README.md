@@ -2,7 +2,11 @@
 
 Generic Python building blocks for operations automation: read and clean data, Alteryx-style transforms, Excel
 formulas, reconciliations, rules and flags, OCR, browsers, APIs, email, databases, Fabric/Delta, triggers and
-scheduling, robot plumbing. No business logic, no data.
+scheduling, robot plumbing, recipes that generate robot code. No business logic, no data.
+
+**Browse the toolbox:** <https://goshuajoh.github.io/Toolbox/> — a searchable catalogue of every function (real
+signatures and docstrings, which optional library each one needs) plus a script builder. Generated from the code by
+`python make_index.py`, served from the `docs/` folder (see [The toolbox website](#the-toolbox-website)).
 
 ## Use it
 
@@ -50,6 +54,7 @@ its own — most depend only on pandas plus `robust.py`.
 | Fabric OneLake and Delta tables: read, write, merge, history | `lake` |
 | Triggers: folder watch, every N minutes, cron, Windows Task Scheduler, webhook receiver, work queue, one-copy lock | `triggers` |
 | Alteryx-style workflow with row counts and timings per step | `flow` |
+| A robot as a YAML spec: validated against the function signatures, run as a Flow, or generated as a script | `recipe` |
 | Parallel API calls, chunks, progress with ETA, smaller DataFrames | `perf` |
 | Errors, retry, checkpoints, dry run, logs, config, secrets, Teams messages | `robust`, `logs`, `config`, `notify` |
 | Business days, holidays, T+n, roll conventions, cut-offs, time zones | `dates` |
@@ -64,10 +69,91 @@ its own — most depend only on pandas plus `robust.py`.
 | `templates/robot_template.py` | robot skeleton: `--env --dry-run --business-date`, one-copy lock, exit codes |
 | `vba/` | `.bas` modules — Excel: Developer > Visual Basic > File > Import |
 | `tests/` | `pytest` — run after copying to check your environment |
+| `docs/` | the website (generated: `index.html`, `toolbox.json`); `site/index.template.html` is its template |
+| `.github/workflows/ci.yml` | lint, tests on Python 3.10 and 3.13, and a check that README and `docs/` match the code |
 
 Tested on Python 3.10–3.13 and pandas 2.1–3.0 (with and without pyarrow), browser parts with Chromium. Windows-only
 parts (`excel_app`, `desktop`, `outlook`, `ocr.windows_ocr`, running `schtasks`) load their libraries lazily and are
 not run by the tests. Never commit data, screenshots, HAR or browser-session files: `.gitignore` blocks the usual ones.
+
+## How the functions behave
+
+The same rules everywhere, so a robot built from these parts fails the same way whatever the input:
+
+- **Headers and column names are matched tolerant of case, spaces and punctuation.** `read_sheet(path,
+  required=["Trade Date"])` accepts `TRADE_DATE`, `Trade  Date:` or `trade date`, renames the column to the spelling
+  you asked for, and a miss raises `MissingColumns` naming the near misses and every column found. Use
+  `standard_columns(df, {"trade_date": ["Trade Dt", "TradeDate"]})` when the same feed arrives with different headers.
+- **Text is compared trimmed and case-insensitive** (lookups, rules, reconcile, `in` lists, required columns) unless you
+  pass `case=True`. Non-breaking spaces, tabs and zero-width characters count as spaces (`cleanse`, `clean_headers`).
+- **Blanks never match a condition** (except `is null`) and **unparsable values become NaN / NaT**, never a wrong
+  number: `to_number` understands `(1,000.00)`, `100.00-`, `1,000 DR`, `S$ 12`, `USD 1,200`, `1.234,56` and unicode
+  minus signs; `to_date` understands day-first text, ISO, `20260306` and Excel serials like `46087`.
+- **Money is compared in cents** (`cents`, `reconcile(tolerance=...)`, `match_with_tolerance`), rounding follows Excel
+  (`round_half_up`), business days follow your holiday file.
+- **Errors are classified** so the robot knows what to do: `BusinessError` = the data is wrong, record it and skip the
+  item; `SystemError_` = the environment failed (file locked, network), retry; any other `RobotError` or a plain
+  Python error = stop, it needs a fix. `process_all` applies this per item and returns the failures with the function
+  and line that raised; `classify` / `error_info` do it for any exception; the template turns it into exit codes.
+- **Never retry a send** (`click`, `smtp_send`, `post_webhook` are not retried); retry reads. Writes go through a temp
+  file and rename (`safe_write_excel`, `Checkpoint`, `watermark_set`), so a crash never leaves a half-written file.
+- **Logs carry ids, never data**, and everything logged is redacted (`get_logger`). A second copy of a robot exits
+  with code 6 (`single_instance`); a re-run resumes from the checkpoint (`Checkpoint`, `watch_folder` ledger).
+
+## Recipes: build a robot from a spec
+
+`recipe` turns a small YAML / dict spec into a validated, runnable workflow, and into a plain script. Validation uses
+the real function signatures, so a typo in a function or parameter name is reported before anything runs:
+
+```yaml
+name: fx_breaks
+inputs:                                     # loaded first; refer to them as $rates
+  rates: {fn: read_sheet, path: rates.xlsx}
+steps:
+  - {fn: read_sheet, path: in/trades.xlsx, required: [Trade Date, Amount, ccy]}
+  - {fn: cleanse, case: upper}
+  - {fn: filter_rows, conditions: [[ccy, in, "USD,SGD"]], pick: 0}
+  - {fn: lookup, ref: $rates, key: ccy, cols: rate}
+  - {fn: safe_write_excel, path: out/breaks.xlsx, sheets: {Breaks: $df}, overwrite: true, as: report}
+```
+
+```python
+recipe = load_recipe("fx_breaks.yaml")        # ValueError listing every problem, with "did you mean"
+df, trace = run_recipe(recipe)                # Flow: rows in / out and ms per step in `trace`
+print(recipe_to_code(recipe))                 # the same steps as a script: from toolbank import * ...
+```
+
+A step receives the current frame when the function's first parameter is `df`; `$df` names the frame inside any
+parameter; `pick: n` takes element n of a tuple result (`filter_rows`, `join3`); `as: name` keeps a result under a
+name instead of replacing the frame. The website's **Build a script** tab writes both the script and the YAML.
+
+## The toolbox website
+
+`docs/index.html` is a self-contained page (no CDN, works offline and behind a proxy) built from the docstrings:
+a function finder with search and module filter, the "I need to…" table, every signature with its full docstring,
+source links, `pip install` hints, a script builder, the robot skeleton and exit codes.
+
+- Regenerate after changing code or docstrings: `python make_index.py` (rewrites the README index and `docs/`).
+  `python make_index.py --check` fails when they are stale; CI and `tests/test_package.py` run it.
+- Publish on GitHub Pages once: repository **Settings → Pages → Build and deployment → Source: Deploy from a
+  branch → Branch: `main`, folder: `/docs` → Save**. The page is then at <https://goshuajoh.github.io/Toolbox/> and
+  updates with every push to `main`.
+- `docs/toolbox.json` holds the same catalogue as data (name, signature, parameters, docstring, needs) for any other
+  tool, e.g. an internal wiki or a code generator.
+
+## Develop
+
+```bash
+pip install -r requirements.txt pytest ruff
+ruff check .                 # lint (rules in pyproject.toml)
+python -m pytest -q          # tests; optional libraries skip their tests when absent
+python make_index.py         # README index + docs/ from the docstrings
+```
+
+Every public function needs a one-paragraph docstring (a test checks it): it is the index entry, the website card and
+the `copy` snippet. Keep functions generic (no business logic, no data), raise `BusinessError` for bad data and
+`SystemError_` for environment failures, and put optional library imports inside the function so the module loads
+without them.
 
 ## Function index
 
@@ -81,19 +167,21 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 | `BusinessError(…)` | Data is wrong -&gt; record and skip the item, never retry. |
 | `SystemError_(…)` | Environment failed (file locked, timeout) -&gt; retry, abort if persistent. |
 | `classify(exc)` | Map plain Python errors onto BusinessError / SystemError_. |
-| `retry(max_attempts=3, base_delay=1.0, backoff=2.0, retry_on=(SystemError…)` | Decorator: retry with exponential backoff + jitter. Use on reads only, never around sends/submits. |
-| `process_all(items, handler, max_consecutive_system=3, checkpoint=None, key=str)` | Run handler(item) for each item. BusinessError -&gt; collected, continue. N SystemErrors in a row -&gt; abort. Optional Checkpoint skips items already done. Returns (done_items, failures_df). |
+| `error_where(exc)` | 'function (file.py:123)' of the deepest frame in your own code (not pandas, the standard library or toolbank) where exc was raised; the deepest frame of all when none is yours. '' without a traceback. |
+| `error_info(exc)` | Plain dict for logs and exception reports: type, code, message, retryable, where (see error_where), context (ids given to RobotError). Works for any exception; plain errors are classified first. |
+| `retry(max_attempts=3, base_delay=1.0, backoff=2.0, retry_on=(SystemError…)` | Decorator: retry with exponential backoff + jitter. Use on reads only, never around sends/submits. log=print (or logger.warning) reports each retry: 'retry 2/3 in 2.1s after OSError: ...'. |
+| `process_all(items, handler, max_consecutive_system=3, checkpoint=None, key=str…)` | Run handler(item) for each item. BusinessError -&gt; recorded, continue. SystemError_ (and OSError etc.) -&gt; continue, but N in a row -&gt; abort with SYSTEM_STREAK naming the last error. Any other RobotError or a plain bug (AttributeError, auth failure, bad SQL...) -&gt; stop at once, since every item would fail the same way; the error carries item=&lt;key&gt;. Optional Checkpoint skips items already done. log=print reports each failure as it happens. Returns (done_items, failures_df) with columns item, code, message, type, where. |
 | `Checkpoint(…)` | Remember done keys in a JSON file so a re-run resumes. Key = business id, never row number. |
-| `act(fn, *args, dry_run=False, **kwargs)` | Call a side-effecting function unless dry_run; then only print what would happen. |
-| `step(name, log=print)` | `with step('load'):` -&gt; START / DONE (ms) / FAIL lines. |
+| `act(fn, *args, dry_run=False, log=print, **kwargs)` | Call a side-effecting function unless dry_run; then only log what would happen (argument names, not values: they may hold data). |
+| `step(name, log=print)` | `with step('load'):` -&gt; START / DONE (ms) / FAIL lines (FAIL names the function and line that raised). |
 | `run_dir(robot, business_date=None, root='work')` | work/&lt;robot&gt;/&lt;YYYY-MM-DD&gt;/ — logs, checkpoint and outputs for one run. |
 
 ### Clean & normalise (Data Cleansing / Auto Field) — `toolbank/clean.py`
 
 | function | what it does |
 |---|---|
-| `to_number(series)` | '1,234.50' / '(10.00)' / 'S$ 12' -&gt; float; unparsable -&gt; NaN. |
-| `to_date(series, dayfirst=True)` | ISO / year-first (2026/08/09) strings parsed year-first; everything else day-first, value by value. Unparsable -&gt; NaT. |
+| `to_number(series)` | Lenient number parse for bank exports -&gt; float64; unparsable -&gt; NaN. Handles '1,234.50', '(10.00)', '100.00-' (trailing minus), '1,000 DR' / 'CR' (DR = negative), 'S$ 12', 'USD 1,200', NBSP and unicode minus signs. Decimal mark as in parse_amount: '1,234' is thousands, '1.234,56' / '10,5' decimal comma. |
+| `to_date(series, dayfirst=True)` | Dates from whatever the file holds -&gt; datetime64; unparsable -&gt; NaT. ISO / year-first text (2026/08/09) is read year-first, everything else day-first (06/03/2026 = 6 March) value by value. Also 20260306 (yyyymmdd, text or number) and Excel serial numbers (46087) that leak into CSV exports. |
 | `excel_serial_to_date(series)` | 46087 -&gt; 2026-03-06 (Excel serial numbers that leak into CSV exports). |
 | `yyyymmdd_to_date(series)` | 20260306 / '20260306' -&gt; date (mainframe style). |
 | `cents(x)` | Money as integer cents; compare these, never floats. |
@@ -110,6 +198,13 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 | `normalise_key(series, width=None)` | Matching key: upper, letters/digits only, optional zero-pad (fixes '123' vs ' 0123 '). |
 | `normalise_name(series)` | Company names for matching: upper, &amp; -&gt; AND, drop punctuation + legal suffixes, collapse spaces. |
 | `composite_key(df, cols, sep='\|')` | One key column from several (for lookups/joins on multiple fields). |
+| `MissingColumns(…)` | Raised when required columns are not in a table; the message names the near misses. |
+| `norm_label(text)` | Canonical form of a header or label for tolerant matching: accents stripped, case folded, NBSP / tabs / punctuation -&gt; single spaces, trimmed. 'Trade Date:' == 'TRADE_DATE' == 'trade date'; blank -&gt; ''. |
+| `clean_headers(df)` | Tidy column names as exports deliver them: text, NBSP / tabs / newlines -&gt; one space, trimmed, blank or 'Unnamed: 3' -&gt; col_4, duplicates numbered ('Amount', 'Amount' -&gt; 'Amount', 'Amount_2'). |
+| `find_column(df, name, required=True)` | The actual column name for `name`, matched exactly first, then tolerant of case / spaces / punctuation (norm_label). Two columns that both match -&gt; MissingColumns (ambiguous). Not found -&gt; MissingColumns naming the near misses, or None when required=False. |
+| `resolve_columns(df, names)` | {wanted: actual} for several names (see find_column); every missing name is reported in one error. |
+| `require_columns(df, names, source='')` | Check that columns exist (tolerant of case / spaces / punctuation) and rename them to the spelling you asked for, so the rest of the robot can use df['Trade Date'] whatever the file called it. Missing -&gt; MissingColumns (a BusinessError once classified) listing near misses and the columns found. |
+| `standard_columns(df, aliases, strict=False, keep_others=True)` | Rename columns to your standard names from a list of aliases, tolerant of case / spaces / punctuation: aliases = {'trade_date': ['Trade Date', 'TradeDt', 'Trd Dt'], 'amount': ['Amount (SGD)', 'Amt']}. The standard name itself always counts as an alias. strict=True raises MissingColumns when a standard column is not found; keep_others=False drops columns that are not in the mapping. |
 | `normalise_bool(series)` | 'Y'/'Yes'/'TRUE'/'1'/'x' -&gt; True, 'N'/'No'/'0' -&gt; False, anything else -&gt; &lt;NA&gt;. |
 | `normalise_currency(series, extra=None)` | 'US$' / 'us dollar' / 'S$' / '€' / 'rmb' -&gt; ISO code; 3-letter codes upper-cased; unknown kept (upper). |
 | `normalise_side(series)` | 'B'/'Bot'/'Purchase'/'1' -&gt; BUY, 'S'/'Sold'/'2' -&gt; SELL, 'SS'/'5' -&gt; SELL_SHORT; unknown -&gt; &lt;NA&gt;. |
@@ -124,9 +219,9 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 
 | function | what it does |
 |---|---|
-| `read_sheet(path, sheet=0, header_row=1, required=(), **kw)` | Excel sheet with header on row N (1-based); raise if required columns are missing. |
-| `read_csv_smart(path, required=(), **kw)` | CSV with unknown encoding (BOM/cp1252/latin-1) and delimiter (, ; tab \|). |
-| `read_any(path, sheet=0, header_row=1, **kw)` | Read xlsx/xlsm/xls/xlsb/csv/txt/parquet by extension (xls needs xlrd, xlsb needs pyxlsb). |
+| `read_sheet(path, sheet=0, header_row=1, required=(), **kw)` | Excel sheet with header on row N (1-based); blank rows dropped, headers tidied (clean_headers). required = columns that must exist, matched tolerant of case / spaces / punctuation and renamed to the spelling you asked for; missing -&gt; MissingColumns naming the near misses. |
+| `read_csv_smart(path, required=(), **kw)` | CSV with unknown encoding (BOM/cp1252/latin-1) and delimiter (, ; tab \|); headers tidied and `required` checked as in read_sheet. An empty file -&gt; ValueError (a BusinessError once classified), not a crash. |
+| `read_any(path, sheet=0, header_row=1, required=(), **kw)` | Read xlsx/xlsm/xls/xlsb/csv/txt/parquet by extension (xls needs xlrd, xlsb needs pyxlsb); headers tidied and `required` checked as in read_sheet. |
 | `list_sheets(path)` | Sheet names of a workbook. |
 | `read_all_sheets(path, header_row=1, sheet_col='sheet')` | Every sheet stacked into one table, with a column naming the source sheet. |
 | `read_folder(pattern, reader=None, source_col='source_file')` | All files matching a glob ('inbox/\*.xlsx') stacked by column name, with the source file name. |
@@ -214,7 +309,7 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 | function | what it does |
 |---|---|
 | `join3(left, right, left_on, right_on=None, suffixes=('', '_r'), validate…)` | Returns (left-only, joined, right-only). validate='many_to_one' raises if right keys repeat. |
-| `lookup(df, ref, key, cols, ref_key=None, default=None, as_text=True, allo…)` | XLOOKUP: add/overwrite cols from ref by key. Keys compared as trimmed text by default. Raises on duplicate keys in ref (VLOOKUP silently takes the first). |
+| `lookup(df, ref, key, cols, ref_key=None, default=None, as_text=True, allo…)` | XLOOKUP: add/overwrite cols from ref by key. Keys compared as trimmed text, ignoring case and repeated spaces like Excel (case=True to match exactly; as_text=False to compare raw values). Raises on duplicate keys in ref (VLOOKUP silently takes the first). |
 | `sumifs(df, ref, keys, value_col, agg='sum', name=None, ref_keys=None)` | SUMIFS / COUNTIFS / AVERAGEIFS: aggregate ref by keys, attach to each df row (0 if none). |
 | `group_value(df, by, col, agg='sum')` | Group aggregate repeated on every row (share-of-total, 'group has &gt;1 row' flags). |
 | `outer_join(left, right, on_left, on_right=None)` | Full outer join; '_merge' column says left_only / right_only / both. |
@@ -399,7 +494,7 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 
 | function | what it does |
 |---|---|
-| `get_logger(log_path, run_id=None, name='robot', console=True)` | Logger writing one JSON object per line to log_path (redacted, tagged with run_id); optional console. |
+| `get_logger(log_path, run_id=None, name='robot', console=True)` | Logger writing one JSON object per line to log_path (redacted, tagged with run_id); optional console. Every key passed in extra={...} lands in the JSON line (the usual ones first: event, rows, code, item_id, path, count, status, ms); an exception logged with exc_info adds 'exc'. |
 
 ### Privacy / AI-safe data — `toolbank/privacy.py`
 
@@ -456,7 +551,7 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 
 | function | what it does |
 |---|---|
-| `load_config(config_dir='config', env=None, env_prefix='BOT_')` | default.yaml, then &lt;env&gt;.yaml on top, then BOT_&lt;KEY&gt; environment variables on top. Returns dict. |
+| `load_config(config_dir='config', env=None, env_prefix='BOT_')` | default.yaml, then &lt;env&gt;.yaml merged on top (nested sections key by key), then BOT_&lt;KEY&gt; environment variables on top: BOT_RETRIES=3 -&gt; cfg['retries'] = 3 (typed like YAML), BOT_DB\_\_HOST=x -&gt; cfg['db']['host']. Returns dict (cfg['env'] = the environment name). |
 | `require(cfg, *keys)` | Raise a clear error if config keys are missing. |
 | `get_secret(name, service='robot')` | Secret from env var, else Windows Credential Manager / OS keyring (pip install keyring). Never hard-code. |
 
@@ -670,7 +765,7 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 |---|---|
 | `single_instance(name, lock_dir=None)` | `with single_instance("recon_bot"):` stops a second copy running (scheduler fired again while the last run is still going). OS lock, freed automatically even if the robot crashes. Raises SystemError_ ALREADY_RUNNING (try again later). |
 | `poll_until(check, timeout_s=600, every_s=10, what='condition', sleep=sleep, c…)` | Call check() every every_s until it returns something truthy (returned), else SystemError_ TIMEOUT. E.g. wait for an upstream file/report, a status flag in a table, an API job to finish. |
-| `wait_until(hhmm, now=<built-in method now of type object at 0x13005f8>, sleep…)` | Sleep until today's hh:mm (local time); returns at once if already past. Returns seconds waited. |
+| `wait_until(hhmm, now=now, sleep=sleep)` | Sleep until today's hh:mm (local time); returns at once if already past. Returns seconds waited. |
 | `new_files(folder, pattern='*', ledger=None, settle_s=2, retry_failed=False, …)` | One scan: files matching pattern that are complete (size steady for settle_s, readable) and not yet in the ledger (by SHA-256, so a renamed copy is skipped too). Oldest first. Returns [(path, sha256)]. |
 | `watch_folder(folder, handler, pattern='*', ledger=None, run_for_s=0, poll_s=30,…)` | File trigger: handler(path) for each new complete file. Ledger (default &lt;folder&gt;/.processed.jsonl) records done/failed so a restart never redoes a file. BusinessError -&gt; 'failed' (not retried); other errors are retried on the next scan. run_for_s=0 = one scan (best under Task Scheduler). Returns [{'file','status','error'}]. |
 | `run_every(fn, every_s, run_for_s=None, max_runs=None, align=True, stop_on_er…)` | Call fn() now and then every every_s seconds (align=True: on clock boundaries, e.g. :00/:15/:30/:45) until run_for_s or max_runs. Overrun -&gt; missed slots are skipped. Errors are logged, loop continues unless stop_on_error. Returns [{'run','started','ok','error'}]. |
@@ -719,6 +814,16 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 | `progress(iterable, total=None, every=100, label='', log=print, clock=monoto…)` | Pass items through, logging 'label 300/1,000 (30%) 52/s eta 0:13' every `every` items. |
 | `memory_mb(df)` | Memory used by a DataFrame in MB (deep: counts text). |
 | `shrink(df, category_ratio=0.5)` | Smaller DataFrame, same values: text columns with few distinct values -&gt; category (group with observed=True). Numbers are left alone (small integer types would overflow in later sums). |
+
+### Recipes (spec -> validated workflow -> generated script) — `toolbank/recipe.py`
+
+| function | what it does |
+|---|---|
+| `load_recipe(source)` | Recipe from a .yaml / .json path, YAML text, or a dict -&gt; dict. Raises ValueError listing every problem found by validate_recipe, so a bad spec never half-runs. |
+| `validate_recipe(recipe, with_input=False)` | Problems with a recipe ([] = OK): unknown functions and parameters (with 'did you mean'), missing required parameters, unresolvable $references, bad pick / as. with_input=True when run_recipe will be given a frame for the first step. |
+| `recipe_to_flow(recipe, inputs=None, name=None, keep=False, log=print)` | Flow for a validated recipe. inputs = {alias: value} already loaded (run_recipe does this for you). Every step is one Flow step, so .trace shows rows in / out and timings. |
+| `run_recipe(recipe, df=None, keep=False, log=print)` | Load the inputs, run the steps -&gt; (frame, trace DataFrame). Validates first (ValueError lists every problem). df = a frame for the first step when the recipe does not start with a reader. |
+| `recipe_to_code(recipe, path=None)` | Plain Python script for a validated recipe (deterministic: same recipe, same text); saved to path if given. The script needs only `from toolbank import *`, so it runs and can be edited without the recipe. |
 
 ### VBA — `vba/*.bas`
 

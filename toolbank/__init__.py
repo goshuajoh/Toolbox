@@ -6,7 +6,7 @@ import inspect as _inspect
 _MODULES = ["robust", "clean", "readers", "parse", "transform", "combine", "reshape", "formula", "rules", "quality",
             "identifiers", "regexkit", "excel_write", "excel_app", "dates", "files", "logs", "privacy", "approval",
             "docs", "ocr", "config", "notify", "api", "htmlparse", "web", "webdriver", "desktop", "outlook", "mail",
-            "db", "lake", "triggers", "flow", "perf"]
+            "db", "lake", "triggers", "flow", "perf", "recipe"]
 _CONST = (dict, list, tuple, set, frozenset, str, int, float)
 
 __all__ = []
@@ -21,4 +21,4 @@ for _m in _MODULES:
             globals()[_name] = _obj
             __all__.append(_name)
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

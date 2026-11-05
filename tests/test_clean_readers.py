@@ -103,3 +103,72 @@ def test_fixed_width_and_chunks(tmp_path):
     pd.DataFrame({"k": ["a", "b"] * 500, "v": range(1000)}).to_csv(tmp_path / "big.csv", index=False)
     cc = csv_in_chunks(tmp_path / "big.csv", lambda ch: ch.groupby("k", as_index=False)["v"].sum(), chunksize=300)
     assert cc["v"].sum() == sum(range(1000))
+
+
+def test_to_number_edge_cases():
+    import numpy as np
+    s = pd.Series(["1,234.50", "(10.00)", "S$ 12", "x", "100.00-", "1,000 DR", "USD 1,200", "1.234,56", "10,5",
+                   "− 5", "", None, "500 CR", "+7", "1.234.567", "€ 1 000,25", "3.5%"])
+    out = to_number(s)
+    assert out.dtype == "float64"
+    assert out.tolist()[:3] == [1234.5, -10.0, 12.0] and np.isnan(out[3])
+    assert out.tolist()[4:10] == [-100.0, -1000.0, 1200.0, 1234.56, 10.5, -5.0]
+    assert out[10:12].isna().all() and out.tolist()[12:16] == [500.0, 7.0, 1234567.0, 1000.25] and np.isnan(out[16])
+    assert to_number(pd.Series([1, 2])).tolist() == [1.0, 2.0] and to_number(pd.Series([True])).isna().all()
+
+
+def test_to_date_serials_and_yyyymmdd():
+    import numpy as np
+    d = to_date(pd.Series(["20260306", "46087", "46087.0", "2026/08/09", "06/03/2026 14:30", "junk"]))
+    assert d.dt.strftime("%Y-%m-%d %H:%M").tolist()[:5] == ["2026-03-06 00:00"] * 3 + ["2026-08-09 00:00",
+                                                                                      "2026-03-06 14:30"]
+    assert pd.isna(d.iloc[5])
+    n = to_date(pd.Series([46087, 20260306, 5, np.nan]))
+    assert n.dt.day.tolist()[:2] == [6, 6] and n.iloc[2:].isna().all()
+    assert to_date(pd.Series([46087.0])).iloc[0] == pd.Timestamp("2026-03-06")
+
+
+def test_headers_and_column_matching():
+    df = pd.DataFrame([[1, 2, 3, 4, 5]], columns=["Trade Date ", "Amount", "Amount", None, "Unnamed: 4"])
+    assert clean_headers(df).columns.tolist() == ["Trade Date", "Amount", "Amount_2", "col_4", "col_5"]
+    assert norm_label(" Trade  Date: ") == norm_label("TRADE_DATE") == "trade date" and norm_label(None) == ""
+    df = pd.DataFrame({"Trade Date": [1], "AMOUNT (SGD)": [2], "ccy": [3]})
+    assert find_column(df, "trade_date") == "Trade Date" and find_column(df, "amount sgd") == "AMOUNT (SGD)"
+    assert find_column(df, "zzz", required=False) is None
+    with pytest.raises(MissingColumns, match=r"did you mean \['Trade Date'\]") as e:
+        find_column(df, "Trade Dt")
+    assert isinstance(e.value, KeyError) and isinstance(e.value, ValueError) and str(e.value).startswith("missing")
+    with pytest.raises(MissingColumns, match=r"missing columns \['trade dte', 'amt'\]"):
+        resolve_columns(df, ["trade dte", "amt", "ccy"])
+    out = require_columns(df, ["trade_date", "Ccy"], source="in.xlsx")
+    assert out.columns.tolist() == ["trade_date", "AMOUNT (SGD)", "Ccy"] and require_columns(df, []).equals(df)
+    with pytest.raises(MissingColumns, match="^in.xlsx: missing"):
+        require_columns(df, "nope", source="in.xlsx")
+    std = standard_columns(df, {"trade_date": ["Trade Dt", "Trade Date"], "amount": "Amount (SGD)", "x": ["nope"]})
+    assert std.columns.tolist() == ["trade_date", "amount", "ccy"]
+    assert standard_columns(df, {"amount": "Amount (SGD)"}, keep_others=False).columns.tolist() == ["amount"]
+    with pytest.raises(MissingColumns):
+        standard_columns(df, {"x": ["nope"]}, strict=True)
+    with pytest.raises(MissingColumns, match="several columns"):
+        standard_columns(pd.DataFrame({"Amt": [1], "Amount": [2]}), {"amount": ["Amt"]})
+    with pytest.raises(MissingColumns, match="ambiguous"):
+        find_column(pd.DataFrame({"Amt": [1], "AMT": [2]}), "amt")
+    with pytest.raises(ValueError, match="case must be"):
+        cleanse(df, case="UPPER")
+    assert cleanse(pd.DataFrame({"a": [" x "], "b": [" y "]}), cols="a")["b"].tolist() == [" y "]
+
+
+def test_readers_tolerant_required(tmp_path):
+    pd.DataFrame({"Trade Date ": ["2026-03-06"], "AMOUNT (SGD)": [1], "x": [None]}).to_excel(tmp_path / "a.xlsx",
+                                                                                                index=False)
+    df = read_sheet(tmp_path / "a.xlsx", required=["trade_date", "Amount (SGD)"])
+    assert df.columns.tolist() == ["trade_date", "Amount (SGD)", "x"]
+    with pytest.raises(ValueError, match=r"a.xlsx: missing columns \['Trade Dt'\]; did you mean") as e:
+        read_sheet(tmp_path / "a.xlsx", required=["Trade Dt"])
+    assert isinstance(classify(e.value), BusinessError)
+    (tmp_path / "e.csv").write_text("")
+    with pytest.raises(ValueError, match="is empty"):
+        read_csv_smart(tmp_path / "e.csv")
+    (tmp_path / "h.csv").write_text("Ref;Amt\nA;1\n")
+    assert read_any(tmp_path / "h.csv", required=["ref"]).columns.tolist() == ["ref", "Amt"]
+    assert read_any(tmp_path / "a.xlsx", required=["amount sgd"]).columns.tolist()[1] == "amount sgd"

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "toolbank"
-version = "0.1.0"
-description = "Generic automation functions: data prep, Excel, OCR, browsers, APIs, email, SQL, Fabric, triggers"
+version = "0.2.0"
+description = "Generic automation functions: data prep, Excel, OCR, browsers, APIs, email, SQL, Fabric, triggers, recipes"
 requires-python = ">=3.10"
 dependencies = ["pandas>=2.0", "openpyxl>=3.1", "pyyaml>=6.0"]
 
@@ -14,3 +14,16 @@ include = ["toolbank*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B006", "B008", "B023"]
+ignore = ["E501", "E701", "E702", "E731", "E741"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F403", "F405", "B018"]
+"templates/*" = ["F403", "F405"]

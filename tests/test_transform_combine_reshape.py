@@ -122,3 +122,12 @@ def test_quality():
     assert_totals_match(ct, dict(ct))
     with pytest.raises(ValueError):
         assert_totals_match(ct, {**ct, "sum": 5.0})
+
+
+def test_lookup_case_and_spaces():
+    L = pd.DataFrame({"ccy": ["usd ", "JPY", "Hong  Kong"]})
+    R = pd.DataFrame({"ccy": ["USD", "EUR", "hong kong"], "rate": [1.35, 1.45, 0.17]})
+    assert lookup(L, R, "ccy", "rate", default=0)["rate"].tolist() == [1.35, 0, 0.17]
+    assert lookup(L, R, "ccy", "rate", default=0, case=True)["rate"].tolist() == [0, 0, 0]
+    with pytest.raises(ValueError, match="duplicate"):
+        lookup(L, pd.DataFrame({"ccy": ["USD", "usd"], "rate": [1, 2]}), "ccy", "rate")

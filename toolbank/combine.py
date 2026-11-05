@@ -18,12 +18,18 @@ def join3(left, right, left_on, right_on=None, suffixes=("", "_r"), validate=Non
     return left[~lkeys.isin(rkeys)], J, right[~rkeys.isin(lkeys)]
 
 
-def lookup(df, ref, key, cols, ref_key=None, default=None, as_text=True, allow_duplicates=False):
-    """XLOOKUP: add/overwrite cols from ref by key. Keys compared as trimmed text by default.
+def lookup(df, ref, key, cols, ref_key=None, default=None, as_text=True, allow_duplicates=False, case=False):
+    """XLOOKUP: add/overwrite cols from ref by key. Keys compared as trimmed text, ignoring case and repeated
+    spaces like Excel (case=True to match exactly; as_text=False to compare raw values).
     Raises on duplicate keys in ref (VLOOKUP silently takes the first)."""
     ref_key = ref_key or key
     cols = [cols] if isinstance(cols, str) else list(cols)
-    norm = (lambda s: s.astype("string").str.strip()) if as_text else (lambda s: s)
+
+    def norm(s):
+        if not as_text:
+            return s
+        s = s.astype("string").str.replace(r"\s+", " ", regex=True).str.strip()
+        return s if case else s.str.upper()
     r = ref.assign(_k=norm(ref[ref_key]))
     dups = r["_k"].duplicated() & r["_k"].notna()
     if dups.any() and not allow_duplicates:
