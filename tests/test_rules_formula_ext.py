@@ -65,8 +65,8 @@ def test_apply_rules_from_excel(tmp_path):
     assert out["flags"].tolist() == ["BIG_USD", "", "NO_AMT", "", "BIG_USD"]
     assert out["flags_count"].tolist() == [1, 0, 1, 0, 1] and out["flag_BIG_USD"].dtype == bool
     assert flag_summary(out).values.tolist() == [["BIG_USD", 2], ["NO_AMT", 1]]
-    assert validate_rules([{"code": "X", "column": "zzz", "op": "≈"}], TRADES) == [
-        "X: unknown operator '≈'", "X: column 'zzz' not in data"]
+    probs = validate_rules([{"code": "X", "column": "zzz", "op": "≈"}], TRADES)
+    assert probs[0].startswith("X: unknown operator '≈'") and probs[1] == "X: column 'zzz' not in data"
     bad = tmp_path / "bad.xlsx"
     pd.DataFrame([{"code": "X", "column": "desk", "op": "approx", "value": 1}]).to_excel(bad, index=False)
     with pytest.raises(ValueError):
@@ -253,3 +253,29 @@ def test_dates_extensions():
     sg = convert_tz(ny, "America/New_York", "Asia/Singapore")
     assert sg.dt.strftime("%Y-%m-%d %H:%M").tolist() == ["2026-03-07 05:00", "2026-03-10 04:00"]
     assert str(convert_tz(ny, "America/New_York", "UTC", naive_result=False).dt.tz) == "UTC"
+
+
+def test_review_fixes_rules_and_dates(tmp_path):
+    assert truthy(1.0) and not truthy(0.0) and truthy(np.int64(1)) and not truthy(pd.NA)
+    mixed = pd.DataFrame({"id": [1, "A2", 3]})
+    assert condition(mixed, "id", "eq", "1").tolist() == [True, False, False]
+    with pytest.raises(ValueError):
+        condition(mixed, "id", ">", 1)
+    path = tmp_path / "r.xlsx"
+    pd.DataFrame({"Code": ["BIG", "OFF", "ON"], "Column": ["amount", "desk", "desk"], "Op": ["gt", "eq", "eq"],
+                  "Value": [1000000, "FX", "EM"], "Active": [1, 0, None]}).to_excel(path, index=False)
+    r = rules_from_excel(path)
+    assert r["code"].tolist() == ["BIG", "ON"] and r["value"].tolist()[0] == "1000000"
+    for blank in (pd.NaT, None, np.nan, ""):
+        with pytest.raises(BusinessError):
+            add_business_days(blank, 1)
+    hol = tmp_path / "hol.csv"
+    hol.write_text("date\n2026/08/09\n09/08/2026\n2026-12-25\n")
+    assert load_holidays(hol) == {date(2026, 8, 9), date(2026, 12, 25)}
+    hol.write_text("date\n2026-12-25\nChristmas\n")
+    with pytest.raises(ValueError):
+        load_holidays(hol)
+    amb = pd.Series(pd.to_datetime(["2026-11-01 01:30"]))           # happens twice in New York
+    with pytest.raises(Exception):
+        convert_tz(amb, "America/New_York", "UTC")
+    assert convert_tz(amb, "America/New_York", "UTC", ambiguous="NaT").isna().all()

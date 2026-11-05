@@ -14,15 +14,19 @@ def to_number(series):
 
 
 def to_date(series, dayfirst=True):
-    """ISO strings parsed as ISO; everything else day-first, value by value. Unparsable -> NaT."""
+    """ISO / year-first (2026/08/09) strings parsed year-first; everything else day-first, value by value.
+    Unparsable -> NaT."""
     if pd.api.types.is_datetime64_any_dtype(series):
         return series
     s = series.astype("string").str.strip().fillna("")
     out = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
     iso = s.str.match(r"^\d{4}-\d{2}-\d{2}").astype(bool)
-    rest = (~iso) & (s != "").astype(bool)
+    ymd = (~iso) & s.str.match(r"^\d{4}[/.]\d{1,2}[/.]\d{1,2}").astype(bool)     # 2026/08/09 is year-first
+    rest = (~iso) & (~ymd) & (s != "").astype(bool)
     if iso.any():
         out[iso] = pd.to_datetime(s[iso], errors="coerce", format="ISO8601")
+    if ymd.any():
+        out[ymd] = pd.to_datetime(s[ymd], errors="coerce", yearfirst=True, dayfirst=False, format="mixed")
     if rest.any():
         out[rest] = pd.to_datetime(s[rest], errors="coerce", dayfirst=dayfirst, format="mixed")
     return out

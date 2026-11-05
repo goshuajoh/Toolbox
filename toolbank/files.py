@@ -64,8 +64,26 @@ def file_sha256(path):
 
 
 def safe_filename(text, max_len=80):
-    """Text usable as a Windows file name."""
-    return re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", str(text)).strip(" .")[:max_len] or "_"
+    """Text usable as a Windows file name; a long name is shortened before its extension ('.pdf' is kept)."""
+    clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", str(text)).strip(" .") or "_"
+    if len(clean) <= max_len:
+        return clean
+    stem, dot, ext = clean.rpartition(".")
+    if dot and stem and 0 < len(ext) <= 10 and " " not in ext:
+        return stem[: max(1, max_len - len(ext) - 1)].rstrip(" .") + "." + ext
+    return clean[:max_len].rstrip(" .") or "_"
+
+
+def unique_path(folder, name, max_len=80):
+    """folder/<safe name> that does not exist yet: report.pdf, report_2.pdf, ... (never overwrite)."""
+    folder = Path(folder)
+    base = safe_filename(name, max_len)
+    p, n = folder / base, 1
+    stem, suffix = Path(base).stem, Path(base).suffix
+    while p.exists():
+        n += 1
+        p = folder / f"{stem}_{n}{suffix}"
+    return p
 
 
 def zip_files(paths, zip_path):

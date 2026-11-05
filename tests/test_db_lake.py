@@ -74,7 +74,13 @@ def test_sqlite_read_write_upsert(tmp_path):
     new, mark = read_since(e, "trades", "seq", since=2)
     assert new["trade_id"].tolist() == ["T3", "T4"] and mark == 4
     none, mark2 = read_since(e, "trades", "seq", since=4, columns=["trade_id"])
-    assert none.empty and mark2 == 4 and list(none.columns) == ["trade_id"]
+    assert none.empty and mark2 == 4 and list(none.columns) == ["trade_id", "seq"]   # watermark column added
+    import numpy as np
+    again, mark3 = read_since(e, "trades", "seq", since=np.int64(3))                  # numpy watermark works
+    assert again["trade_id"].tolist() == ["T4"] and type(mark3) is int
+    assert len(sql_read(e, "select * from trades where seq in (" + in_clause("s", np.array([1, 4]))[0] + ")",
+                        in_clause("s", np.array([1, 4]))[1])) == 2
+    assert sql_exec(e, "update trades set desk = :d where trade_id = :t", []) == 0
     e.dispose()
 
 
@@ -125,3 +131,35 @@ def test_delta_partitions_and_onelake_uri(tmp_path, delta):
     g = "1a2b3c4d-0000-1111-2222-333344445555"
     assert onelake_uri(g, g, "Files/in/") == f"abfss://{g}@onelake.dfs.fabric.microsoft.com/{g}/Files/in"
     assert onelake_uri("Ops", "WH.Warehouse") == "abfss://Ops@onelake.dfs.fabric.microsoft.com/WH.Warehouse"
+
+
+def test_review_fixes_db_strings_and_errors():
+    s = odbc_conn_str("srv", "db", trusted=False)
+    assert "UID" not in s and "PWD" not in s
+    tok = odbc_conn_str("x.database.windows.net", "db", authentication="token")
+    assert "Trusted_Connection" not in tok and "Authentication" not in tok and "UID" not in tok
+    pytest.importorskip("sqlalchemy")
+    with pytest.raises(ValueError):
+        make_engine(mssql_url("srv", "db"), token="t")                  # Trusted_Connection + token
+    from sqlalchemy import exc
+    from toolbank.db import _db_error
+    login = _db_error(exc.InterfaceError("x", {}, Exception("[28000] Login failed for user 'bot'")), "read")
+    assert type(login) is RobotError and login.code == "AUTH"
+    driver = _db_error(exc.InterfaceError("x", {}, Exception("[IM002] Data source name not found")), "read")
+    assert type(driver) is RobotError and driver.code == "DB_DRIVER"
+    link = _db_error(exc.OperationalError("x", {}, Exception("[08S01] Communication link failure")), "read")
+    assert isinstance(link, SystemError_)
+    missing = _db_error(exc.OperationalError("x", {}, Exception("no such table: t")), "read")
+    assert type(missing) is RobotError and missing.code == "DB_ERROR"
+
+
+def test_delta_merge_guards(tmp_path, delta):
+    path = tmp_path / "t"
+    write_delta(pd.DataFrame({"k": ["A"], "v": [1]}), path)
+    with pytest.raises(BusinessError):
+        delta_merge(pd.DataFrame({"k": ["B", "B"], "v": [1, 2]}), path, "k")
+    with pytest.raises(BusinessError):
+        delta_merge(pd.DataFrame({"k": [None], "v": [1]}), path, "k")
+    with pytest.raises(ValueError):
+        delta_merge(pd.DataFrame({"k": [], "v": []}), path, "k", delete_missing=True)
+    assert read_delta(path)["k"].tolist() == ["A"]

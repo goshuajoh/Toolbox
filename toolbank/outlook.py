@@ -56,13 +56,15 @@ def outlook_mails(folder=None, unread_only=False, subject_re=None, sender_re=Non
 
 
 def outlook_save_attachments(mail, out_dir, pattern=r".*\.(xlsx|xlsm|xls|csv|pdf)$"):
-    """Save attachments whose name matches pattern; returns paths."""
+    """Save attachments whose name matches pattern (safe names; two files with the same name never overwrite
+    each other); returns paths."""
+    from .files import unique_path
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     out = []
     for att in mail.Attachments:
         if re.match(pattern, att.FileName, re.I):
-            p = (out_dir / att.FileName).resolve()
+            p = unique_path(out_dir, att.FileName).resolve()
             att.SaveAsFile(str(p))
             out.append(p)
     return out

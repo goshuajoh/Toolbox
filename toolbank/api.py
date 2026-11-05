@@ -53,16 +53,25 @@ def http_session(retries=3, backoff=0.5, timeout=30, verify=None, proxies=None, 
     return s
 
 
+_RETRYABLE = {408, 423, 425, 429}          # timeout, locked (SharePoint file open), too early, rate limited
+
+
+def safe_url(url):
+    """URL without its query string, for logs and errors (query strings carry sig= / token= secrets)."""
+    parts = urlsplit(str(url))
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, "", "")) + ("?…" if parts.query else "")
+
+
 def raise_for_status(status, url="", body=""):
-    """Classified error for an HTTP status: 5xx/429 -> SystemError_ (retry later), 401/403 -> RobotError AUTH
-    (fix credentials/permissions), other 4xx -> BusinessError (fix the request/data). < 400 -> no error."""
+    """Classified error for an HTTP status: 5xx/408/423/425/429 -> SystemError_ (retry later), 401/403 ->
+    RobotError AUTH (fix credentials/permissions), other 4xx -> BusinessError (fix the request/data)."""
     if status < 400:
         return
-    ctx = {"status": status, "url": url}
+    ctx = {"status": status, "url": safe_url(url)}
     body = (body or "")[:300]
     if status in (401, 403):
         raise RobotError(f"HTTP {status}: not authorised", code="AUTH", **ctx)
-    if status == 429 or status >= 500:
+    if status in _RETRYABLE or status >= 500:
         raise SystemError_(f"HTTP {status}: {body}", code="HTTP_RETRYABLE", **ctx)
     raise BusinessError(f"HTTP {status}: {body}", code=f"HTTP_{status}", **ctx)
 
@@ -83,9 +92,10 @@ def api_call(session, method, url, *, json_body=None, params=None, headers=None,
         r = session.request(method.upper(), url, json=json_body, params=params, headers=headers, data=data,
                             files=files, **kw)
     except requests.exceptions.SSLError as e:
-        raise RobotError(f"SSL error calling {url}: set verify='path/to/corporate-ca.pem' ({e})", code="SSL") from e
+        raise RobotError(f"SSL error calling {safe_url(url)}: set verify='path/to/corporate-ca.pem'",
+                         code="SSL") from e
     except requests.exceptions.RequestException as e:
-        raise SystemError_(f"{method.upper()} {url} failed: {type(e).__name__}: {e}", code="HTTP_NETWORK") from e
+        raise SystemError_(f"{method.upper()} {safe_url(url)} failed: {type(e).__name__}", code="HTTP_NETWORK") from e
     check_response(r)
     if not expect_json:
         return r
@@ -94,7 +104,7 @@ def api_call(session, method, url, *, json_body=None, params=None, headers=None,
     try:
         return r.json()
     except ValueError as e:
-        raise BusinessError(f"{url} did not return JSON", code="NOT_JSON", status=r.status_code) from e
+        raise BusinessError(f"{safe_url(url)} did not return JSON", code="NOT_JSON", status=r.status_code) from e
 
 
 def api_get(session, url, params=None, **kw):
@@ -131,6 +141,11 @@ def _items(data, items_key):
     return []
 
 
+def _same_page(batch, prev):
+    if prev is not None and batch == prev:
+        raise RobotError("API returned the same page twice: check page_param / offset_param", code="PAGINATION")
+
+
 def paginate(session, url, params=None, style="next_link", items_key=None, next_key="@odata.nextLink",
              page_param="page", size_param=None, size=100, start_page=1, offset_param="offset",
              limit_param="limit", cursor_param="cursor", cursor_key="next_cursor", max_pages=10_000, headers=None):
@@ -138,7 +153,7 @@ def paginate(session, url, params=None, style="next_link", items_key=None, next_
     'next_link'   response holds the next URL (Graph/OData '@odata.nextLink', or next_key='links.next')
     'link_header' HTTP Link: <...>; rel="next" (GitHub-style)
     'page'        page=1,2,... until an empty page (size_param='pageSize' sends the size)
-    'offset'      offset/limit until a short page
+    'offset'      offset/limit until an empty page (a server may cap pages below `size`)
     'cursor'      cursor token from response key cursor_key sent back as cursor_param
     items_key: where the list is ('value', 'data.items'); None = auto-detect common keys or a bare list."""
     params = dict(params or {})
@@ -155,7 +170,7 @@ def paginate(session, url, params=None, style="next_link", items_key=None, next_
                 else r.links.get("next", {}).get("url")
             next_url = urljoin(r.url, nxt) if nxt else None
     elif style == "page":
-        page = start_page
+        page, prev = start_page, None
         while pages < max_pages:
             p = {**params, page_param: page}
             if size_param:
@@ -163,22 +178,22 @@ def paginate(session, url, params=None, style="next_link", items_key=None, next_
             batch = _items(api_get(session, url, params=p, headers=headers), items_key)
             if not batch:
                 break
+            _same_page(batch, prev)
+            prev = batch
             yield from batch
             pages += 1
-            if size_param and len(batch) < size:
-                break
             page += 1
     elif style == "offset":
-        offset = 0
+        offset, prev = 0, None
         while pages < max_pages:
             batch = _items(api_get(session, url, params={**params, offset_param: offset, limit_param: size},
                                    headers=headers), items_key)
             if not batch:
                 break
+            _same_page(batch, prev)
+            prev = batch
             yield from batch
             pages += 1
-            if len(batch) < size:
-                break
             offset += len(batch)
     elif style == "cursor":
         cursor = None
@@ -267,7 +282,7 @@ def download_file(session, url, dest, sha256=None, chunk=1 << 16, **kw):
     try:
         r = session.get(url, stream=True, **kw)
     except requests.exceptions.RequestException as e:
-        raise SystemError_(f"download {url} failed: {e}", code="HTTP_NETWORK") from e
+        raise SystemError_(f"download {safe_url(url)} failed: {type(e).__name__}", code="HTTP_NETWORK") from e
     check_response(r)
     h = hashlib.sha256()
     fd, tmp = tempfile.mkstemp(dir=dest.parent, prefix=".dl-")
@@ -277,7 +292,7 @@ def download_file(session, url, dest, sha256=None, chunk=1 << 16, **kw):
                 fh.write(part)
                 h.update(part)
         if sha256 and h.hexdigest() != sha256.lower():
-            raise BusinessError(f"checksum mismatch for {url}", code="CHECKSUM")
+            raise BusinessError(f"checksum mismatch for {safe_url(url)}", code="CHECKSUM")
         os.replace(tmp, dest)
     finally:
         if os.path.exists(tmp):
@@ -296,19 +311,21 @@ class RateLimiter:
     """At most `rate` calls per `per` seconds (thread-safe). Call .wait() before each request."""
 
     def __init__(self, rate, per=1.0, clock=time.monotonic, sleep=time.sleep):
-        self.capacity, self.per, self.clock, self.sleep = float(rate), float(per), clock, sleep
-        self.tokens, self.last, self.lock = float(rate), clock(), threading.Lock()
+        self.speed = float(rate) / float(per)                  # tokens per second
+        self.capacity = max(1.0, float(rate))                  # burst; at least one call (rate=0.5 works)
+        self.clock, self.sleep = clock, sleep
+        self.tokens, self.last, self.lock = self.capacity, clock(), threading.Lock()
 
     def wait(self):
         while True:
             with self.lock:
                 now = self.clock()
-                self.tokens = min(self.capacity, self.tokens + (now - self.last) * self.capacity / self.per)
+                self.tokens = min(self.capacity, self.tokens + (now - self.last) * self.speed)
                 self.last = now
                 if self.tokens >= 1:
                     self.tokens -= 1
                     return
-                need = (1 - self.tokens) * self.per / self.capacity
+                need = (1 - self.tokens) / self.speed
             self.sleep(need)
 
 
@@ -379,14 +396,34 @@ _CURL_SKIP_ARG = {"-o", "--output", "-m", "--max-time", "--connect-timeout", "-A
                   "-x", "--proxy", "-u", "--user", "-F", "--form", "--retry"}
 
 
-def curl_to_request(curl_text, drop=("cookie", "authorization", "content-length", "host")):
-    """DevTools 'Copy as cURL' (bash or cmd) -> dict(method, url, params, headers, json | data) for api_call.
-    Cookie/Authorization are dropped by default: authenticate with your own session, never paste secrets in code."""
+_SECRET_HDR = (r"cookie|authorization|token|secret|api[-_]?key|subscription-key|csrf|xsrf|session|password|"
+               r"signature")
+_SECRET_HEADERS = _SECRET_HDR + r"|^content-length$|^host$"
+_SECRET_PARAMS = r"^(sig|signature|.*token.*|secret|client_secret|password|pwd|api[-_]?key|subscription-key)$"
+
+
+def _ansi_c(match):
+    """bash $'...' quoting (Chrome uses it when a body has ' or !) -> a normal shell-quoted string."""
+    esc = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\", "'": "'", '"': '"', "0": "\0"}
+
+    def one(m):
+        e = m.group(1)
+        if len(e) > 1 and e[0] in "xu":
+            return chr(int(e[1:], 16))
+        return esc.get(e, e)
+    return shlex.quote(re.sub(r"\\(x[0-9a-fA-F]{2}|u[0-9a-fA-F]{4}|.)", one, match.group(1)))
+
+
+def curl_to_request(curl_text, drop=_SECRET_HEADERS, drop_params=_SECRET_PARAMS):
+    """DevTools 'Copy as cURL' (bash or cmd) -> dict(method, url, params, headers, json | data, dropped) for
+    api_call. Headers / query params that look like secrets (cookies, tokens, keys, sig=) are dropped and listed
+    in 'dropped': authenticate with your own session or config, never paste secrets into code."""
     text = curl_text.strip()
     if '^"' in text:                                   # Windows 'Copy as cURL (cmd)' escaping
         text = re.sub(r"\^\r?\n", " ", text)
         text = re.sub(r"\^(.)", r"\1", text)
     text = re.sub(r"\\\r?\n", " ", text)
+    text = re.sub(r"(?<![\w$])\$'((?:[^'\\]|\\.)*)'", _ansi_c, text)
     tokens = shlex.split(text)
     if not tokens or tokens[0].lower() not in ("curl", "curl.exe"):
         raise ValueError("expected text starting with 'curl'")
@@ -421,9 +458,12 @@ def curl_to_request(curl_text, drop=("cookie", "authorization", "content-length"
     if get and data:
         params.update({k: v[0] if len(v) == 1 else v for k, v in parse_qs(data, keep_blank_values=True).items()})
         data = None
+    dropped = [k for k in headers if drop and re.search(drop, k, re.I)] + \
+        [k for k in params if drop_params and re.search(drop_params, k, re.I)]
     out = {"method": method or ("POST" if data is not None else "GET"),
-           "url": urlunsplit((parts.scheme, parts.netloc, parts.path, "", "")), "params": params,
-           "headers": {k: v for k, v in headers.items() if k.lower() not in {d.lower() for d in drop}}}
+           "url": urlunsplit((parts.scheme, parts.netloc, parts.path, "", "")),
+           "params": {k: v for k, v in params.items() if k not in dropped},
+           "headers": {k: v for k, v in headers.items() if k not in dropped}, "dropped": dropped}
     ctype = next((v for k, v in headers.items() if k.lower() == "content-type"), "")
     if data is not None:
         if is_json or "json" in ctype:
@@ -439,6 +479,48 @@ def curl_to_request(curl_text, drop=("cookie", "authorization", "content-length"
 def _har(path):
     with open(path, encoding="utf-8-sig") as fh:
         return json.load(fh)["log"]["entries"]
+
+
+_SECRET_QS = re.compile(r"([?&](?:sig|signature|[\w-]*token[\w-]*|secret|client_secret|password|pwd|"
+                        r"api[-_]?key|subscription-key)=)[^&#]*", re.I)
+_SECRET_BODY = re.compile(r'"(?:access_token|refresh_token|id_token|client_secret|password)"', re.I)
+
+
+def har_sanitize(path, keep_post_data=False):
+    """Strip secrets from a HAR file in place: cookies, auth / token / key headers, sig= / token= values in URLs,
+    request bodies (a login form holds your password) unless keep_post_data, response bodies holding tokens.
+    Browser(record_har=...) runs this automatically. Returns the number of entries."""
+    p = Path(path)
+    har = json.loads(p.read_text(encoding="utf-8-sig"))
+    hdr = re.compile(_SECRET_HDR, re.I)
+    entries = har.get("log", {}).get("entries", [])
+    for e in entries:
+        req, resp = e.get("request", {}), e.get("response", {})
+        if "url" in req:
+            req["url"] = _SECRET_QS.sub(r"\1REDACTED", req["url"])
+        req["queryString"] = [{**q, "value": "REDACTED"} if re.search(_SECRET_PARAMS, q.get("name", ""), re.I)
+                              else q for q in req.get("queryString", [])]
+        for part in (req, resp):
+            part["headers"] = [h for h in part.get("headers", []) if not hdr.search(h.get("name", ""))]
+            part["cookies"] = []
+        if resp.get("redirectURL"):
+            resp["redirectURL"] = _SECRET_QS.sub(r"\1REDACTED", resp["redirectURL"])
+        if "postData" in req and not keep_post_data:
+            req["postData"] = {"mimeType": req["postData"].get("mimeType", ""), "text": "[removed]"}
+        content = resp.get("content", {})
+        text = content.get("text") or ""
+        if content.get("encoding") == "base64":
+            try:
+                text = base64.b64decode(text).decode("utf-8", "replace")
+            except ValueError:
+                text = ""
+        if _SECRET_BODY.search(text):
+            content["text"] = "[removed: held tokens]"
+            content.pop("encoding", None)
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(json.dumps(har), encoding="utf-8")
+    os.replace(tmp, p)
+    return len(entries)
 
 
 def har_entries(path):

@@ -57,6 +57,16 @@ def test_html_json_embedded():
                    "__STATE__": [{"id": 7}], "application/ld+json": {"@type": "Org"}}
 
 
+def test_html_review_fixes():
+    assert html_text("<table><tr><td>FX<td>100<tr><td>EM<td>5</table>") == "FX 100\nEM 5"
+    assert len(html_tables("<table><tr><th>a<th>b<tr><td>1<td>2")) == 1          # no </table>
+    form = html_forms("""<form><input type=checkbox name=agree value=true checked>
+        <input type=hidden name=agree value=false><select name=ccy><option>USD<option selected>SGD</select>
+        <select name=tags multiple><option value=a selected>A<option value=b>B<option value=c selected>C</select>
+        </form>""")[0]["fields"]
+    assert form == {"agree": ["true", "false"], "ccy": "SGD", "tags": ["a", "c"]}
+
+
 def test_html_select():
     pytest.importorskip("bs4")
     assert html_select('<div class="a">1</div><div class="a" data-id="7">2</div>', "div.a") == ["1", "2"]
@@ -221,6 +231,62 @@ def test_har_helpers(tmp_path):
     assert [x["data"] for x in har_json(p, r"/api/")] == [{"a": 1}, {"b": 2}]
 
 
+def test_review_fixes_api():
+    def capped(req):                                      # server caps pages at 2 rows whatever pageSize says
+        page = int(req.query["page"])
+        rows = list(range(5))[(page - 1) * 2: page * 2]
+        return 200, {}, {"items": rows}
+
+    routes = {("GET", "/capped"): capped, ("GET", "/stuck"): lambda r: (200, {}, {"items": [1, 2]}),
+              ("GET", "/locked"): lambda r: (423, {}, b"file is locked"),
+              ("GET", "/secret404"): lambda r: (404, {}, b"no")}
+    with serve(routes) as (base, log):
+        s = http_session(retries=0)
+        assert list(paginate(s, base + "/capped", style="page", size_param="pageSize", size=5)) == [0, 1, 2, 3, 4]
+        with pytest.raises(RobotError) as e:
+            list(paginate(s, base + "/stuck", style="page"))
+        assert e.value.code == "PAGINATION"
+        with pytest.raises(SystemError_):
+            api_get(s, base + "/locked")
+        with pytest.raises(BusinessError) as e:
+            api_get(s, base + "/secret404?sig=TOPSECRET&x=1")
+        assert "TOPSECRET" not in str(e.value) and "TOPSECRET" not in str(e.value.context)
+    t = {"now": 0.0}
+
+    def sleep(x):
+        t["now"] += x
+
+    rl = RateLimiter(0.5, clock=lambda: t["now"], sleep=sleep)       # one call every 2 s
+    for _ in range(3):
+        rl.wait()
+    assert t["now"] == pytest.approx(4.0)
+    r = curl_to_request("curl 'https://x.test/a?sig=S&page=2' -H 'Ocp-Apim-Subscription-Key: K' "
+                        "-H 'X-CSRF-Token: C' -H 'accept: */*' -H 'content-type: application/json' "
+                        "--data-raw $'{\"msg\":\"It\\'s urgent!\"}'")
+    assert r["params"] == {"page": "2"} and set(r["headers"]) == {"accept", "content-type"}
+    assert set(r["dropped"]) == {"Ocp-Apim-Subscription-Key", "X-CSRF-Token", "sig"} and r["json"] == {
+        "msg": "It's urgent!"}
+
+
+def test_har_sanitize(tmp_path):
+    har = {"log": {"entries": [{
+        "request": {"method": "POST", "url": "https://x.test/login?next=/home&token=T0K",
+                    "headers": [{"name": "Cookie", "value": "sid=1"}, {"name": "Accept", "value": "*/*"},
+                                {"name": "X-API-Key", "value": "K"}],
+                    "cookies": [{"name": "sid", "value": "1"}],
+                    "queryString": [{"name": "token", "value": "T0K"}, {"name": "next", "value": "/home"}],
+                    "postData": {"mimeType": "application/x-www-form-urlencoded", "text": "user=u&password=hunter2"}},
+        "response": {"status": 200, "headers": [{"name": "Set-Cookie", "value": "sid=2"}], "cookies": [{"name": "sid"}],
+                     "content": {"mimeType": "application/json", "text": '{"access_token": "abc"}'}}}]}}
+    p = tmp_path / "x.har"
+    p.write_text(json.dumps(har))
+    assert har_sanitize(p) == 1
+    text = p.read_text()
+    for secret in ("hunter2", "sid=1", "sid=2", "T0K", '"K"', "abc"):
+        assert secret not in text, secret
+    assert "next=/home" in text and "Accept" in text
+
+
 # ---------- web (Playwright) ----------
 
 INDEX = """<html><head><title>Portal</title></head><body>
@@ -324,6 +390,40 @@ def test_browser_session_handoff_to_requests(tmp_path, browser_ok):
         with Browser(tmp_path / "shots") as b2:
             b2.load_session(tmp_path / "state.json")
             assert b2.get_json(base + "/api/secure") == {"ok": True}
+
+
+def test_browser_review_fixes(tmp_path, browser_ok):
+    import asyncio
+    routes = _web_routes()
+    routes[("GET", "/form")] = lambda r: (200, {}, """<html><body><form method="post" action="/login-post">
+        <input name="user" id="u"><input type="password" name="password" id="p"><button id="go">Go</button></form>
+        <table id="rh"><tr><th>Desk</th><th>Amt</th></tr><tr><th>FX</th><td>10</td></tr></table>
+        <a id="pop2" href="/asker" target="_blank">ask</a></body></html>""")
+    routes[("POST", "/login-post")] = lambda r: (200, {"Set-Cookie": "sid=s3cr3t; Path=/"}, "<html>ok</html>")
+    routes[("GET", "/asker")] = lambda r: (200, {}, """<html><body><button id="ask" onclick="document.body.dataset.a =
+        confirm('Again?') ? 'yes' : 'no'">ask</button></body></html>""")
+    har = tmp_path / "login.har"
+    with serve(routes) as (base, log):
+        with Browser(tmp_path / "s", record_har=har) as b:
+            b.goto(base + "/form")
+            assert b.table("#rh") == [{"Desk": "FX", "Amt": "10"}]
+            b.fill("#u", None)
+            assert b.js("() => document.querySelector('#u').value") == ""
+            b.accept_dialogs()
+            b.popup("#pop2")
+            b.click("#ask")
+            assert b.js("() => document.body.dataset.a") == "yes" and b.dialogs == ["Again?"]
+            b.switch_tab(0)
+            b.login("bot", "hunter2-pass", "#u", "#p", "#go")
+            b.wait_idle()
+        text = har.read_text()
+        assert "hunter2-pass" not in text and "s3cr3t" not in text and "/login-post" in text
+
+        async def notebook_cell():                     # Jupyter runs code inside an asyncio loop
+            with Browser(tmp_path / "s2") as nb:
+                nb.goto(base + "/")
+                return nb.js("() => document.title"), nb.run(lambda page: page.title())
+        assert asyncio.run(notebook_cell()) == ("Portal", "Portal")
 
 
 def test_browser_blocks_resource_types(tmp_path, browser_ok):

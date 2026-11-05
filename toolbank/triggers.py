@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 
 import pandas as pd
 
-from .files import file_sha256, is_locked
+from .files import file_sha256
 from .robust import BusinessError, RobotError, SystemError_, classify
 
 
@@ -51,7 +51,8 @@ def _unlock(fd):
 @contextmanager
 def single_instance(name, lock_dir=None):
     """`with single_instance("recon_bot"):` stops a second copy running (scheduler fired again while the last
-    run is still going). OS lock, freed automatically even if the robot crashes. Raises BusinessError ALREADY_RUNNING."""
+    run is still going). OS lock, freed automatically even if the robot crashes. Raises SystemError_ ALREADY_RUNNING
+    (try again later)."""
     lock_dir = Path(lock_dir or tempfile.gettempdir())
     lock_dir.mkdir(parents=True, exist_ok=True)
     path = lock_dir / (re.sub(r"[^\w.-]+", "_", name) + ".lock")
@@ -60,7 +61,7 @@ def single_instance(name, lock_dir=None):
         _lock(fd)
     except OSError:
         os.close(fd)
-        raise BusinessError(f"{name} is already running (lock {path})", code="ALREADY_RUNNING") from None
+        raise SystemError_(f"{name} is already running (lock {path})", code="ALREADY_RUNNING") from None
     try:
         os.ftruncate(fd, 0)
         os.lseek(fd, 0, os.SEEK_SET)
@@ -119,20 +120,37 @@ def _ledger_add(path, file, sha, status, note=""):
         fh.write(json.dumps(rec) + "\n")
 
 
+def _stat(p):
+    try:
+        st = p.stat()
+        return st.st_size, st.st_mtime
+    except OSError:                                   # renamed / deleted since the listing
+        return None
+
+
+def _readable(p):
+    try:
+        with open(p, "rb") as fh:
+            fh.read(1)
+        return True
+    except OSError:                                   # still being written with an exclusive lock
+        return False
+
+
 def new_files(folder, pattern="*", ledger=None, settle_s=2, retry_failed=False, sleep=time.sleep):
-    """One scan: files matching pattern that are complete (size steady for settle_s, not locked) and not yet in
+    """One scan: files matching pattern that are complete (size steady for settle_s, readable) and not yet in
     the ledger (by SHA-256, so a renamed copy is skipped too). Oldest first. Returns [(path, sha256)]."""
     folder = Path(folder)
     ledger = Path(ledger) if ledger else folder / ".processed.jsonl"
-    cands = [p for p in folder.glob(pattern) if p.is_file() and not p.name.startswith((".", "~$"))]
-    sizes = {p: (p.stat().st_size, p.stat().st_mtime) for p in cands}
-    if cands and settle_s:
+    sizes = {p: _stat(p) for p in folder.glob(pattern) if not p.name.startswith((".", "~$"))}
+    sizes = {p: st for p, st in sizes.items() if st is not None and p.is_file()}
+    if sizes and settle_s:
         sleep(settle_s)
     seen, out = _ledger_load(ledger), []
-    for p in sorted(cands, key=lambda q: sizes[q][1]):
+    for p in sorted(sizes, key=lambda q: sizes[q][1]):
+        if _stat(p) != sizes[p] or sizes[p][0] == 0 or not _readable(p):
+            continue
         try:
-            if (p.stat().st_size, p.stat().st_mtime) != sizes[p] or sizes[p][0] == 0 or is_locked(p):
-                continue
             sha = file_sha256(p)
         except OSError:
             continue
@@ -158,9 +176,6 @@ def watch_folder(folder, handler, pattern="*", ledger=None, run_for_s=0, poll_s=
             tried.add(sha)
             try:
                 handler(p)
-                _ledger_add(ledger, p, sha, "done")
-                results.append({"file": str(p), "status": "done", "error": ""})
-                log(f"done {p.name}")
             except Exception as e:
                 err = classify(e)
                 if isinstance(err, BusinessError):
@@ -170,6 +185,10 @@ def watch_folder(folder, handler, pattern="*", ledger=None, run_for_s=0, poll_s=
                     tried.discard(sha)
                     results.append({"file": str(p), "status": "error", "error": str(err)})
                 log(f"{results[-1]['status']} {p.name}: {err}")
+                continue
+            _ledger_add(ledger, p, sha, "done")       # if the ledger cannot be written, stop: never re-run handler
+            results.append({"file": str(p), "status": "done", "error": ""})
+            log(f"done {p.name}")
         if clock() - start + poll_s > run_for_s:
             return results
         sleep(poll_s)
@@ -183,6 +202,8 @@ def run_every(fn, every_s, run_for_s=None, max_runs=None, align=True, stop_on_er
     run_for_s or max_runs. Overrun -> missed slots are skipped. Errors are logged, loop continues unless
     stop_on_error. Returns [{'run','started','ok','error'}]."""
     start, runs, out = clock(), 0, []
+    base = 0 if align else start
+    slot = int((start - base) // every_s)
     while True:
         t0 = clock()
         runs += 1
@@ -197,12 +218,12 @@ def run_every(fn, every_s, run_for_s=None, max_runs=None, align=True, stop_on_er
                 raise
         if max_runs and runs >= max_runs:
             return out
-        now = clock()
-        base = 0 if align else start
-        nxt = base + (int((now - base) // every_s) + 1) * every_s
+        slot = max(slot + 1, int((clock() - base) // every_s) + 1)    # never the same slot twice
+        nxt = base + slot * every_s
         if run_for_s is not None and nxt - start > run_for_s:
             return out
-        sleep(max(0.0, nxt - now))
+        while (left := nxt - clock()) > 0:                            # sleep() may wake a little early
+            sleep(left)
 
 
 _MONTHS = {m: i for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct",
@@ -291,14 +312,15 @@ def run_on_cron(fn, expr, run_for_s=None, max_runs=None, stop_on_error=False, no
                 log=print):
     """In-process scheduler: sleep until each cron time, call fn(). Errors logged, loop continues unless
     stop_on_error. For production prefer Task Scheduler + single_instance. Returns [{'run','due','ok','error'}]."""
-    start, runs, out = now(), 0, []
+    start, runs, out, last = now(), 0, [], None
     while True:
-        due = cron_next(expr, now())
+        t = now()
+        due = cron_next(expr, t if last is None or t > last else last)   # never the same slot twice
         if run_for_s is not None and (due - start).total_seconds() > run_for_s:
             return out
-        wait = (due - now()).total_seconds()
-        if wait > 0:
-            sleep(wait)
+        while (left := (due - now()).total_seconds()) > 0:              # sleep() may wake a little early
+            sleep(left)
+        last = due
         runs += 1
         try:
             fn()
@@ -375,15 +397,19 @@ def schtasks_query(name=None):
 
 
 def write_runner_bat(path, script, python_exe=None, args=(), workdir=None, log_file=None):
-    """.bat for Task Scheduler: cd to the robot folder, run python, append output to a log, pass the exit code on."""
+    """.bat for Task Scheduler: go to the robot folder (UNC shares too), run python, append output to a log,
+    pass the robot's exit code on."""
     path, script = Path(path), Path(script)
     workdir = Path(workdir or script.parent)
-    cmd = f'"{python_exe or sys.executable}" "{script}"' + "".join(f' "{a}"' for a in args)
+
+    def q(x):
+        return '"' + str(x).replace("%", "%%") + '"'             # % would expand as a variable in .bat files
+    cmd = f"{q(python_exe or sys.executable)} {q(script)}" + "".join(f" {q(a)}" for a in args)
     if log_file:
-        cmd += f' >> "{log_file}" 2>&1'
+        cmd += f" >> {q(log_file)} 2>&1"
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text("\r\n".join(["@echo off", f'cd /d "{workdir}"', cmd, "exit /b %ERRORLEVEL%", ""]),
-                    encoding="ascii", newline="")
+    lines = ["@echo off", f"pushd {q(workdir)}", cmd, "set RC=%ERRORLEVEL%", "popd", "exit /b %RC%", ""]
+    path.write_text("\r\n".join(lines), encoding="ascii", newline="")
     return path
 
 
@@ -427,7 +453,12 @@ class WebhookServer:
                     return self._reply(404, {"error": "not found"})
                 if self.headers.get("Content-Length") is None:
                     return self._reply(411, {"error": "Content-Length required"})
-                n = int(self.headers.get("Content-Length") or 0)
+                try:
+                    n = int(self.headers.get("Content-Length"))
+                except ValueError:
+                    n = -1
+                if n < 0:
+                    return self._reply(400, {"error": "bad Content-Length"})
                 if n > outer.max_bytes:
                     return self._reply(413, {"error": "body too large"})
                 body = self.rfile.read(n)
@@ -489,6 +520,16 @@ class WebhookServer:
 
 # ---------- folder work queue ----------
 
+def _jsonable(x):
+    """Make dict keys text (json cannot write Timestamp / tuple keys); values fall back to str()."""
+    if isinstance(x, dict):
+        return {k if isinstance(k, (str, int, float, bool)) or k is None else str(k): _jsonable(v)
+                for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_jsonable(v) for v in x]
+    return x
+
+
 class FileQueue:
     """Work queue in plain folders (pending / working / done / failed) to hand items between robots or retry
     later. Claiming is an atomic rename, so two workers never take the same item. Item = JSON-able dict."""
@@ -506,7 +547,7 @@ class FileQueue:
     @staticmethod
     def _write(path, item):
         tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex[:6]}.tmp")
-        tmp.write_text(json.dumps(item, default=str), encoding="utf-8")
+        tmp.write_text(json.dumps(_jsonable(item), default=str), encoding="utf-8")
         os.replace(tmp, path)
 
     def put(self, payload, item_id=None):
@@ -590,10 +631,12 @@ class FileQueue:
             if item is None:
                 continue                                    # another worker took it
             try:
-                self.done(item, handler(item["payload"]))
-                out["done"] += 1
+                result = handler(item["payload"])
             except Exception as e:
                 err = classify(e)
                 where = self.fail(item, err, retry=not isinstance(err, BusinessError), max_attempts=max_attempts)
                 out["retry" if where == "pending" else "failed"] += 1
+                continue
+            self.done(item, result)          # outside the try: a bookkeeping error must not re-run the handler
+            out["done"] += 1
         return out

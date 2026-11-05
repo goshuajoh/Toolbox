@@ -50,20 +50,34 @@ def prepare_image(img, scale=2.0, grayscale=True, threshold=None, sharpen=False,
     return im
 
 
+def _frames(img):
+    """Every page of an image (multi-page TIFF / fax) as separate PIL images."""
+    from PIL import ImageSequence
+    im = _image(img)
+    if getattr(im, "n_frames", 1) > 1:
+        return [f.copy() for f in ImageSequence.Iterator(im)]
+    return [im]
+
+
 def ocr_image(img, lang="eng", psm=6, prepare=True, config=""):
-    """Image -> text with Tesseract. psm: 6 one block, 4 columns, 11 sparse text, 7 one line."""
+    """Image -> text with Tesseract (every page of a multi-page TIFF, joined by a form feed).
+    psm: 6 one block, 4 columns, 11 sparse text, 7 one line."""
     import pytesseract
-    im = prepare_image(img) if prepare else _image(img)
-    return pytesseract.image_to_string(im, lang=lang, config=f"--psm {psm} {config}".strip())
+    texts = [pytesseract.image_to_string(prepare_image(f) if prepare else f, lang=lang,
+                                         config=f"--psm {psm} {config}".strip()) for f in _frames(img)]
+    return "\f".join(texts)
 
 
 def ocr_data(img, lang="eng", psm=6, prepare=True, min_conf=-1):
     """Words with position + confidence -> DataFrame(text, conf, left, top, width, height, page_num, block, par,
-    line, word). Coordinates are on the prepared image when prepare=True."""
+    line, word); page_num counts TIFF pages. Coordinates are on the prepared image when prepare=True."""
     import pytesseract
-    im = prepare_image(img) if prepare else _image(img)
-    d = pd.DataFrame(pytesseract.image_to_data(im, lang=lang, config=f"--psm {psm}",
-                                               output_type=pytesseract.Output.DICT))
+    parts = []
+    for page, f in enumerate(_frames(img), 1):
+        d = pd.DataFrame(pytesseract.image_to_data(prepare_image(f) if prepare else f, lang=lang,
+                                                   config=f"--psm {psm}", output_type=pytesseract.Output.DICT))
+        parts.append(d.assign(page_num=page))
+    d = pd.concat(parts, ignore_index=True)
     d["conf"] = pd.to_numeric(d["conf"], errors="coerce")
     d["text"] = d["text"].astype(str).str.strip()
     d = d[(d["text"] != "") & (d["conf"] >= min_conf)]

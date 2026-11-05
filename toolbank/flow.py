@@ -1,11 +1,12 @@
 """Alteryx-style workflows in pandas: chain steps and see rows in/out + time per step (like the record counts on
 Alteryx connectors), keep snapshots to inspect, write intermediate outputs, cache slow inputs while developing."""
+import os
 import time
 from pathlib import Path
 
 import pandas as pd
 
-from .robust import RobotError
+from .robust import BusinessError
 
 
 class Flow:
@@ -24,10 +25,10 @@ class Flow:
         return self
 
     def check(self, name, predicate, message="check failed"):
-        """Stop the flow when predicate(df) is False, e.g. .check("has rows", lambda d: len(d) > 0)."""
+        """Stop the flow with a BusinessError when predicate(df) is False, e.g. .check("has rows", lambda d: len(d) > 0)."""
         def _check(df):
             if not predicate(df):
-                raise RobotError(f"{name}: {message}", code="FLOW_CHECK")
+                raise BusinessError(f"{name}: {message}", code="FLOW_CHECK")
             return df
         return self.step(name, _check)
 
@@ -67,31 +68,33 @@ def count_rows(df, label="rows", log=print):
 def tee(df, path, **kw):
     """Write df to path (.csv / .xlsx / .parquet) and pass it through, like an Output tool mid-workflow."""
     p = Path(path)
+    ext = p.suffix.lower()
+    if ext not in (".csv", ".xlsx", ".parquet"):
+        raise ValueError("tee writes .csv, .xlsx or .parquet")
     p.parent.mkdir(parents=True, exist_ok=True)
-    if p.suffix.lower() == ".parquet":
-        df.to_parquet(p, index=False, **kw)
-    elif p.suffix.lower() in (".xlsx", ".xlsm"):
-        df.to_excel(p, index=False, **kw)
-    else:
-        df.to_csv(p, index=False, **kw)
+    {".parquet": df.to_parquet, ".xlsx": df.to_excel, ".csv": df.to_csv}[ext](p, index=False, **kw)
     return df
 
 
 def cached(path, fn, *args, refresh=False, **kwargs):
-    """Saved result if path exists, else fn(*args, **kwargs) saved to path (.parquet / .pkl / .csv). Speeds up
-    development on slow inputs; refresh=True (or delete the file) rebuilds. Only load files you created."""
+    """Saved result if path exists, else fn(*args, **kwargs) saved to path (.parquet / .pkl / .csv) and read back,
+    so the first run and later runs see the same types. refresh=True (or delete the file) rebuilds.
+    Speeds up development on slow inputs. Only load files you created."""
     p = Path(path)
     ext = p.suffix.lower()
-    if ext not in (".parquet", ".pkl", ".csv"):
+    readers = {".parquet": pd.read_parquet, ".pkl": pd.read_pickle, ".csv": pd.read_csv}
+    if ext not in readers:
         raise ValueError("cache file must end in .parquet, .pkl or .csv")
     if p.exists() and not refresh:
-        return {".parquet": pd.read_parquet, ".pkl": pd.read_pickle, ".csv": pd.read_csv}[ext](p)
+        return readers[ext](p)
     df = fn(*args, **kwargs)
     p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f".{p.name}.tmp")                          # atomic: an interrupt leaves no half file
     if ext == ".parquet":
-        df.to_parquet(p, index=False)
+        df.to_parquet(tmp, index=False)
     elif ext == ".pkl":
-        df.to_pickle(p)
+        df.to_pickle(tmp)
     else:
-        df.to_csv(p, index=False)
-    return df
+        df.to_csv(tmp, index=False)
+    os.replace(tmp, p)
+    return readers[ext](p)

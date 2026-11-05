@@ -37,7 +37,9 @@ def main(argv=None):
     try:
         with single_instance(ROBOT, lock_dir=rd):      # scheduler fired twice -> second copy exits 6
             return run(args, cfg, rd, log, cp)
-    except BusinessError as e:
+    except RobotError as e:
+        if e.code != "ALREADY_RUNNING":
+            raise
         log.warning(str(e), extra={"code": e.code})
         return 6
 

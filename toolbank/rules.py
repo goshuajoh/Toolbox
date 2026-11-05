@@ -23,10 +23,12 @@ _FALSE = {"n", "no", "false", "f", "0", "off", ""}
 
 def truthy(v):
     """'Y'/'Yes'/'TRUE'/'1'/'on'/'x' -> True, 'N'/'No'/'0'/''/None -> False."""
-    if v is None or (isinstance(v, float) and np.isnan(v)):
+    if v is None or v is pd.NA or (isinstance(v, float) and np.isnan(v)):
         return False
     if isinstance(v, (bool, np.bool_)):
         return bool(v)
+    if isinstance(v, (int, float, np.integer, np.floating)):
+        return v != 0                                  # Excel 1 / 1.0 / 0
     return str(v).strip().lower() in _TRUE
 
 
@@ -112,7 +114,12 @@ def condition(df, column, op, value=None, case=False):
             m = s.isna() if op == "==" else s.notna()
         else:
             left, right = (norm(s), str(v).upper()) if text and not case and op in ("==", "!=") else (s, v)
-            m = {"==": left == right, "!=": left != right, ">": s > v, ">=": s >= v, "<": s < v, "<=": s <= v}[op]
+            ops = {"==": lambda: left == right, "!=": lambda: left != right, ">": lambda: s > v,
+                   ">=": lambda: s >= v, "<": lambda: s < v, "<=": lambda: s <= v}
+            try:
+                m = ops[op]()                              # only the requested comparison
+            except TypeError as e:
+                raise ValueError(f"cannot compare column {column!r} ({s.dtype}) {op} {value!r}") from e
             if op == "!=":
                 m = m & s.notna()
     else:
@@ -145,9 +152,8 @@ def validate_rules(rules, df=None):
     for _, row in r.iterrows():
         op = _ALIASES.get(str(row["op"]).strip().lower(), str(row["op"]).strip().lower())
         if op not in OPS:
-            hint = "" if isinstance(row["op"], str) else \
-                " (an Excel cell starting with '=' became a formula: type eq, ne, gt, ge, lt, le instead)"
-            probs.append(f"{row['code']}: unknown operator {row['op']!r}{hint}")
+            probs.append(f"{row['code']}: unknown operator {row['op']!r} (in Excel an operator starting with '=' "
+                         "becomes a formula: type eq, ne, gt, ge, lt, le)")
         if df is not None and row["column"] not in df.columns:
             probs.append(f"{row['code']}: column {row['column']!r} not in data")
     return probs
@@ -175,7 +181,7 @@ def apply_rules(df, rules, prefix="flag_", flags_col="flags", case=False):
 def rules_from_excel(path, sheet=0):
     """Load a rules sheet (code | column | op | value | active | description) and check its operators.
     Type operators as words in Excel (eq, ne, gt, ge, lt, le, in, contains, is blank): '=' starts a formula."""
-    r = pd.read_excel(path, sheet_name=sheet, dtype={"value": str})
+    r = pd.read_excel(path, sheet_name=sheet, dtype=str)        # values stay as typed (1 not 1.0)
     probs = validate_rules(r)
     if probs:
         raise ValueError("bad rules: " + "; ".join(probs))

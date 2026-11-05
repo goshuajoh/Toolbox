@@ -1,26 +1,89 @@
 """Web automation with Playwright: pip install playwright && playwright install chromium (or channel='msedge' to
 use the installed Edge, which also trusts the corporate CA). Covers clicks/forms, downloads, popups, dialogs,
-JavaScript, network capture (the JSON behind a page), HAR recording, and handing the login to requests."""
+JavaScript, network capture (the JSON behind a page), HAR recording, and handing the login to requests.
+Works in Jupyter too: there the browser runs on its own thread automatically."""
+import asyncio
+import functools
 import re
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import pandas as pd
 
 from .robust import SystemError_
 
 
+def _loop_running():
+    try:
+        asyncio.get_running_loop()
+        return True
+    except RuntimeError:
+        return False
+
+
+def _text(v):
+    """Value to type into a field: blanks (None / NaN / NaT) -> ''."""
+    if v is None:
+        return ""
+    try:
+        if not isinstance(v, str) and pd.isna(v):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(v)
+
+
+def _on_browser_thread(fn):
+    """Run the method on the browser's own thread when one is in use (Jupyter)."""
+    @functools.wraps(fn)
+    def wrapper(self, *a, **kw):
+        ex = self.__dict__.get("_ex")
+        if ex is None or threading.current_thread() is self.__dict__.get("_thread"):
+            return fn(self, *a, **kw)
+        return ex.submit(fn, self, *a, **kw).result()
+    return wrapper
+
+
+_TABLE_JS = """t => {
+    const text = c => c.innerText.trim();
+    const rows = Array.from(t.rows);
+    const headRows = t.tHead ? Array.from(t.tHead.rows) : [];
+    let head = headRows.length ? headRows[headRows.length - 1] : null;
+    if (!head && rows.length && Array.from(rows[0].cells).every(c => c.tagName === 'TH')) head = rows[0];
+    const hdr = head ? Array.from(head.cells).map(text) : [];
+    const body = rows.filter(r => r !== head && !headRows.includes(r));
+    return {hdr, rows: body.map(r => Array.from(r.cells).map(text))};
+}"""
+
+
 class Browser:
     """`with Browser("shots") as b: b.goto(url); b.click("text=Export")`. Failures screenshot + raise SystemError_.
-    record_har='run.har' saves all traffic; block=('image','font','media') speeds up heavy pages."""
+    record_har='run.har' saves all traffic (secrets stripped unless har_raw=True); block=('image','font','media')
+    speeds up heavy pages. In Jupyter use b.run(lambda page: ...) for raw Playwright calls."""
 
     def __init__(self, screenshots_dir="screenshots", headless=True, timeout_ms=30000, channel=None,
-                 record_har=None, block=(), proxy=None, user_agent=None, viewport=None, args=()):
+                 record_har=None, block=(), proxy=None, user_agent=None, viewport=None, args=(), har_raw=False):
         self.dir = Path(screenshots_dir)
         self.headless, self.timeout, self.channel, self.n = headless, timeout_ms, channel, 0
-        self.record_har, self.block, self.proxy = record_har, tuple(block), proxy
+        self.record_har, self.block, self.proxy, self.har_raw = record_har, tuple(block), proxy, har_raw
         self.user_agent, self.viewport, self.args = user_agent, viewport, list(args)
-        self.dialogs, self._listeners = [], []
+        self.dialogs, self._listeners, self._dialog, self._dialog_fn = [], [], None, None
+        self._ex = self._thread = None
 
     def __enter__(self):
+        if _loop_running():            # Jupyter has an asyncio loop: Playwright's sync API needs a thread without one
+            self._ex = ThreadPoolExecutor(1, thread_name_prefix="toolbank-browser")
+            self._thread = self._ex.submit(threading.current_thread).result()
+        try:
+            self._start()
+        except BaseException:
+            self._shutdown_thread()
+            raise
+        return self
+
+    def _start(self):
         from playwright.sync_api import sync_playwright
         self.pw = sync_playwright().start()
         kw = {"headless": self.headless}
@@ -30,9 +93,12 @@ class Browser:
             kw["proxy"] = {"server": self.proxy} if isinstance(self.proxy, str) else self.proxy
         if self.args:
             kw["args"] = self.args
-        self.browser = self.pw.chromium.launch(**kw)
-        self._new_context()
-        return self
+        try:
+            self.browser = self.pw.chromium.launch(**kw)
+            self._new_context()
+        except BaseException:
+            self.pw.stop()                         # no orphan Playwright driver if the browser cannot start
+            raise
 
     def _new_context(self, storage_state=None):
         kw = {"accept_downloads": True}
@@ -51,9 +117,17 @@ class Browser:
             types = set(self.block)
             self.ctx.route("**/*", lambda route: route.abort() if route.request.resource_type in types
                            else route.continue_())
+        if self._dialog:
+            self._hook_dialogs()
         self.page = self.ctx.new_page()
 
     def __exit__(self, et, e, tb):
+        try:
+            self._stop(e)
+        finally:
+            self._shutdown_thread()
+
+    def _stop(self, e):
         if e is not None:
             self.screenshot("exit_error")
         for c in (getattr(self, "ctx", None), getattr(self, "browser", None)):   # ctx close also writes the HAR
@@ -62,6 +136,23 @@ class Browser:
             except Exception:
                 pass
         self.pw.stop()
+        if self.record_har and not self.har_raw and Path(self.record_har).exists():
+            from .api import har_sanitize
+            try:
+                har_sanitize(self.record_har)
+            except Exception:
+                Path(self.record_har).unlink(missing_ok=True)      # never leave an unsanitised HAR behind
+                if e is None:
+                    raise
+
+    def _shutdown_thread(self):
+        if self._ex is not None:
+            self._ex.shutdown(wait=True)
+            self._ex = self._thread = None
+
+    def run(self, fn):
+        """fn(page) on the browser's thread: raw Playwright calls, e.g. b.run(lambda p: p.get_by_role("button").count())."""
+        return fn(self.page)
 
     def screenshot(self, label):
         """Full-page PNG into screenshots_dir; returns path (None if it failed)."""
@@ -77,6 +168,7 @@ class Browser:
 
     def _do(self, label, fn, retries=0):
         """Run fn; retry only reads/navigation; screenshot + SystemError_ on final failure."""
+        from .api import safe_url
         for attempt in range(retries + 1):
             try:
                 return fn()
@@ -84,7 +176,7 @@ class Browser:
                 if attempt == retries:
                     self.screenshot(f"fail_{label}")
                     raise SystemError_(f"{label}: {type(e).__name__}: {str(e)[:200]}", code="WEB_ACTION",
-                                       url=self.page.url) from e
+                                       url=safe_url(self.page.url)) from e
                 time.sleep(2 * (attempt + 1))
 
     # ---------- navigate / wait ----------
@@ -125,13 +217,13 @@ class Browser:
         return self._do(f"click[{sel}]", lambda: self.page.click(sel))
 
     def fill(self, sel, value):
-        """Type into an input (replaces content)."""
-        return self._do(f"fill[{sel}]", lambda: self.page.fill(sel, value))
+        """Type into an input (replaces content); blank values (None / NaN) type ''."""
+        return self._do(f"fill[{sel}]", lambda: self.page.fill(sel, _text(value)))
 
     def fill_form(self, values):
         """Fill several inputs: {selector: value}."""
         for sel, value in values.items():
-            self.fill(sel, str(value))
+            self.fill(sel, value)
 
     def select(self, sel, value):
         """Choose an <option> by value or label."""
@@ -150,7 +242,8 @@ class Browser:
         return self._do(f"hover[{sel}]", lambda: self.page.hover(sel))
 
     def login(self, user, password, user_sel, pass_sel, submit_sel, success_sel=None):
-        """Fill credentials (never logged), submit, optionally wait for a post-login element."""
+        """Fill credentials (never logged; a recorded HAR is stripped of request bodies), submit, optionally wait
+        for a post-login element."""
         self.fill(user_sel, user)
         self.fill(pass_sel, password)
         self.click(submit_sel)
@@ -194,7 +287,14 @@ class Browser:
         return self.page
 
     def accept_dialogs(self, accept=True, prompt_text=None):
-        """Auto-answer alert/confirm/prompt boxes (default Playwright dismisses them); messages go to .dialogs."""
+        """Auto-answer alert/confirm/prompt boxes on every tab (Playwright dismisses them by default); their
+        messages go to .dialogs."""
+        self._dialog = (accept, prompt_text)
+        self._hook_dialogs()
+
+    def _hook_dialogs(self):
+        accept, prompt_text = self._dialog
+
         def on_dialog(d):
             self.dialogs.append(d.message)
             if not accept:
@@ -203,7 +303,13 @@ class Browser:
                 d.accept()
             else:
                 d.accept(prompt_text)
-        self.page.on("dialog", on_dialog)
+        if self._dialog_fn is not None:
+            try:
+                self.ctx.remove_listener("dialog", self._dialog_fn)
+            except Exception:
+                pass
+        self._dialog_fn = on_dialog
+        self.ctx.on("dialog", on_dialog)
 
     # ---------- read ----------
     def text(self, sel):
@@ -227,13 +333,13 @@ class Browser:
         return self.page.content()
 
     def table(self, table_sel):
-        """HTML <table> -> list of dicts keyed by header text."""
+        """HTML <table> -> list of dicts keyed by header text (last <thead> row, or a first row of <th>);
+        row-header <th> cells count as data."""
         def _t():
-            hdr = self.page.eval_on_selector_all(f"{table_sel} th", "els => els.map(e => e.innerText.trim())")
-            rows = self.page.eval_on_selector_all(
-                f"{table_sel} tbody tr",
-                "trs => trs.map(tr => Array.from(tr.querySelectorAll('td')).map(td => td.innerText.trim()))")
-            return [dict(zip(hdr, r)) for r in rows if r]
+            res = self.page.locator(table_sel).first.evaluate(_TABLE_JS)
+            hdr = res["hdr"]
+            return [dict(zip([hdr[i] if i < len(hdr) and hdr[i] else f"col{i + 1}" for i in range(len(r))], r))
+                    for r in res["rows"] if r]
         return self._do(f"table[{table_sel}]", _t, retries=1)
 
     def tables(self, match=None):
@@ -329,15 +435,14 @@ class Browser:
                     action()
             r = info.value
             if r.status >= 400:
-                raise RuntimeError(f"HTTP {r.status} from {r.url}")
+                raise RuntimeError(f"HTTP {r.status}")
             return r.json()
         return self._do(f"wait_json[{url_re}]", _w)
 
     def get_json(self, url, params=None, headers=None):
         """GET an API with the browser's cookies/SSO (no new login) -> JSON. Errors classified like api_call."""
         from .api import raise_for_status
-        r = self._do(f"get_json[{url}]", lambda: self.ctx.request.get(url, params=params, headers=headers),
-                     retries=2)
+        r = self._do("get_json", lambda: self.ctx.request.get(url, params=params, headers=headers), retries=2)
         raise_for_status(r.status, r.url, r.text()[:300])
         return r.json()
 
@@ -368,4 +473,10 @@ class Browser:
         """Start a fresh context from a saved session."""
         self.ctx.close()
         self._listeners = []
+        self._dialog_fn = None
         self._new_context(storage_state=path)
+
+
+for _name, _fn in list(vars(Browser).items()):          # every method runs on the browser's thread when it has one
+    if callable(_fn) and not _name.startswith("__") and _name not in ("_shutdown_thread",):
+        setattr(Browser, _name, _on_browser_thread(_fn))

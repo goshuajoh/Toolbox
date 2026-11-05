@@ -75,9 +75,10 @@ def wd_click(d, css, timeout=20):
 
 def wd_fill(d, css, value, timeout=20):
     """Clear an input and type value."""
+    from .web import _text
     el = _wait(d, css, timeout, "visible")
     el.clear()
-    el.send_keys(str(value))
+    el.send_keys(_text(value))                       # blank (None / NaN) types nothing, not 'nan'
 
 
 def wd_text(d, css, timeout=20):
@@ -136,12 +137,20 @@ def wd_wait_download(folder, timeout_s=120, pattern="*", since=None):
     folder, since = Path(folder), since if since is not None else time.time() - 1
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
-        files = [p for p in folder.glob(pattern) if p.is_file()]
-        busy = [p for p in files if p.suffix.lower() in (".crdownload", ".tmp", ".partial", ".part")
-                or p.name.startswith(".")]                  # Chrome on Linux writes .org.chromium.* first
-        done = [p for p in files if p not in busy and p.stat().st_mtime >= since and p.stat().st_size > 0]
+        files = []
+        for p in folder.glob(pattern):
+            try:
+                if p.is_file():
+                    st = p.stat()
+                    files.append((p, st.st_mtime, st.st_size))
+            except OSError:
+                continue                                   # renamed while we looked
+        temp = {p for p, _, _ in files if p.suffix.lower() in (".crdownload", ".tmp", ".partial", ".part")
+                or p.name.startswith(".")}                 # Chrome on Linux writes .org.chromium.* first
+        busy = [p for p, m, _ in files if p in temp and m >= since]   # old leftovers do not block
+        done = [(p, m) for p, m, size in files if p not in temp and m >= since and size > 0]
         if done and not busy:
-            return max(done, key=lambda p: p.stat().st_mtime)
+            return max(done, key=lambda x: x[1])[0]
         time.sleep(0.5)
     raise SystemError_(f"no finished download in {folder} after {timeout_s}s", code="DOWNLOAD_TIMEOUT")
 

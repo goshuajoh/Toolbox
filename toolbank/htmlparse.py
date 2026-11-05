@@ -77,6 +77,13 @@ class _TableParser(HTMLParser):
         if self._stack and self._stack[-1]["cell"] is not None:
             self._stack[-1]["cell"]["text"].append(data)
 
+    def close(self):
+        super().close()
+        while self._stack:                              # a table missing </table> is kept, not dropped
+            t = self._stack.pop()
+            self._close_row(t)
+            self.tables.append(t)
+
 
 def _cell_text(cell):
     return re.sub(r"[ \t\r\f\v\u00a0]+", " ", "".join(cell["text"])).strip()
@@ -154,6 +161,8 @@ class _TextParser(HTMLParser):
             self.skip += 1
         elif tag in _BLOCK:
             self.parts.append("\n")
+        elif tag in ("td", "th"):
+            self.parts.append(" ")                     # cells stay apart even when </td> is left out
 
     def handle_endtag(self, tag):
         if tag in _HIDDEN:
@@ -221,7 +230,28 @@ def html_links(html, base_url=None, pattern=None):
 class _FormParser(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self.forms, self._form, self._select, self._textarea = [], None, None, None
+        self.forms, self._form, self._select, self._multi, self._opt, self._textarea = [], None, None, False, None, None
+
+    def _add(self, name, value):
+        """Repeated names become lists, as a browser would send them all (e.g. checkbox + hidden 'false')."""
+        f = self._form["fields"]
+        if f.get(name) is not None:
+            f[name] = (f[name] if isinstance(f[name], list) else [f[name]]) + [value]
+        else:
+            f[name] = value
+
+    def _end_option(self):
+        if self._opt is not None and self._select:
+            value = self._opt["value"] if self._opt["value"] is not None else self._opt["text"].strip()
+            f = self._form["fields"]
+            if self._multi:
+                if self._opt["selected"]:
+                    f[self._select].append(value)
+            elif self._opt["selected"]:
+                f[self._select] = value                  # the last selected option wins, as in a browser
+            elif f.get(self._select) is None:
+                f[self._select] = value                  # nothing selected yet: the first option is sent
+        self._opt = None
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
@@ -234,27 +264,31 @@ class _FormParser(HTMLParser):
             kind = (a.get("type") or "text").lower()
             if kind in ("checkbox", "radio") and "checked" not in a:
                 self._form["fields"].setdefault(a["name"], None)
-                return
-            if kind in ("checkbox", "radio"):
-                self._form["fields"][a["name"]] = a.get("value") or "on"     # what a browser would send
+            elif kind in ("checkbox", "radio"):
+                self._add(a["name"], a.get("value") or "on")      # what a browser would send
             elif kind not in ("submit", "button", "image", "reset", "file"):
-                self._form["fields"][a["name"]] = a.get("value", "")
+                self._add(a["name"], a.get("value", ""))
         elif tag == "select" and a.get("name"):
-            self._select = a["name"]
-            self._form["fields"].setdefault(self._select, None)
+            self._select, self._multi = a["name"], "multiple" in a
+            self._form["fields"][self._select] = [] if self._multi else None
         elif tag == "option" and self._select:
-            if "selected" in a or self._form["fields"].get(self._select) is None:
-                self._form["fields"][self._select] = a.get("value", "")
+            self._end_option()
+            self._opt = {"value": a.get("value"), "selected": "selected" in a, "text": ""}
         elif tag == "textarea" and a.get("name"):
             self._textarea = a["name"]
             self._form["fields"][self._textarea] = ""
 
     def handle_data(self, data):
-        if self._form is not None and self._textarea:
+        if self._opt is not None:
+            self._opt["text"] += data
+        elif self._form is not None and self._textarea:
             self._form["fields"][self._textarea] += data
 
     def handle_endtag(self, tag):
-        if tag == "select":
+        if tag == "option":
+            self._end_option()
+        elif tag == "select":
+            self._end_option()
             self._select = None
         elif tag == "textarea":
             self._textarea = None

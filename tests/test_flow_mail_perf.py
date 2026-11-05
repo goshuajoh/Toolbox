@@ -173,7 +173,57 @@ def test_chunks_timer_progress_memory():
     df = pd.DataFrame({"n": range(1000), "desk": ["FX", "EM"] * 500, "id": [f"T{i}" for i in range(1000)],
                        "amt": [1.123456789] * 1000})
     small = shrink(df)
-    assert str(small["n"].dtype) == "int16" and str(small["desk"].dtype) == "category"
+    assert small["n"].dtype == df["n"].dtype and str(small["desk"].dtype) == "category"   # ints never downcast
     assert small["id"].dtype == df["id"].dtype and small["amt"].dtype == "float64"
-    assert small.astype({"desk": df["desk"].dtype}).equals(df.astype({"n": "int16"}))
+    assert small.astype({"desk": df["desk"].dtype}).equals(df)
     assert memory_mb(small) < memory_mb(df)
+
+
+def test_review_fixes_flow_mail_perf(tmp_path):
+    with pytest.raises(BusinessError):
+        Flow("x", log=lambda m: None).check("rows", lambda d: len(d) > 0).run(pd.DataFrame({"a": []}))
+    first = cached(tmp_path / "c.csv", lambda: pd.DataFrame({"id": ["00123"]}))
+    assert first.equals(cached(tmp_path / "c.csv", lambda: None))                 # same on every run
+    with pytest.raises(ValueError):
+        tee(pd.DataFrame({"a": [1]}), tmp_path / "x.xlsm")
+    raw = (b"Subject: odd\r\nContent-Type: text/plain; charset=unknown-8bit\r\n"
+           b"Content-Transfer-Encoding: 8bit\r\n\r\nPrice \xa3100\r\n")
+    (tmp_path / "odd.eml").write_bytes(raw)
+    assert "Price" in read_eml(tmp_path / "odd.eml")["text"]
+    long_name = "Settlement instructions for counterparty " + "X" * 60 + ".pdf"
+    msg = build_email("a@x.test", "b@x.test", "s", text="t")
+    msg.add_attachment(b"%PDF", maintype="application", subtype="pdf", filename=long_name)
+    p = save_eml(msg, tmp_path / "m.eml")
+    saved = eml_attachments(p, tmp_path / "att")[0]
+    assert saved.suffix == ".pdf" and len(saved.name) <= 80
+    assert unique_path(tmp_path / "att", saved.name).name == saved.stem + "_2.pdf"
+    assert safe_filename("a" * 100 + ".xlsx").endswith(".xlsx")
+
+    class Reject(FakeSMTP):
+        def send_message(self, m):
+            raise smtplib.SMTPDataError(550, b"blocked by DLP")
+
+    class Busy(FakeSMTP):
+        def send_message(self, m):
+            raise smtplib.SMTPDataError(451, b"try later")
+    with pytest.raises(BusinessError) as e:
+        smtp_send(msg, "relay", smtp_cls=Reject)
+    assert e.value.code == "SMTP_REJECTED"
+    with pytest.raises(SystemError_):
+        smtp_send(msg, "relay", smtp_cls=Busy)
+
+
+def test_parallel_map_stops_queued_work_on_interrupt():
+    ran = []
+
+    def work(x):
+        ran.append(x)
+        time.sleep(0.02)
+        if x == 1:
+            raise KeyboardInterrupt
+        return x
+
+    with pytest.raises(KeyboardInterrupt):
+        parallel_map(work, range(50), workers=2)
+    time.sleep(0.2)
+    assert len(ran) < 10

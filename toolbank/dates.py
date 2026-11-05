@@ -5,23 +5,42 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from .robust import RobotError
+from .robust import BusinessError, RobotError
 
 
 def load_holidays(path, col="date"):
-    """Holiday dates from a CSV/Excel file with a 'date' column (maintain one per market)."""
+    """Holiday dates from a CSV/Excel file with a 'date' column (maintain one per market). ISO / year-first text
+    is read year-first, other text day-first; an unreadable date raises (a missed holiday = a wrong value date)."""
+    from .clean import to_date
     p = Path(path)
-    df = pd.read_csv(p) if p.suffix.lower() == ".csv" else pd.read_excel(p)
-    return set(pd.to_datetime(df[col], format="mixed", dayfirst=True).dt.date)
+    df = pd.read_csv(p, dtype=str) if p.suffix.lower() == ".csv" else pd.read_excel(p)
+    d = to_date(df[col])
+    bad = d.isna() & df[col].notna() & (df[col].astype("string").str.strip() != "").fillna(False)
+    if bad.any():
+        raise ValueError(f"unreadable holiday dates in {p.name}: {df.loc[bad, col].head(5).tolist()}")
+    return set(d.dropna().dt.date)
 
 
 def _d(x):
-    """date from date / datetime / Timestamp / 'YYYY-MM-DD' text."""
+    """date from date / datetime / Timestamp / text ('2026-03-06', '06/03/2026' day-first); blank or unreadable
+    -> BusinessError (never loop on NaT)."""
+    if x is None or (not isinstance(x, (date, str)) and pd.isna(x)) or x is pd.NaT:
+        raise BusinessError("blank date", code="BAD_DATE")
     if isinstance(x, datetime):
         return x.date()
     if isinstance(x, date):
         return x
-    return pd.Timestamp(x).date()
+    if isinstance(x, str):                       # same rules as clean.to_date: ISO / year-first, else day-first
+        from .clean import to_date
+        t = to_date(pd.Series([x])).iloc[0]
+    else:
+        try:
+            t = pd.Timestamp(x)
+        except (ValueError, TypeError):
+            t = pd.NaT
+    if pd.isna(t):
+        raise BusinessError(f"unreadable date {x!r}", code="BAD_DATE")
+    return t.date()
 
 
 def _hols(holidays):
@@ -40,7 +59,7 @@ def is_business_day(d, holidays=()):
 
 def add_business_days(d, n, holidays=()):
     """T+n (or T-n) skipping weekends and holidays."""
-    d, hols = _d(d), _hols(holidays)
+    d, hols, n = _d(d), _hols(holidays), int(n)
     step = 1 if n >= 0 else -1
     while n:
         d += timedelta(days=step)
@@ -89,11 +108,12 @@ def adjust_business_day(d, holidays=(), convention="modified_following"):
     return x
 
 
-def convert_tz(series, from_tz, to_tz, naive_result=True):
-    """Convert naive timestamps from one zone to another (e.g. NY trade times to SG): DST handled."""
+def convert_tz(series, from_tz, to_tz, naive_result=True, ambiguous="raise", nonexistent="shift_forward"):
+    """Convert naive timestamps from one zone to another (e.g. NY trade times to SG): DST handled. The repeated
+    hour when clocks go back raises unless ambiguous='NaT' (blank it) or a bool array (True = summer time)."""
     s = pd.to_datetime(series)
     if getattr(s.dt, "tz", None) is None:
-        s = s.dt.tz_localize(from_tz, ambiguous="NaT", nonexistent="shift_forward")
+        s = s.dt.tz_localize(from_tz, ambiguous=ambiguous, nonexistent=nonexistent)
     out = s.dt.tz_convert(to_tz)
     return out.dt.tz_localize(None) if naive_result else out
 

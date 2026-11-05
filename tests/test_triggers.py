@@ -22,7 +22,7 @@ class FakeClock:
 def test_single_instance(tmp_path):
     with single_instance("bot one", lock_dir=tmp_path) as p:
         assert p.exists() and "pid=" in p.read_text()
-        with pytest.raises(BusinessError) as e:
+        with pytest.raises(SystemError_) as e:                       # transient: try again later
             with single_instance("bot one", lock_dir=tmp_path):
                 pass
         assert e.value.code == "ALREADY_RUNNING"
@@ -161,10 +161,11 @@ def test_schtasks_commands(tmp_path, capsys):
     assert "/ST" not in schtasks_create("x", "y", schedule="ONLOGON")
     assert schtasks_delete("x") == ["schtasks", "/Delete", "/TN", "x", "/F"]
     bat = write_runner_bat(tmp_path / "run.bat", tmp_path / "bot.py", python_exe=r"C:\Py\python.exe",
-                           args=["--env", "prod"], log_file=tmp_path / "bot.log")
+                           args=["--env", "prod", "FX%"], log_file=tmp_path / "bot.log")
     lines = bat.read_bytes().decode("ascii").split("\r\n")
-    assert lines[0] == "@echo off" and lines[1].startswith('cd /d "') and lines[3] == "exit /b %ERRORLEVEL%"
-    assert lines[2].startswith('"C:\\Py\\python.exe" "') and '"--env" "prod" >> "' in lines[2]
+    assert lines[0] == "@echo off" and lines[1].startswith('pushd "') and lines[3:6] == [
+        "set RC=%ERRORLEVEL%", "popd", "exit /b %RC%"]
+    assert lines[2].startswith('"C:\\Py\\python.exe" "') and '"--env" "prod" "FX%%" >> "' in lines[2]
 
 
 def test_webhook_server():
@@ -235,3 +236,53 @@ def test_file_queue(tmp_path):
     os.utime(q.root / "working" / f"{stuck['id']}.json", (old, old))
     assert q.requeue_stale(3600) == 1 and q.counts()["pending"] == 1
     assert q.get(item_id="nope") is None
+
+
+def test_watch_folder_ledger_failure_never_reruns_handler(tmp_path):
+    (tmp_path / "a.csv").write_text("x\n1\n")
+    calls = []
+    with pytest.raises(OSError):
+        watch_folder(tmp_path, calls.append, ledger=tmp_path / "missing" / "ledger.jsonl", settle_s=0,
+                     log=lambda m: None)
+    assert len(calls) == 1
+
+
+def test_file_queue_result_with_odd_keys(tmp_path):
+    import pandas as pd
+    q = FileQueue(tmp_path / "q")
+    q.put({"trade": "T1"})
+    assert q.process(lambda p: {pd.Timestamp("2026-03-06"): 1, ("a", 1): "x"}) == {"done": 1, "failed": 0, "retry": 0}
+    assert q.items("done").shape[0] == 1
+
+
+def test_loops_do_not_double_run_when_sleep_wakes_early():
+    c = FakeClock(1000.0)
+
+    def early_sleep(s):                       # long sleeps wake 2 ms early, like a real OS timer can
+        c.slept.append(s)
+        c.t += s - (0.002 if s > 1 else 0)
+
+    out = run_every(lambda: None, 60, run_for_s=130, sleep=early_sleep, clock=c)
+    starts = [o["started"] for o in out]
+    assert len(out) == 3 and len(set(starts)) == 3
+    t = {"now": datetime(2026, 3, 6, 8, 59, 30)}
+
+    def early(s):
+        t["now"] += timedelta(seconds=s - (0.002 if s > 1 else 0))
+
+    ran = []
+    run_on_cron(lambda: ran.append(t["now"]), "*/30 9-10 * * *", run_for_s=3 * 3600, now=lambda: t["now"],
+                sleep=early, log=lambda m: None)
+    assert [r.strftime("%H:%M") for r in ran] == ["09:00", "09:30", "10:00", "10:30"]
+
+
+def test_webhook_rejects_bad_content_length():
+    import http.client
+    with WebhookServer(lambda p, h: None) as hook:
+        for value in ("-1", "abc"):
+            conn = http.client.HTTPConnection("127.0.0.1", hook.port, timeout=5)
+            conn.putrequest("POST", "/webhook")
+            conn.putheader("Content-Length", value)
+            conn.endheaders()
+            assert conn.getresponse().status == 400
+            conn.close()

@@ -64,10 +64,17 @@ def write_delta(df, path, mode="append", partition_by=None, schema_mode=None, st
 
 def delta_merge(df, path, keys, storage_options=None, delete_missing=False):
     """Upsert into a Delta table: update rows matching on keys, insert new ones (delete_missing=True also
-    deletes target rows absent from df). Returns the merge metrics dict."""
+    deletes target rows absent from df). Duplicate or blank keys are refused. Returns the merge metrics dict."""
     import pyarrow as pa
     from deltalake import DeltaTable
+    from .robust import BusinessError
     keys = [keys] if isinstance(keys, str) else list(keys)
+    if df.duplicated(keys).any():
+        raise BusinessError(f"duplicate keys {keys} in merge data", code="DUPLICATE_KEYS")
+    if df[keys].isna().any().any():
+        raise BusinessError("blank key values in merge data (they never match, so rows multiply)", code="BLANK_KEYS")
+    if delete_missing and df.empty:
+        raise ValueError("delete_missing with an empty extract would empty the table: check the input")
     dt = DeltaTable(str(path), storage_options=_opts(path, storage_options))
     pred = " AND ".join(f't."{k}" = s."{k}"' for k in keys)
     m = dt.merge(source=pa.Table.from_pandas(df, preserve_index=False), predicate=pred, source_alias="s",

@@ -16,7 +16,7 @@ def parallel_map(fn, items, workers=4, processes=False):
     out = [None] * len(items)
     pool = ProcessPoolExecutor(workers, mp_context=multiprocessing.get_context("spawn")) if processes \
         else ThreadPoolExecutor(workers)                 # spawn = same behaviour as Windows everywhere
-    with pool:
+    try:
         futures = {pool.submit(fn, it): i for i, it in enumerate(items)}
         for f in as_completed(futures):
             i = futures[f]
@@ -24,6 +24,10 @@ def parallel_map(fn, items, workers=4, processes=False):
                 out[i] = {"item": items[i], "ok": True, "result": f.result(), "error": ""}
             except Exception as e:
                 out[i] = {"item": items[i], "ok": False, "result": None, "error": f"{type(e).__name__}: {e}"}
+    except BaseException:                                # Ctrl+C / stop: queued items must not still run
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise
+    pool.shutdown()
     return out
 
 
@@ -70,15 +74,13 @@ def memory_mb(df):
     return round(df.memory_usage(deep=True).sum() / 1e6, 2)
 
 
-def shrink(df, category_ratio=0.5, ints=True):
-    """Smaller DataFrame, no data change: integers downcast, text columns with few distinct values -> category.
-    Floats are left alone (money stays exact to the same precision)."""
+def shrink(df, category_ratio=0.5):
+    """Smaller DataFrame, same values: text columns with few distinct values -> category (group with
+    observed=True). Numbers are left alone (small integer types would overflow in later sums)."""
     out = df.copy()
     for c in out.columns:
         s = out[c]
-        if ints and pd.api.types.is_integer_dtype(s) and not isinstance(s.dtype, pd.api.extensions.ExtensionDtype):
-            out[c] = pd.to_numeric(s, downcast="integer")
-        elif (s.dtype == object or pd.api.types.is_string_dtype(s)) and len(s) and \
+        if (s.dtype == object or pd.api.types.is_string_dtype(s)) and len(s) and \
                 s.nunique(dropna=True) / len(s) <= category_ratio:
             out[c] = s.astype("category")
     return out

@@ -93,7 +93,7 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 | function | what it does |
 |---|---|
 | `to_number(series)` | '1,234.50' / '(10.00)' / 'S$ 12' -&gt; float; unparsable -&gt; NaN. |
-| `to_date(series, dayfirst=True)` | ISO strings parsed as ISO; everything else day-first, value by value. Unparsable -&gt; NaT. |
+| `to_date(series, dayfirst=True)` | ISO / year-first (2026/08/09) strings parsed year-first; everything else day-first, value by value. Unparsable -&gt; NaT. |
 | `excel_serial_to_date(series)` | 46087 -&gt; 2026-03-06 (Excel serial numbers that leak into CSV exports). |
 | `yyyymmdd_to_date(series)` | 20260306 / '20260306' -&gt; date (mainframe style). |
 | `cents(x)` | Money as integer cents; compare these, never floats. |
@@ -370,13 +370,13 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 
 | function | what it does |
 |---|---|
-| `load_holidays(path, col='date')` | Holiday dates from a CSV/Excel file with a 'date' column (maintain one per market). |
+| `load_holidays(path, col='date')` | Holiday dates from a CSV/Excel file with a 'date' column (maintain one per market). ISO / year-first text is read year-first, other text day-first; an unreadable date raises (a missed holiday = a wrong value date). |
 | `is_business_day(d, holidays=())` | Mon-Fri and not a holiday (dates, Timestamps or 'YYYY-MM-DD' text all work). |
 | `add_business_days(d, n, holidays=())` | T+n (or T-n) skipping weekends and holidays. |
 | `next_business_day(d, holidays=(), inclusive=False)` | Same day if inclusive and it is a business day, else the next one. |
 | `business_days_between(a, b, holidays=())` | Business days in (a, b] — ageing. Negative if b &lt; a. |
 | `adjust_business_day(d, holidays=(), convention='modified_following')` | Roll a non-business day: 'following', 'preceding', 'modified_following' (stay in month), 'modified_preceding'. |
-| `convert_tz(series, from_tz, to_tz, naive_result=True)` | Convert naive timestamps from one zone to another (e.g. NY trade times to SG): DST handled. |
+| `convert_tz(series, from_tz, to_tz, naive_result=True, ambiguous='raise', none…)` | Convert naive timestamps from one zone to another (e.g. NY trade times to SG): DST handled. The repeated hour when clocks go back raises unless ambiguous='NaT' (blank it) or a bool array (True = summer time). |
 | `month_end(d, business=False, holidays=())` | Last calendar (or business) day of d's month. |
 | `assert_before_cutoff(cutoff='17:30', tz='Asia/Singapore', now=None, grace_minutes=0)` | Raise RobotError(PAST_CUTOFF) if local time in tz is past the deadline. |
 | `today_in(tz='Asia/Singapore')` | Today's date in a named time zone (not the server's). |
@@ -390,7 +390,8 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 | `is_locked(path)` | True if the file is open/locked by someone else (Windows Excel lock). |
 | `archive(path, archive_dir)` | Move a processed input to archive_dir/YYYYMMDD_name; no-op if already there. |
 | `file_sha256(path)` | SHA-256 of a file (evidence that the input/output was not changed). |
-| `safe_filename(text, max_len=80)` | Text usable as a Windows file name. |
+| `safe_filename(text, max_len=80)` | Text usable as a Windows file name; a long name is shortened before its extension ('.pdf' is kept). |
+| `unique_path(folder, name, max_len=80)` | folder/&lt;safe name&gt; that does not exist yet: report.pdf, report_2.pdf, ... (never overwrite). |
 | `zip_files(paths, zip_path)` | Zip a list of files (flat) into zip_path. |
 | `unzip(zip_path, out_dir)` | Extract a zip; refuses entries that would escape out_dir. Returns extracted paths. |
 
@@ -438,8 +439,8 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 |---|---|
 | `set_tesseract(path)` | Point pytesseract at tesseract.exe, e.g. r'C:\Program Files\Tesseract-OCR\tesseract.exe'. |
 | `prepare_image(img, scale=2.0, grayscale=True, threshold=None, sharpen=False, bor…)` | Clean an image for OCR: flatten transparency, grayscale, upscale small text, optional sharpen and black/white threshold (0-255), white border. Path or PIL image -&gt; PIL image. |
-| `ocr_image(img, lang='eng', psm=6, prepare=True, config='')` | Image -&gt; text with Tesseract. psm: 6 one block, 4 columns, 11 sparse text, 7 one line. |
-| `ocr_data(img, lang='eng', psm=6, prepare=True, min_conf=-1)` | Words with position + confidence -&gt; DataFrame(text, conf, left, top, width, height, page_num, block, par, line, word). Coordinates are on the prepared image when prepare=True. |
+| `ocr_image(img, lang='eng', psm=6, prepare=True, config='')` | Image -&gt; text with Tesseract (every page of a multi-page TIFF, joined by a form feed). psm: 6 one block, 4 columns, 11 sparse text, 7 one line. |
+| `ocr_data(img, lang='eng', psm=6, prepare=True, min_conf=-1)` | Words with position + confidence -&gt; DataFrame(text, conf, left, top, width, height, page_num, block, par, line, word); page_num counts TIFF pages. Coordinates are on the prepared image when prepare=True. |
 | `ocr_lines(words)` | ocr_data words -&gt; one row per line: text, conf (mean), left, top, right, bottom (top-to-bottom order). |
 | `low_confidence(words, threshold=60)` | Words Tesseract was unsure about (conf &lt; threshold): route these to a human check. |
 | `ocr_regions(img, boxes, lang='eng', psm=7, prepare=True)` | Fixed-layout forms: {'field': (left, top, right, bottom)} in original image pixels -&gt; {'field': text}. |
@@ -470,12 +471,13 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 | function | what it does |
 |---|---|
 | `http_session(retries=3, backoff=0.5, timeout=30, verify=None, proxies=None, hea…)` | requests.Session with automatic retry + backoff (GET/PUT/DELETE; POST only if retry_post), a default timeout, corporate CA bundle (verify='C:/certs/corp.pem', or env REQUESTS_CA_BUNDLE) and proxies. |
-| `raise_for_status(status, url='', body='')` | Classified error for an HTTP status: 5xx/429 -&gt; SystemError_ (retry later), 401/403 -&gt; RobotError AUTH (fix credentials/permissions), other 4xx -&gt; BusinessError (fix the request/data). &lt; 400 -&gt; no error. |
+| `safe_url(url)` | URL without its query string, for logs and errors (query strings carry sig= / token= secrets). |
+| `raise_for_status(status, url='', body='')` | Classified error for an HTTP status: 5xx/408/423/425/429 -&gt; SystemError_ (retry later), 401/403 -&gt; RobotError AUTH (fix credentials/permissions), other 4xx -&gt; BusinessError (fix the request/data). |
 | `check_response(resp)` | raise_for_status for a requests.Response; returns resp when OK. |
 | `api_call(session, method, url, *, json_body=None, params=None, headers=None…)` | One request -&gt; parsed JSON (None for empty body), or the Response if expect_json=False. Network failures -&gt; SystemError_; SSL certificate problems -&gt; RobotError SSL (set verify= to the corporate CA). |
 | `api_get(session, url, params=None, **kw)` | GET -&gt; JSON (see api_call). |
 | `api_post(session, url, json_body=None, **kw)` | POST JSON -&gt; JSON (not retried unless the session was built with retry_post=True). |
-| `paginate(session, url, params=None, style='next_link', items_key=None, next…)` | Yield every record across pages. style: 'next_link' response holds the next URL (Graph/OData '@odata.nextLink', or next_key='links.next') 'link_header' HTTP Link: &lt;...&gt;; rel="next" (GitHub-style) 'page' page=1,2,... until an empty page (size_param='pageSize' sends the size) 'offset' offset/limit until a short page 'cursor' cursor token from response key cursor_key sent back as cursor_param items_key: where the list is ('value', 'data.items'); None = auto-detect common keys or a bare list. |
+| `paginate(session, url, params=None, style='next_link', items_key=None, next…)` | Yield every record across pages. style: 'next_link' response holds the next URL (Graph/OData '@odata.nextLink', or next_key='links.next') 'link_header' HTTP Link: &lt;...&gt;; rel="next" (GitHub-style) 'page' page=1,2,... until an empty page (size_param='pageSize' sends the size) 'offset' offset/limit until an empty page (a server may cap pages below `size`) 'cursor' cursor token from response key cursor_key sent back as cursor_param items_key: where the list is ('value', 'data.items'); None = auto-detect common keys or a bare list. |
 | `api_to_df(records, sep='.')` | List/generator of JSON records -&gt; flat DataFrame ('a.b' columns for nested fields). |
 | `TokenCache(…)` | OAuth2 client-credentials token that refreshes itself 60 s before expiry. Azure AD / Entra ID: token_url=f'https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token', scope='https://graph.microsoft.com/.default'. |
 | `  .get()` | Current access token (fetches a new one when missing or about to expire). |
@@ -492,7 +494,8 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 | `graph_download(session, drive_id, item_path, dest, base='https://graph.microsoft.…)` | Download a SharePoint/OneDrive file by path inside a drive. |
 | `graph_upload(session, drive_id, item_path, local, base='https://graph.microsoft…)` | Upload a file (&lt; 4 MB) to a SharePoint/OneDrive path; returns the drive item JSON. |
 | `graph_send_mail(session, sender, to, subject, html, cc=(), attachments=(), base='h…)` | Send mail from a mailbox the app may send as (Mail.Send). Attachments are file paths. |
-| `curl_to_request(curl_text, drop=('cookie', 'authorization', 'content-length', 'hos…)` | DevTools 'Copy as cURL' (bash or cmd) -&gt; dict(method, url, params, headers, json \| data) for api_call. Cookie/Authorization are dropped by default: authenticate with your own session, never paste secrets in code. |
+| `curl_to_request(curl_text, drop='cookie\|authorization\|token\|secret\|api[-_]?key\|sub…)` | DevTools 'Copy as cURL' (bash or cmd) -&gt; dict(method, url, params, headers, json \| data, dropped) for api_call. Headers / query params that look like secrets (cookies, tokens, keys, sig=) are dropped and listed in 'dropped': authenticate with your own session or config, never paste secrets into code. |
+| `har_sanitize(path, keep_post_data=False)` | Strip secrets from a HAR file in place: cookies, auth / token / key headers, sig= / token= values in URLs, request bodies (a login form holds your password) unless keep_post_data, response bodies holding tokens. Browser(record_har=...) runs this automatically. Returns the number of entries. |
 | `har_entries(path)` | HAR file (Playwright record_har, or Edge DevTools &gt; Network &gt; Export HAR (sanitized)) -&gt; DataFrame of calls: started, method, url, status, mime, type, size, ms. Find the JSON API behind a page. |
 | `har_json(path, url_re='.*')` | JSON bodies recorded in a HAR whose URL matches url_re: [{'url', 'method', 'status', 'data'}]. |
 
@@ -512,7 +515,8 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 
 | function | what it does |
 |---|---|
-| `Browser(…)` | `with Browser("shots") as b: b.goto(url); b.click("text=Export")`. Failures screenshot + raise SystemError_. record_har='run.har' saves all traffic; block=('image','font','media') speeds up heavy pages. |
+| `Browser(…)` | `with Browser("shots") as b: b.goto(url); b.click("text=Export")`. Failures screenshot + raise SystemError_. record_har='run.har' saves all traffic (secrets stripped unless har_raw=True); block=('image','font','media') speeds up heavy pages. In Jupyter use b.run(lambda page: ...) for raw Playwright calls. |
+| `  .run()` | fn(page) on the browser's thread: raw Playwright calls, e.g. b.run(lambda p: p.get_by_role("button").count()). |
 | `  .screenshot()` | Full-page PNG into screenshots_dir; returns path (None if it failed). |
 | `  .goto()` | Navigate (retried). wait_until: 'domcontentloaded' \| 'load' \| 'networkidle'. |
 | `  .wait()` | Wait for an element (retried once). state: visible \| attached \| hidden \| detached. |
@@ -521,25 +525,25 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 | `  .wait_idle()` | Wait until the network is quiet (no requests for 500 ms). |
 | `  .exists()` | True if the selector appears within ms. |
 | `  .click()` | Click (NOT retried: it may have submitted). |
-| `  .fill()` | Type into an input (replaces content). |
+| `  .fill()` | Type into an input (replaces content); blank values (None / NaN) type ''. |
 | `  .fill_form()` | Fill several inputs: {selector: value}. |
 | `  .select()` | Choose an &lt;option&gt; by value or label. |
 | `  .check()` | Tick / untick a checkbox or radio. |
 | `  .press()` | Press a key in an element, e.g. press('#search', 'Enter'). |
 | `  .hover()` | Hover (opens hover menus). |
-| `  .login()` | Fill credentials (never logged), submit, optionally wait for a post-login element. |
+| `  .login()` | Fill credentials (never logged; a recorded HAR is stripped of request bodies), submit, optionally wait for a post-login element. |
 | `  .download()` | Click something that starts a download; save it to save_to. |
 | `  .upload()` | Set a file on an &lt;input type=file&gt;. |
 | `  .popup()` | Click something that opens a new tab/window; returns that page (and makes it current if switch). |
 | `  .tabs()` | Open pages (tabs) in this context. |
 | `  .switch_tab()` | Make tab `index` current (-1 = newest). |
-| `  .accept_dialogs()` | Auto-answer alert/confirm/prompt boxes (default Playwright dismisses them); messages go to .dialogs. |
+| `  .accept_dialogs()` | Auto-answer alert/confirm/prompt boxes on every tab (Playwright dismisses them by default); their messages go to .dialogs. |
 | `  .text()` | Visible text of an element (retried once). |
 | `  .texts()` | Visible text of every match (list). |
 | `  .attr()` | Attribute value of the first match (e.g. href, value, data-id). |
 | `  .count()` | Number of elements matching sel. |
 | `  .html()` | Current page HTML (after JavaScript ran). |
-| `  .table()` | HTML &lt;table&gt; -&gt; list of dicts keyed by header text. |
+| `  .table()` | HTML &lt;table&gt; -&gt; list of dicts keyed by header text (last &lt;thead&gt; row, or a first row of &lt;th&gt;); row-header &lt;th&gt; cells count as data. |
 | `  .tables()` | Every &lt;table&gt; on the page -&gt; list of DataFrames (colspan/rowspan handled); match = regex filter. |
 | `  .frame()` | An iframe (legacy portals) to call .click/.fill on. |
 | `  .pdf()` | Save the page as PDF (headless Chromium/Edge only). |
@@ -604,7 +608,7 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 | `outlook_folder(path=('Inbox',), mailbox=None)` | Folder by path, e.g. ("Inbox", "Confirms"); mailbox = shared mailbox display name, else your own. |
 | `sender_smtp(mail)` | Sender's SMTP address, also for internal Exchange senders (whose SenderEmailAddress is an /O=... path). |
 | `outlook_mails(folder=None, unread_only=False, subject_re=None, sender_re=None, n…)` | Yield mail items newest first, filtered by unread / subject regex / sender regex. |
-| `outlook_save_attachments(mail, out_dir, pattern='.*\\.(xlsx\|xlsm\|xls\|csv\|pdf)$')` | Save attachments whose name matches pattern; returns paths. |
+| `outlook_save_attachments(mail, out_dir, pattern='.*\\.(xlsx\|xlsm\|xls\|csv\|pdf)$')` | Save attachments whose name matches pattern (safe names; two files with the same name never overwrite each other); returns paths. |
 | `outlook_mark_read(mail, read=True)` | Mark a mail read/unread. |
 | `outlook_mail_info(mail)` | Plain dict of a mail item: subject, sender, received, body text, attachment names. |
 | `outlook_move(mail, folder)` | Move a mail to another folder (e.g. 'Processed') so it is not picked up twice. |
@@ -623,13 +627,13 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 | `msg_attachments(path, out_dir, pattern='.*')` | Save .msg attachments whose name matches the regex; returns paths. |
 | `build_email(sender, to, subject, html=None, text=None, cc=(), bcc=(), attachme…)` | EmailMessage with a plain-text body and optional HTML alternative + file attachments. |
 | `save_eml(msg, path, draft=True)` | Write the message to .eml. draft=True adds X-Unsent so Outlook opens it as an unsent draft with a Send button: the robot prepares, a human reviews and sends. |
-| `smtp_send(msg, host, port=25, starttls=False, user=None, password=None, time…)` | Send through an SMTP relay. Refused recipients/sender -&gt; BusinessError, login failure -&gt; RobotError AUTH, connection problems -&gt; SystemError_. Not retried (a retry could send twice). Returns refused recipients. |
+| `smtp_send(msg, host, port=25, starttls=False, user=None, password=None, time…)` | Send through an SMTP relay. Refused recipients/sender or a permanent 5xx reply (e.g. a DLP block) -&gt; BusinessError, login failure -&gt; RobotError AUTH, 4xx / connection problems -&gt; SystemError_. Not retried (a retry could send twice). Returns refused recipients. |
 
 ### SQL databases (SQL Server / Fabric / SQLite) — `toolbank/db.py`
 
 | function | what it does |
 |---|---|
-| `odbc_conn_str(server, database, driver='ODBC Driver 18 for SQL Server', trusted=…)` | pyodbc connection string. trusted=True = your Windows login. authentication='ActiveDirectoryIntegrated' or 'ActiveDirectoryInteractive' for Entra ID (Azure SQL / Fabric). |
+| `odbc_conn_str(server, database, driver='ODBC Driver 18 for SQL Server', trusted=…)` | pyodbc connection string. trusted=True = your Windows login. authentication='ActiveDirectoryIntegrated' or 'ActiveDirectoryInteractive' for Entra ID (Azure SQL / Fabric); authentication='token' leaves login out for make_engine(url, token=...). |
 | `mssql_url(server, database, **odbc_kw)` | SQLAlchemy URL for SQL Server via pyodbc (odbc_kw as odbc_conn_str). |
 | `fabric_sql_url(endpoint, database, authentication='ActiveDirectoryInteractive', u…)` | Fabric Warehouse / Lakehouse SQL analytics endpoint (copy the 'SQL connection string' host from Fabric). The Lakehouse endpoint is read-only; write through a Warehouse or Delta (lake.py). |
 | `access_token_attrs(token)` | pyodbc attrs_before for an Entra ID access token (SQL_COPT_SS_ACCESS_TOKEN). |
@@ -638,13 +642,13 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 | `sql_read_chunks(engine, sql, params=None, chunksize=50000)` | Large SELECT as a generator of DataFrames. |
 | `sql_exec(engine, sql, params=None, dry_run=False)` | INSERT/UPDATE/DELETE/DDL in one transaction (commit, or roll back on error). params: dict, or a list of dicts to run once per row. Returns rows affected (driver-dependent for lists). |
 | `sql_write(df, table, engine, schema=None, if_exists='append', chunksize=1000…)` | DataFrame -&gt; table (if_exists: append \| replace \| fail) in one transaction. Returns rows written. |
-| `sql_upsert(df, table, keys, engine, schema=None, dry_run=False)` | Update rows that match on keys, insert the rest, in one transaction (via a temporary staging table, so it needs CREATE TABLE rights). SQL Server -&gt; MERGE; SQLite / PostgreSQL -&gt; ON CONFLICT (unique index on keys). |
+| `sql_upsert(df, table, keys, engine, schema=None, dry_run=False)` | Update rows that match on keys, insert the rest, in one transaction. A staging table copies the target's column types (unicode text, datetime2 kept) and is dropped again, so it needs CREATE TABLE rights. SQL Server -&gt; MERGE WITH (HOLDLOCK); SQLite / PostgreSQL -&gt; ON CONFLICT (needs a unique index on keys). |
 | `in_clause(name, values)` | Safe IN list: in_clause('id', [1, 2]) -&gt; (':id_0, :id_1', {'id_0': 1, 'id_1': 2}); then sql_read(e, f"select \* from t where id in ({frag})", params). |
 | `sql_tables(engine, schema=None)` | Table names in a database/schema. |
 | `sql_columns(engine, table, schema=None)` | Columns of a table -&gt; DataFrame(name, type, nullable). |
 | `watermark_get(path, key, default=None)` | Last value loaded (timestamp / id) for an incremental load, from a small JSON file. |
 | `watermark_set(path, key, value)` | Save the new watermark — call it only after the load fully succeeded. Atomic write. |
-| `read_since(engine, table, column, since=None, schema=None, columns='*')` | Rows where column &gt; since (None = all), ordered by column -&gt; (df, new_watermark). |
+| `read_since(engine, table, column, since=None, schema=None, columns='*')` | Rows where column &gt; since (None = all), ordered by column -&gt; (df, new_watermark as plain int/str/date). Date-time text watermarks are sent as datetimes (SQL Server DATETIME rejects 6-digit fractions as text). |
 
 ### Fabric OneLake & Delta tables — `toolbank/lake.py`
 
@@ -656,7 +660,7 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 | `delta_exists(path, storage_options=None)` | True if path holds a Delta table. |
 | `read_delta(path, columns=None, version=None, filters=None, storage_options=None)` | Delta table -&gt; DataFrame. version= reads an older snapshot (audit / time travel); filters=[('desk', '=', 'FX')] reads only matching files. |
 | `write_delta(df, path, mode='append', partition_by=None, schema_mode=None, stor…)` | DataFrame -&gt; Delta table. mode: append \| overwrite \| error \| ignore; schema_mode='merge' adds new columns. |
-| `delta_merge(df, path, keys, storage_options=None, delete_missing=False)` | Upsert into a Delta table: update rows matching on keys, insert new ones (delete_missing=True also deletes target rows absent from df). Returns the merge metrics dict. |
+| `delta_merge(df, path, keys, storage_options=None, delete_missing=False)` | Upsert into a Delta table: update rows matching on keys, insert new ones (delete_missing=True also deletes target rows absent from df). Duplicate or blank keys are refused. Returns the merge metrics dict. |
 | `delta_history(path, limit=None, storage_options=None)` | Versions of a Delta table (who/when/what operation) -&gt; DataFrame, newest first. |
 | `delta_vacuum(path, retention_hours=168, storage_options=None, dry_run=True)` | Files older than retention that vacuum would delete (dry_run=True) or deletes them. |
 
@@ -664,10 +668,10 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 
 | function | what it does |
 |---|---|
-| `single_instance(name, lock_dir=None)` | `with single_instance("recon_bot"):` stops a second copy running (scheduler fired again while the last run is still going). OS lock, freed automatically even if the robot crashes. Raises BusinessError ALREADY_RUNNING. |
+| `single_instance(name, lock_dir=None)` | `with single_instance("recon_bot"):` stops a second copy running (scheduler fired again while the last run is still going). OS lock, freed automatically even if the robot crashes. Raises SystemError_ ALREADY_RUNNING (try again later). |
 | `poll_until(check, timeout_s=600, every_s=10, what='condition', sleep=sleep, c…)` | Call check() every every_s until it returns something truthy (returned), else SystemError_ TIMEOUT. E.g. wait for an upstream file/report, a status flag in a table, an API job to finish. |
 | `wait_until(hhmm, now=<built-in method now of type object at 0x13005f8>, sleep…)` | Sleep until today's hh:mm (local time); returns at once if already past. Returns seconds waited. |
-| `new_files(folder, pattern='*', ledger=None, settle_s=2, retry_failed=False, …)` | One scan: files matching pattern that are complete (size steady for settle_s, not locked) and not yet in the ledger (by SHA-256, so a renamed copy is skipped too). Oldest first. Returns [(path, sha256)]. |
+| `new_files(folder, pattern='*', ledger=None, settle_s=2, retry_failed=False, …)` | One scan: files matching pattern that are complete (size steady for settle_s, readable) and not yet in the ledger (by SHA-256, so a renamed copy is skipped too). Oldest first. Returns [(path, sha256)]. |
 | `watch_folder(folder, handler, pattern='*', ledger=None, run_for_s=0, poll_s=30,…)` | File trigger: handler(path) for each new complete file. Ledger (default &lt;folder&gt;/.processed.jsonl) records done/failed so a restart never redoes a file. BusinessError -&gt; 'failed' (not retried); other errors are retried on the next scan. run_for_s=0 = one scan (best under Task Scheduler). Returns [{'file','status','error'}]. |
 | `run_every(fn, every_s, run_for_s=None, max_runs=None, align=True, stop_on_er…)` | Call fn() now and then every every_s seconds (align=True: on clock boundaries, e.g. :00/:15/:30/:45) until run_for_s or max_runs. Overrun -&gt; missed slots are skipped. Errors are logged, loop continues unless stop_on_error. Returns [{'run','started','ok','error'}]. |
 | `cron_parse(expr)` | '30 7 \* \* MON-FRI' -&gt; dict of allowed minutes/hours/days/months/weekdays (0 = Sunday). Also @daily etc. |
@@ -679,7 +683,7 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 | `schtasks_delete(name, dry_run=True)` | Remove a scheduled task. |
 | `schtasks_run(name, dry_run=False)` | Start a scheduled task now. |
 | `schtasks_query(name=None)` | Scheduled tasks (all, or one) -&gt; DataFrame with next/last run time, last result, status. |
-| `write_runner_bat(path, script, python_exe=None, args=(), workdir=None, log_file=None)` | .bat for Task Scheduler: cd to the robot folder, run python, append output to a log, pass the exit code on. |
+| `write_runner_bat(path, script, python_exe=None, args=(), workdir=None, log_file=None)` | .bat for Task Scheduler: go to the robot folder (UNC shares too), run python, append output to a log, pass the robot's exit code on. |
 | `WebhookServer(…)` | HTTP trigger: POST JSON to http://127.0.0.1:&lt;port&gt;/webhook -&gt; handler(payload, headers) -&gt; JSON reply. secret= checks the X-Signature HMAC (api.sign_body); token= checks an X-Token header. GET /health -&gt; ok. Keep handler fast (e.g. FileQueue.put and return). `with WebhookServer(fn, port=8085, secret=s) as hook:`. |
 | `  .start()` | Serve in a background thread; returns self (.url is the address). |
 | `  .serve_forever()` | Serve in the foreground until Ctrl+C. |
@@ -700,10 +704,10 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 |---|---|
 | `Flow(…)` | Flow("recon").step("load", read_sheet, "in.xlsx").step("fx", lambda d: d[d.desk == "FX"]).run() -&gt; output DataFrame; .trace = DataFrame(step, rows_in, rows_out, cols, ms, status, error); keep=True stores each step's output in .snapshots. |
 | `  .step()` | Add a step: fn(df, \*args, \*\*kwargs) -&gt; DataFrame (the first step gets no df if run() had none). |
-| `  .check()` | Stop the flow when predicate(df) is False, e.g. .check("has rows", lambda d: len(d) &gt; 0). |
+| `  .check()` | Stop the flow with a BusinessError when predicate(df) is False, e.g. .check("has rows", lambda d: len(d) &gt; 0). |
 | `count_rows(df, label='rows', log=print)` | Log rows x cols and pass df through: df.pipe(count_rows, "after filter"). |
 | `tee(df, path, **kw)` | Write df to path (.csv / .xlsx / .parquet) and pass it through, like an Output tool mid-workflow. |
-| `cached(path, fn, *args, refresh=False, **kwargs)` | Saved result if path exists, else fn(\*args, \*\*kwargs) saved to path (.parquet / .pkl / .csv). Speeds up development on slow inputs; refresh=True (or delete the file) rebuilds. Only load files you created. |
+| `cached(path, fn, *args, refresh=False, **kwargs)` | Saved result if path exists, else fn(\*args, \*\*kwargs) saved to path (.parquet / .pkl / .csv) and read back, so the first run and later runs see the same types. refresh=True (or delete the file) rebuilds. Speeds up development on slow inputs. Only load files you created. |
 
 ### Speed & size — `toolbank/perf.py`
 
@@ -714,7 +718,7 @@ not run by the tests. Never commit data, screenshots, HAR or browser-session fil
 | `timer(label='block', log=print)` | `with timer("load"):` logs elapsed ms; the yielded dict gets 'ms' at the end. |
 | `progress(iterable, total=None, every=100, label='', log=print, clock=monoto…)` | Pass items through, logging 'label 300/1,000 (30%) 52/s eta 0:13' every `every` items. |
 | `memory_mb(df)` | Memory used by a DataFrame in MB (deep: counts text). |
-| `shrink(df, category_ratio=0.5, ints=True)` | Smaller DataFrame, no data change: integers downcast, text columns with few distinct values -&gt; category. Floats are left alone (money stays exact to the same precision). |
+| `shrink(df, category_ratio=0.5)` | Smaller DataFrame, same values: text columns with few distinct values -&gt; category (group with observed=True). Numbers are left alone (small integer types would overflow in later sums). |
 
 ### VBA — `vba/*.bas`
 

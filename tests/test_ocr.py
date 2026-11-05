@@ -65,6 +65,16 @@ def test_ocr_pdf_hybrid(text_pdf, tess, tmp_path):
     assert out2["text"].tolist() == ["custom"] and seen
 
 
+def test_multipage_tiff(text_pdf, tess, tmp_path):
+    img = pdf_to_images(text_pdf, dpi=150)[0].convert("L")
+    second = img.transpose(0).transpose(0)                           # same page again
+    tif = tmp_path / "fax.tif"
+    img.save(tif, save_all=True, append_images=[second])
+    text = ocr_image(tif)
+    assert text.count("ACME BANK") == 2 and "\f" in text
+    assert sorted(ocr_data(tif)["page_num"].unique().tolist()) == [1, 2]
+
+
 def test_prepare_image_transparency():
     Image = pytest.importorskip("PIL.Image")
     im = Image.new("RGBA", (50, 20), (0, 0, 0, 0))
