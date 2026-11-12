@@ -51,7 +51,7 @@ def main(argv=None):
         return 3
     log.info("start", extra={"event": "start", "status": args.env, "dry_run": args.dry_run})
     try:
-        with single_instance(ROBOT, lock_dir=rd):      # scheduler fired twice -> second copy exits 6
+        with single_instance(ROBOT, lock_dir=rd.parent):   # one copy of the robot at a time, any date -> exit 6
             return run(args, cfg, rd, log, None if args.dry_run else cp)
     except RobotError as e:
         if e.code != "ALREADY_RUNNING":

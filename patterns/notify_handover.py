@@ -21,13 +21,12 @@ governance:
   - "Teams cards and logs carry counts, codes and file names, never customer names, accounts or amounts."
   - "The draft stays in the run folder next to the report, under the data retention rule."
 """
-import os
 import re
 from pathlib import Path
 
 import pandas as pd
 
-from toolbank import RobotError, build_email, df_to_html, get_secret, read_eml, save_eml, teams_message
+from toolbank import RobotError, build_email, df_to_html, get_secret, save_eml, teams_message
 
 ROBOT, DOMAIN = "fx_breaks", "bank.example"
 SENDER = f"{ROBOT}.robot@{DOMAIN}"                        # the robot's own mailbox, never a person's
@@ -69,31 +68,40 @@ def handover_draft(folder, business_date, status, counts, failures, report, owne
     return save_eml(msg, Path(folder) / f"{ROBOT}_{business_date}_handover.eml", draft=True)
 
 
-def status_card(business_date, status, counts, draft=None, secret="TEAMS_WEBHOOK_OPS", dry_run=False, post=None):
+def status_card(business_date, status, counts, draft=None, secret="TEAMS_WEBHOOK_OPS", dry_run=False):
     """Status-only Teams card for the operations channel: counts and the draft's file name, never data."""
     facts = {**counts, "hand-over": draft.name if draft else "none"}
     url = None if dry_run else get_secret(secret)
     return teams_message(url, subject_line(business_date, status, counts), facts, color=COLOUR[status],
-                         dry_run=dry_run, post=post)
+                         dry_run=dry_run)
 
 
 def hand_over(folder, business_date, counts, failures, report, *, owner, support, stopped=False,
-              secret="TEAMS_WEBHOOK_OPS", dry_run=False, post=None, log=print):
+              secret="TEAMS_WEBHOOK_OPS", dry_run=False, log=print):
     """End of every run: the draft if a person must act, then the card. Returns (status, draft or None)."""
     owner, support = internal_only(owner, required=True), internal_only(support)   # lists from config, every run
     status = run_status(counts["done"], counts["exceptions"], stopped)
     draft = (handover_draft(folder, business_date, status, counts, failures, report, owner, support)
              if status != "OK" else None)
     try:
-        status_card(business_date, status, counts, draft, secret=secret, dry_run=dry_run, post=post)
+        status_card(business_date, status, counts, draft, secret=secret, dry_run=dry_run)
     except Exception as e:                                # not retried; the draft on disk is still the hand-over
         log(f"status card not posted: {type(e).__name__}")
     return status, draft
 
 
+# --- demo ---
+
+
 def demo(tmp):
     """PARTIAL: a draft with the report attached, read back; the card holds counts only. FAILED before the report
     and a webhook that answers 500: logged, support copied, draft written. OK: card only. Bad recipients stop."""
+    import os
+    from functools import partial
+    from unittest import mock
+
+    from toolbank import read_eml
+
     failures = pd.DataFrame({"item": ["PAY-7", "PAY-9"], "code": ["PAST_CUTOFF", "BAD_IBAN"],
                              "message": ["past cut-off", "IBAN check digit wrong for Tan Ah Kow"]})
     report = tmp / f"{ROBOT}_report.xlsx"
@@ -111,14 +119,12 @@ def demo(tmp):
     assert [f["name"] for f in card["sections"][0]["facts"]] == [*counts, "hand-over"]
     assert "PAY-7" not in str(card) and "Tan Ah Kow" not in str(card)
 
-    os.environ["DEMO_TEAMS_WEBHOOK"] = "https://hook.invalid/demo"     # get_secret reads env vars first
     posts, failed = [], dict(counts, done=0, exceptions=0)
-    try:
+    webhook_500 = partial(teams_message, post=lambda url, json: posts.append(json) or 500)   # no network
+    with mock.patch.dict(os.environ, {"TEAMS_WEBHOOK_OPS": "https://hook.invalid/demo"}), \
+            mock.patch.dict(globals(), teams_message=webhook_500):              # both restored afterwards
         status, again = hand_over(tmp, "2026-11-25", failed, None, tmp / "never_written.xlsx", **cfg, stopped=True,
-                                  secret="DEMO_TEAMS_WEBHOOK", post=lambda url, json: posts.append(json) or 500,
                                   log=log.append)
-    finally:
-        os.environ.pop("DEMO_TEAMS_WEBHOOK", None)
     assert status == "FAILED" and len(posts) == 1 and log == ["status card not posted: RuntimeError"]
     mail = read_eml(again)
     assert again == draft and mail["cc"] == cfg["support"][0] and not mail["attachments"]   # replaced, not doubled

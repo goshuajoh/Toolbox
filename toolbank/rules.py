@@ -198,7 +198,8 @@ def _rules_frame(rules):
 
 
 def validate_rules(rules, df=None):
-    """Problems with a rules table ([] = OK): unknown operators, columns missing from df."""
+    """Problems with a rules table ([] = OK): unknown operators, blank values, and with df: columns missing from the
+    data and values the column's type cannot read (text for a number or date column, a reversed 'between')."""
     r = _rules_frame(rules)
     probs = []
     for _, row in r.iterrows():
@@ -208,12 +209,15 @@ def validate_rules(rules, df=None):
                          "becomes a formula: type eq, ne, gt, ge, lt, le)")
         if df is not None and row["column"] not in df.columns:
             probs.append(f"{row['code']}: column {row['column']!r} not in data")
-        elif op in OPS:
+        elif op in OPS and df is not None:
             try:                                                # the value against the column's type, no rows
-                condition(df.iloc[:0] if df is not None else pd.DataFrame({row["column"]: pd.Series(dtype=object)}),
-                          row["column"], op, row["value"])
+                condition(df.iloc[:0], row["column"], op, row["value"])
             except ValueError as e:
                 probs.append(f"{row['code']}: {e}")
+        elif op in _NEEDS_VALUE and _blank_value(row["value"]):    # without data: only what needs no column type
+            probs.append(f"{row['code']}: operator {op!r} needs a value (blank in the rule)")
+        elif op == "between" and len(_list(row["value"])) != 2:
+            probs.append(f"{row['code']}: 'between' needs two values, low and high, e.g. '100; 200'")
     return probs
 
 

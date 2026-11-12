@@ -10,9 +10,10 @@ from .privacy import redact
 _EXTRA_KEYS = ("event", "rows", "code", "item_id", "path", "count", "status", "ms")
 _STANDARD = set(vars(logging.LogRecord("", 0, "", 0, "", (), None))) | {"message", "asctime", "taskName"}
 _RESERVED = ("ts", "level", "run_id", "msg", "exc")
+_COUNTS = ("rows", "count", "ms")                       # numbers by name: never masked as account numbers
 
 
-def _clean(v):
+def _clean(v, mask_ints=True):
     """Extra values as JSON-safe, redacted data: text is masked (also inside dicts / lists), numpy and pandas
     scalars become plain numbers, NaN / inf become null, anything else is masked text."""
     if v is None or isinstance(v, bool):
@@ -20,7 +21,7 @@ def _clean(v):
     if isinstance(v, str):
         return redact(v)
     if isinstance(v, int):
-        return redact(str(v)) if abs(v) >= 10_000_000 else v     # 8+ digits: an account number, as in text
+        return redact(str(v)) if mask_ints and abs(v) >= 10_000_000 else v   # 8+ digits: an account number
     if isinstance(v, float):
         return v if math.isfinite(v) else None
     if isinstance(v, dict):
@@ -53,7 +54,7 @@ def get_logger(log_path, run_id=None, name="robot", console=True):
                  "run_id": run_id, "msg": redact(r.getMessage())}
             extras = [k for k in _EXTRA_KEYS if k in r.__dict__] + \
                      [k for k in r.__dict__ if k not in _STANDARD and k not in _EXTRA_KEYS and not k.startswith("_")]
-            d.update({k: _clean(r.__dict__[k]) for k in extras if k not in _RESERVED})
+            d.update({k: _clean(r.__dict__[k], mask_ints=k not in _COUNTS) for k in extras if k not in _RESERVED})
             if r.exc_info and r.exc_info[0] is not None:
                 d["exc"] = redact(self.formatException(r.exc_info))[-2000:]
             return json.dumps(d, default=lambda o: redact(str(o)))

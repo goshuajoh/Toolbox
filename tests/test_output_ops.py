@@ -389,7 +389,7 @@ def test_template_exit_codes(tmp_path, monkeypatch):
     m.cleanse = lambda df: None.x
     assert m.main(args) == 5                                               # a bug -> needs a fix
     del m.cleanse
-    with single_instance("my_robot", lock_dir=tmp_path / "work" / "my_robot" / "2026-03-06"):
+    with single_instance("my_robot", lock_dir=tmp_path / "work" / "my_robot"):
         assert m.main(args) == 6
     (cfg / "dev.yaml").write_text(f"workdir: {tmp_path / 'in.xlsx'}\n")              # work folder is a file
     assert m.main(args) == 3
@@ -567,11 +567,7 @@ def test_shared_fixes_second_review(tmp_path):
         with pytest.raises(RobotError) as e:
             is_locked(f)
     assert e.value.code == "NO_ACCESS"
-    sharing = PermissionError(13, "sharing violation")
-    sharing.winerror = 32
-    with mock.patch("os.open", side_effect=sharing):
-        assert is_locked(f) is True
-    with pytest.raises(ValueError, match="folder"):
+    with pytest.raises(RobotError, match="folder"):
         is_locked(tmp_path)
     log = get_logger(tmp_path / "r.jsonl", run_id="R", console=False)
     log.info("x", extra={"item_id": 40012345678, "rows": 5})
@@ -586,3 +582,53 @@ def test_shared_fixes_second_review(tmp_path):
     with pytest.raises(KeyError) as e:
         get_secret("TOOLBANK_TEST_NO_SUCH_SECRET")
     assert isinstance(e.value, RobotError) and classify(e.value).code == "NO_SECRET"
+
+
+def test_shared_fixes_third_review(tmp_path, monkeypatch):
+    from unittest import mock
+
+    import toolbank.api as api_mod
+    import toolbank.files as files_mod
+    sent = []
+
+    def post_then_parse():                                       # the request went out, the reply is not JSON
+        sent.append(1)
+        raise ValueError("Expecting value: line 1 column 1")
+    with pytest.raises(RobotError) as e:
+        attempt(post_then_parse, log=None, **RETRY_PROFILES["submit"])
+    assert e.value.code == "STEP_UNCONFIRMED" and not isinstance(e.value, BusinessError) and sent == [1]
+    cp = Checkpoint(tmp_path / "cp.json")
+    with mock.patch.object(Checkpoint, "mark_done", side_effect=OSError("share offline")):
+        with pytest.raises(RobotError) as e:
+            process_all(["A", "B"], lambda i: sent.append(i), checkpoint=cp, key=lambda i: i)
+    assert e.value.code == "CHECKPOINT_FAILED" and sent == [1, "A"]   # stops; B is not touched, A is not re-run
+    f = tmp_path / "in.xlsx"
+    f.write_text("x")
+    monkeypatch.setattr(files_mod, "_WINDOWS", True)
+    for err, expect in ((0, False), (2, False), (32, True)):
+        with mock.patch.object(files_mod, "_win_write_error", return_value=err):
+            assert is_locked(f) is expect
+    with mock.patch.object(files_mod, "_win_write_error", return_value=5), pytest.raises(RobotError) as e:
+        is_locked(f)
+    assert e.value.code == "NO_ACCESS"
+    monkeypatch.setattr(files_mod, "_WINDOWS", False)
+    log = get_logger(tmp_path / "r.jsonl", run_id="R", console=False)
+    log.info("x", extra={"rows": 12_000_000, "item_id": 40012345678})
+    rec = json.loads((tmp_path / "r.jsonl").read_text())
+    assert rec["rows"] == 12_000_000 and rec["item_id"] == "<account:***>"
+    with pytest.raises(BusinessError, match=r"stop at 17:15, 15 min before"):
+        assert_before_cutoff("17:30", now=datetime(2026, 11, 25, 17, 20, tzinfo=SG), grace_minutes=-15)
+    monkeypatch.setattr(api_mod, "api_call", lambda *a, **k: None)
+    with pytest.raises(RobotError) as e:
+        TokenCache("https://login.test/token", "id", "secret").get()
+    assert e.value.code == "AUTH"
+
+
+def test_rules_check_without_data(tmp_path):
+    rules = pd.DataFrame([{"code": "MID", "column": "amount", "op": "between", "value": "500; 1000"},
+                          {"code": "ODD", "column": "amount", "op": "between", "value": "5"},
+                          {"code": "GAP", "column": "amount", "op": "gt", "value": None}])
+    assert [p.split(":")[0] for p in validate_rules(rules)] == ["ODD", "GAP"]       # no column types needed
+    path = tmp_path / "rules.xlsx"
+    rules.iloc[:1].to_excel(path, index=False)
+    assert rules_from_excel(path)["code"].tolist() == ["MID"]                        # a numeric range loads

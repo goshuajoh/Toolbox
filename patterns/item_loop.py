@@ -8,27 +8,27 @@ tags: [items, failure]
 needs: []
 blocks: [BusinessError, Checkpoint, SystemError_, cents, get_logger, process_all, progress, safe_write_excel, synth]
 decisions:
-  - "In a finished run every item ends in one state: done (in the checkpoint), business exception or system failure, each failure a row in the report. A run that stops (SYSTEM_STREAK, a bug) leaves the rest for the re-run."
+  - "In a finished run every item ends in one state: done (in the checkpoint), business exception or system failure, each failure a row in the report. A run that stops (SYSTEM_STREAK, a bug, STEP_UNCONFIRMED) leaves the rest for the re-run."
   - "Checkpoint key = the business reference (payment id) trimmed and in capitals (ref_key), never the row number: a re-sorted or re-sent file still resumes right, and ' pay-1002' is the same payment as 'PAY-1002'. A blank or repeated reference is reported as MISSING_KEY / DUPLICATE_KEY, never skipped silently."
-  - "Wrong data raises BusinessError with a short code the owner can act on (MISSING_ACCOUNT, BAD_AMOUNT, NOT_IN_LEDGER, AMOUNT_MISMATCH): recorded, never retried, the loop goes on."
-  - "A failing environment raises SystemError_ with its own code (LEDGER_DOWN) or is a plain OSError / TimeoutError, which process_all treats the same: recorded as retryable and left for the re-run, not retried in this run. If a read must succeed in the same run, wrap it in attempt with RETRY_PROFILES['read'] inside the handler."
-  - "The re-run retries every failure, also a post that went through before its reply timed out. A handler that posts or pays must look the reference up before it sends (attempt with already_done=, the submit-once block); check_payment only reads."
+  - "Wrong data raises BusinessError with a short code the owner can act on (MISSING_ACCOUNT, BAD_AMOUNT, NOT_IN_LEDGER, AMOUNT_MISMATCH): recorded, not retried in this run, the loop goes on; the re-run reports it again until the data is fixed."
+  - "A failing environment raises SystemError_ with its own code (LEDGER_DOWN) or is a plain OSError / TimeoutError, which process_all treats the same: recorded as retryable and left for the re-run, not retried in this run. If a read must succeed in the same run, wrap it in attempt with RETRY_PROFILES['read'] inside the handler: 3 tries, then SystemError_ STEP_FAILED, recorded the same way."
+  - "The re-run retries every failure, business exceptions too, also a post that went through before its reply timed out or could not be read. So a handler that posts, pays or sends uses the idempotent_submit pattern (attempt with already_done=), which looks the reference up in the target before it sends; check_payment only reads."
+  - "Without already_done, RETRY_PROFILES['submit'] sends once and raises RobotError STEP_UNCONFIRMED when its check fails or the screen or network errors. process_all stops the run there (exit 5). The item is not in the checkpoint, so a re-run would send it again: a person checks the target first. A KeyError or ValueError while sending (reading the reply) is BAD_DATA instead, a business exception the re-run sends again: one more reason for already_done."
   - "Stop after 3 system failures in a row (max_consecutive_system=3): one or two blips do not stop a long queue, and a system that is down stops the run after 3 items instead of timing out on every one. A success or a business exception resets the count, so a system that fails every other item never trips it: watch the retryable count."
   - "A bug (TypeError, AttributeError) stops the run at once (exit 5): every item would fail the same way. A KeyError or ValueError counts as bad data (BAD_DATA), so check the fields you need and raise your own code: check_payment turns every error of converting the amount (TypeError, ValueError, OverflowError for an infinite one) into BAD_AMOUNT."
   - "Exit code from the failures: 3 if any is retryable (re-run, the checkpoint skips what is done), else 2 if any (send the report), else 0."
-  - "The report is deleted at the start and written at the end of every run (safe_write_excel: temp file and rename). After the last re-run it lists exactly the items still open; a clean run writes an empty one, so 'no exceptions' is on file. A run stopped by SYSTEM_STREAK (exit 3) or by a bug (exit 5) leaves no report: the log says why."
+  - "The report is deleted at the start and written at the end of every run (safe_write_excel: temp file and rename). After the last re-run it lists exactly the items still open; a clean run writes an empty one, so 'no exceptions' is on file. A run that stops (SYSTEM_STREAK, exit 3; a bug or STEP_UNCONFIRMED, exit 5) leaves no report: the log says why."
   - "progress() logs every 100 items (count, %, rate, time left): 50 lines for a 5,000 item queue, enough to spot a slowdown."
   - "Money is compared in cents (cents), never as floats."
 governance:
-  - "Logs and the report carry the reference and the code, never values: write 'amount differs from the ledger', not the two amounts. process_all logs each failure message (log=log.warning); get_logger masks account-like numbers as a second line of defence."
+  - "Logs and the report carry the reference and the code, never values: write 'amount differs from the ledger', not the two amounts. process_all logs each failure message (log=log.warning) redacted, and get_logger masks account-like numbers again, also in whole-number extras of 8+ digits. Redaction catches only NRIC/FIN, emails, IBANs and runs of 8+ digits (spaces allowed): an account written 123-45678-9 is not masked, and the report's message column is not redacted at all. Keep values out of the messages."
   - "A library error message can hold a value (could not convert string to float: '1,234 USD'): catch it where you convert and raise your own BusinessError without the value, as check_payment does for the amount."
   - "ACTIONS (code -> what the owner does next) is part of the exception table the process owner signs in design: a new code needs their sign-off."
-  - "The checkpoint holds references only. Keep it in the dated run folder (run_dir) with the log, under the same retention rule; delete it only to process a business date again on purpose."
+  - "The checkpoint holds references only. Keep it in the dated run folder (run_dir) with the log, under the same retention rule. Delete it (or Checkpoint(path).discard(ref) for one item) only to process again on purpose."
 """
 import pandas as pd
 
-from toolbank import (BusinessError, Checkpoint, SystemError_, cents, get_logger, process_all, progress,
-                      safe_write_excel, synth)
+from toolbank import BusinessError, Checkpoint, cents, process_all, progress, safe_write_excel
 
 ACTIONS = {"MISSING_ACCOUNT": "Add the account number in the source file",      # signed off by the process owner
            "BAD_AMOUNT": "Correct the amount in the source file",
@@ -77,7 +77,8 @@ def write_exceptions(failures, path):
 
 def run_items(items, handle, run_folder, log, every=100):
     """Work each open item once (items: a list of dicts with a 'ref'), resuming from the checkpoint; returns the
-    exit code. Stops with SystemError_ SYSTEM_STREAK (exit 3) or the bug that stopped it (exit 5)."""
+    exit code. Stops with SystemError_ SYSTEM_STREAK (exit 3), or with the bug or RobotError that stopped it, e.g.
+    STEP_UNCONFIRMED (exit 5)."""
     report = run_folder / "exceptions.xlsx"
     report.unlink(missing_ok=True)                        # a report on file always belongs to a finished run
     cp = Checkpoint(run_folder / "checkpoint.json")
@@ -90,10 +91,15 @@ def run_items(items, handle, run_folder, log, every=100):
     return exit_code(failures)
 
 
+# --- demo ---
+
+
 def demo(tmp):
     """8 payments: a blank account, a text amount, an amount 1 cent off the ledger, one ledger time-out, and
     PAY-1002 sent twice (' pay-1002'). Run 1 exits 3; the re-run, on the file re-sorted, handles only the open items
     and exits 2; after the owner's fix it exits 0. A ledger that is down stops the loop after 3 items."""
+    from toolbank import SystemError_, get_logger, synth
+
     df = synth(8, {"n": ("seq", 1001), "account": ("pattern", "999-99999-9"), "amount": ("number", 10, 5000)})
     items = [{"ref": f"PAY-{r.n}", "account": r.account, "amount": r.amount} for r in df.itertuples()]
     book = {item["ref"]: item["amount"] for item in items}

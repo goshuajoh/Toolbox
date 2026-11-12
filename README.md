@@ -241,7 +241,7 @@ without them.
 | `error_where(exc)` | 'function (file.py:123)' of the deepest frame in your own code (not pandas, the standard library or toolbank) where exc was raised; the deepest frame of all when none is yours. '' without a traceback. |
 | `error_info(exc)` | Plain dict for logs and exception reports: type, code, message, retryable, where (see error_where), context (ids given to RobotError). Works for any exception; plain errors are classified first. |
 | `retry(max_attempts=3, base_delay=1.0, backoff=2.0, retry_on=(SystemError…)` | Decorator: call the function up to max_attempts times (so 2 retries by default) with exponential backoff + jitter. Use on reads only, never around sends/submits. log=print (or logger.warning) reports each retry: 'retry 1/2 in 2.1s after OSError: ...'. |
-| `attempt(action, verify=None, *, tries=3, wait_s=2.0, backoff=1.0, verify_t…)` | One robot step done safely: action(), then wait until verify() is truthy (the screen / file / record shows it worked). On an error or a failed check: recover() (e.g. press Esc, close a pop-up, re-focus the window), wait, try again, up to `tries`; then each of `fallbacks` (another way to do the same thing: keyboard instead of mouse, API instead of screen) once; then on_give_up() (screenshot, close the app) and SystemError_ STEP_FAILED with every try in .context['history'] (process_all counts it towards its stop-after-N rule; the template exits 3). already_done() is checked before every try, also the first: if it is truthy the step is not repeated. Give it for anything that must not happen twice (submit, pay, send) or keep tries=1. BusinessError (the data is wrong) and a non-retryable RobotError (AUTH) stop at once. Returns action()'s result (None when already done). Profiles: attempt(click, verify, \*\*RETRY_PROFILES['ui']). |
+| `attempt(action, verify=None, *, tries=3, wait_s=2.0, backoff=1.0, verify_t…)` | One robot step done safely: action(), then wait until verify() is true (the screen / file / record shows it worked). On a failure: recover() (e.g. Esc, close a pop-up, re-focus the window), wait, try again, up to `tries`; then each of `fallbacks` (another way to do the same thing: keyboard instead of mouse, API instead of screen) once; then on_give_up() (screenshot, close the app) and SystemError_ STEP_FAILED with every try in .context['history'] (process_all counts it towards its stop-after-N rule; the template exits 3). What is retried: errors from the screen, file or network. Not retried: BusinessError (data is wrong), a non-retryable RobotError (AUTH), a bug (TypeError, AttributeError...: raised at once, exit 5) and KeyError / ValueError (classified as BusinessError BAD_DATA). Anything that must not happen twice (post, pay, send) is irreversible=True (RETRY_PROFILES['submit']): it runs once unless already_done is given, and if it cannot be confirmed it raises RobotError STEP_UNCONFIRMED, which stops the run (not re-run: a person checks the target). already_done() is called before every try, the first too; it returns True / False and raises only when it cannot tell, which stops the step (DONE_CHECK_FAILED) instead of repeating it. verify / already_done may return a DataFrame (empty = no). Log lines are redacted. Returns action()'s result (None when already done). Profiles: attempt(click, verify, \*\*RETRY_PROFILES['ui']). |
 | `process_all(items, handler, max_consecutive_system=3, checkpoint=None, key=str…)` | Run handler(item) for each item and record what happened, so the robot can report and resume: BusinessError (data is wrong) -&gt; recorded with retryable False and skipped; SystemError_ / OSError (environment) -&gt; recorded with retryable True, and N in a row -&gt; abort with SYSTEM_STREAK naming the last error; any other RobotError or a plain bug (AttributeError, auth failure, bad SQL...) -&gt; stop at once, since every item would fail the same way (the error carries item= and where=). Only successes are written to the optional Checkpoint, so a re-run retries every failure and reports it again until it is fixed; with a checkpoint a blank key or a key repeated in the same run is recorded as MISSING_KEY / DUPLICATE_KEY, never silently skipped. log=print reports each failure as it happens. Returns (done_items, failures_df) with columns item, code, message, type, where, retryable: failures.retryable.any() -&gt; re-run later (exit 3); other failures -&gt; report to the owner (exit 2). |
 | `Checkpoint(…)` | Remember done keys in a JSON file so a re-run resumes. Key = business id, never row number. |
 | `  .discard()` | Forget one key (e.g. a held submit the target now confirms), written the same safe way. |
@@ -441,7 +441,7 @@ without them.
 | `truthy(v)` | 'Y'/'Yes'/'TRUE'/'1'/'on'/'x' -&gt; True, 'N'/'No'/'0'/''/None -&gt; False. |
 | `feature_flag(name, cfg=None, default=False, env_prefix='FLAG_')` | On/off switch: env var FLAG_&lt;NAME&gt; beats cfg[name] beats default (e.g. FLAG_SEND_EMAIL=0 for a test run). |
 | `condition(df, column, op, value=None, case=False)` | Boolean mask for one condition, e.g. condition(df, 'ccy', 'in', 'USD,SGD'). Blanks (NA, '' or spaces) never match, also not 'not in' / '!=' / 'not contains' / 'is false'; only 'is null' matches them. Text comparisons ignore case unless case=True. Lists ('in', 'between') split on ',' or, if present, on ';' (use ';' for numbers with thousands commas: '1,000; 2,000'). A value the column cannot read (text for a number or date column) raises ValueError instead of never matching. Ops: see OPS. |
-| `validate_rules(rules, df=None)` | Problems with a rules table ([] = OK): unknown operators, columns missing from df. |
+| `validate_rules(rules, df=None)` | Problems with a rules table ([] = OK): unknown operators, blank values, and with df: columns missing from the data and values the column's type cannot read (text for a number or date column, a reversed 'between'). |
 | `apply_rules(df, rules, prefix='flag_', flags_col='flags', case=False)` | Apply a rules table: columns code, column, op, value (+ optional active, severity, description). Rows with the same code are ANDed. Adds one bool column per code, 'flags' ('CODE1;CODE2') and 'flags_count'. |
 | `rules_from_excel(path, sheet=0)` | Load a rules sheet (code \| column \| op \| value \| active \| description) and check its operators. Type operators as words in Excel (eq, ne, gt, ge, lt, le, in, contains, is blank): '=' starts a formula. |
 | `flag_summary(df, prefix='flag_')` | Count of rows per flag, highest first. |
@@ -546,7 +546,7 @@ without them.
 | `adjust_business_day(d, holidays=(), convention='modified_following')` | Roll a non-business day: 'following', 'preceding', 'modified_following' (stay in month), 'modified_preceding'. |
 | `convert_tz(series, from_tz, to_tz, naive_result=True, ambiguous='raise', none…)` | Convert naive timestamps from one zone to another (e.g. NY trade times to SG): DST handled. The repeated hour when clocks go back raises unless ambiguous='NaT' (blank it) or a bool array (True = summer time). |
 | `month_end(d, business=False, holidays=())` | Last calendar (or business) day of d's month. |
-| `assert_before_cutoff(cutoff='17:30', tz='Asia/Singapore', now=None, grace_minutes=0)` | Raise RobotError(PAST_CUTOFF) if local time in tz is past the deadline. |
+| `assert_before_cutoff(cutoff='17:30', tz='Asia/Singapore', now=None, grace_minutes=0, bu…)` | Minutes left before the cut-off (time of day in tz), else BusinessError PAST_CUTOFF: that item is handed over, never submitted late. business_date= also refuses a run on a later day (a Monday re-run for Friday's business date is past Friday's cut-off). |
 | `today_in(tz='Asia/Singapore')` | Today's date in a named time zone (not the server's). |
 
 ### Files — `toolbank/files.py`
@@ -555,7 +555,7 @@ without them.
 |---|---|
 | `wait_for_file(pattern, timeout_s=600, poll_s=10, stable_s=10, min_mtime=None)` | Block until a file matching the glob exists, is newer than min_mtime (datetime), and has stopped growing. |
 | `newest_file(pattern)` | Most recently modified file matching a glob, or None. |
-| `is_locked(path)` | True if the file is open/locked by someone else (Windows Excel lock). A missing file is not locked, and checking never creates it. |
+| `is_locked(path)` | True if the file is open/locked by someone else (Windows Excel lock). A missing file is not locked, and checking never creates it. The check needs modify rights: without them RobotError NO_ACCESS (fix the access, do not wait); a folder -&gt; RobotError NOT_A_FILE. |
 | `archive(path, archive_dir)` | Move a processed input to archive_dir/YYYYMMDD_name; no-op if already there. |
 | `file_sha256(path)` | SHA-256 of a file (evidence that the input/output was not changed). |
 | `safe_filename(text, max_len=80)` | Text usable as a Windows file name; a long name is shortened before its extension ('.pdf' is kept). |
@@ -576,7 +576,7 @@ without them.
 | `redact(text, patterns=[('nric', '\\b[STFGM]\\d{7}[A-Z]\\b'), ('email', '\…)` | Mask NRIC/FIN, emails, IBANs, 8-19 digit numbers. Reference codes like GL-00012345 survive. |
 | `redact_frame(df, cols)` | Replace whole columns with '\*\*\*' (before sharing a sample). |
 | `shape_of(v)` | 'GL-000123' -&gt; 'AA-999999' (A upper, a lower, 9 digit). |
-| `describe_shape(df)` | Column type, null %, uniqueness, pattern / length / rounded range — no cell values. Safe to paste into AI. |
+| `describe_shape(df)` | Column type, null %, uniqueness and a shape per column: a text pattern ('AA-999999'), a length range, or for numbers only the size ('11 digits, decimals, negatives'), never a value. Review it before you share it and follow your bank's data and AI-use policy: column names and rare patterns can still identify things. |
 | `fake_from_pattern(pattern, rng)` | 'GL-999999' -&gt; 'GL-482913' style fake value. |
 | `synth(n, spec, seed=42)` | Fake rows. spec = {"ref": ("pattern", "GL-999999"), "amt": ("number", -1e4, 1e4), "d": ("date", "2026-01-01", "2026-12-31"), "ccy": ("choice", ["SGD", "USD"]), "id": ("seq", 1)}. |
 
@@ -584,10 +584,10 @@ without them.
 
 | function | what it does |
 |---|---|
-| `fingerprint(values)` | Short SHA-256 of a dict of proposed values; detects edits by the checker. |
+| `fingerprint(values)` | Short SHA-256 of a dict of proposed values; detects edits by the checker. Blank values are left out, so a field another proposal has (an empty cell in this row) does not change it; blanking a filled value does. |
 | `propose(path, actions, protect_password=None)` | Maker: write actions to an Excel sheet with decision=PENDING and a dropdown for the checker. actions = [{"action_id": "T1:AFFIRM", "action": "AFFIRM", "trade_id": "T1", "price": 101.25}, ...] |
-| `read_decisions(path)` | Checker read-back: DataFrame with an 'ok' column (APPROVED + checker id + fingerprint intact) and 'why'. |
-| `approved_actions(path)` | (approved action_ids, rejected/pending action_ids) — execute only the first list. |
+| `read_decisions(path, maker=None, approvers=None)` | Checker read-back: DataFrame with an 'ok' column and 'why': OK only if APPROVED, a checker id is filled in, the row is untouched (id, action and values match the fingerprint) and its action_id appears once. Four eyes: maker = the robot's / maker's id(s), which may not approve (SAME_PERSON); approvers = the ids allowed to approve (NOT_AUTHORISED otherwise). Without both this is not a four-eyes control on its own. Ids come back as text. |
+| `approved_actions(path, maker=None, approvers=None)` | (approved action_ids, rejected/pending action_ids) — execute only the first list. Pass maker= and approvers= for a four-eyes check (see read_decisions). |
 
 ### Word & PDF — `toolbank/docs.py`
 
@@ -627,7 +627,8 @@ without them.
 | `yaml_load(text)` | YAML text -&gt; Python, like yaml.safe_load but with YAML 1.2 numbers and booleans: '00123' and '01' stay text, NO / on / yes stay text, only true / false are booleans. Use it for every config and recipe file. |
 | `load_config(config_dir='config', env=None, env_prefix='BOT_')` | default.yaml, then &lt;env&gt;.yaml merged on top (nested sections key by key), then BOT_&lt;KEY&gt; environment variables on top: BOT_RETRIES=3 -&gt; cfg['retries'] = 3 (typed like YAML), BOT_DB\_\_HOST=x -&gt; cfg['db']['host']. Returns dict (cfg['env'] = the environment name). |
 | `require(cfg, *keys)` | Raise a clear error if config keys are missing. |
-| `get_secret(name, service='robot')` | Secret from env var, else Windows Credential Manager / OS keyring (pip install keyring). Never hard-code. |
+| `MissingSecret(…)` | A secret that is not set: an access problem for the access admin (RobotError NO_SECRET, exit 5), not bad data. Still a KeyError, so existing `except KeyError` code keeps working. |
+| `get_secret(name, service='robot')` | Secret from an environment variable, else the Windows Credential Manager / OS keyring (pip install keyring). Not a vault client: for a bank vault add an adapter, and leave the env var unset in production. Never hard-code. Missing -&gt; MissingSecret (a RobotError NO_SECRET). |
 
 ### Notify (Teams) — `toolbank/notify.py`
 
@@ -686,7 +687,7 @@ without them.
 |---|---|
 | `Browser(…)` | `with Browser("shots") as b: b.goto(url); b.click("text=Export")`. Failures screenshot + raise SystemError_. record_har='run.har' saves all traffic (secrets stripped unless har_raw=True); block=('image','font','media') speeds up heavy pages. In Jupyter use b.run(lambda page: ...) for raw Playwright calls. |
 | `  .run()` | fn(page) on the browser's thread: raw Playwright calls, e.g. b.run(lambda p: p.get_by_role("button").count()). |
-| `  .screenshot()` | Full-page PNG into screenshots_dir, named &lt;time&gt;_&lt;n&gt;_&lt;label&gt;.png so a re-run never overwrites earlier evidence; returns path (None if it failed). |
+| `  .screenshot()` | Full-page PNG into screenshots_dir, named &lt;time&gt;_&lt;pid&gt;_&lt;n&gt;_&lt;label&gt;.png so a re-run never overwrites earlier evidence; returns path (None if it failed). |
 | `  .goto()` | Navigate (retried). wait_until: 'domcontentloaded' \| 'load' \| 'networkidle'. |
 | `  .wait()` | Wait for an element (retried once). state: visible \| attached \| hidden \| detached. |
 | `  .wait_text()` | Wait until some element shows this text. |

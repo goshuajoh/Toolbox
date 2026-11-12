@@ -211,9 +211,13 @@ def attempt(action, verify=None, *, tries=3, wait_s=2.0, backoff=1.0, verify_tim
             if not e.retryable:
                 raise
             history.append({"route": route, "try": n, "outcome": "error", "error": f"{type(e).__name__}: {e}"[:300]})
-        except _BUGS:
-            raise                                             # a bug: every try would fail the same way
-        except (KeyError, ValueError) as e:
+        except (*_BUGS, KeyError, ValueError) as e:
+            if irreversible and already_done is None:         # it may have gone out before the error: a person checks
+                raise RobotError(f"{name}: {type(e).__name__} after the step started; it may have happened: check the "
+                                 "target before running it again", code="STEP_UNCONFIRMED", step=name,
+                                 history=history) from e
+            if isinstance(e, _BUGS):
+                raise                                         # a bug: every try would fail the same way
             raise classify(e) from e                          # bad data, not a slow screen
         except Exception as e:
             history.append({"route": route, "try": n, "outcome": "error", "error": f"{type(e).__name__}: {e}"[:300]})
@@ -288,9 +292,6 @@ def process_all(items, handler, max_consecutive_system=3, checkpoint=None, key=s
                 continue
         try:
             handler(item)
-            done.append(item); streak = 0
-            if checkpoint is not None:
-                checkpoint.mark_done(k)
         except Exception as e:
             err = classify(e)
             info = error_info(e)
@@ -312,6 +313,14 @@ def process_all(items, handler, max_consecutive_system=3, checkpoint=None, key=s
                 if streak >= max_consecutive_system:
                     raise SystemError_(f"{streak} consecutive system failures; last: {info['type']}: {err.message}",
                                        code="SYSTEM_STREAK", last_item=k, where=info["where"]) from e
+            continue
+        done.append(item); streak = 0
+        if checkpoint is not None:
+            try:
+                checkpoint.mark_done(k)
+            except OSError as e:                          # done but not recorded: a re-run would do it again
+                raise RobotError(f"{k} was done but the checkpoint could not be written: {type(e).__name__}; fix the "
+                                 "folder before re-running", code="CHECKPOINT_FAILED", item=k) from e
     return done, pd.DataFrame(failures, columns=_FAILURE_COLS)
 
 

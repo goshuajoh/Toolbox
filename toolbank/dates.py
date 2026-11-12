@@ -140,7 +140,8 @@ def assert_before_cutoff(cutoff="17:30", tz="Asia/Singapore", now=None, grace_mi
     if business_date is not None and now.date() < _d(business_date):
         return int((limit - now).total_seconds() // 60) + 24 * 60 * (_d(business_date) - now.date()).days
     if now > limit:
-        raise BusinessError(f"past cut-off {cutoff} {tz}; now {now:%H:%M}", code="PAST_CUTOFF")
+        margin = f" (stop at {limit:%H:%M}, {-grace_minutes} min before)" if grace_minutes < 0 else ""
+        raise BusinessError(f"past cut-off {cutoff} {tz}{margin}; now {now:%H:%M}", code="PAST_CUTOFF")
     return int((limit - now).total_seconds() // 60)
 
 

@@ -6,10 +6,10 @@ when: >-
   list): take it only when it is the business date's file, complete and closed, and reject it whole when it is wrong.
 tags: [input, controls]
 needs: []
-blocks: [RETRY_PROFILES, BusinessError, MissingColumns, SystemError_, archive, assert_totals_match, assert_unique, attempt, check_schema, cleanse, control_totals, file_sha256, is_locked, read_any, standard_columns, to_date, to_number, wait_for_file]
+blocks: [RETRY_PROFILES, BusinessError, MissingColumns, RobotError, SystemError_, archive, assert_totals_match, assert_unique, attempt, check_schema, cleanse, control_totals, file_sha256, is_locked, read_any, standard_columns, to_date, to_number, wait_for_file]
 decisions:
   - "The business date's file only: wait_for_file with min_mtime = midnight of that date, so yesterday's file left in the folder is never taken again. No file within 1 h (timeout_s=3600) is SystemError_ FILE_TIMEOUT: exit 3, re-run or chase the sender. One file per run: if two match, the newest is taken; for several files a day use watch_folder."
-  - "Complete: the size must stay the same for 30 s (stable_s=30, checked every 10 s); a 0-byte file never counts as arrived. Closed: is_locked checked 5 times, 10 s apart and doubling (RETRY_PROFILES['file_lock'], 150 s in all), then SystemError_ STEP_FAILED, exit 3. is_locked opens the file for append, so the robot account needs modify rights on the inbox (archive needs them too)."
+  - "Complete: the size must stay the same for 30 s (stable_s=30, checked every 10 s); a 0-byte file never counts as arrived. Closed: is_locked checked 5 times, 10 s apart and doubling (RETRY_PROFILES['file_lock'], 150 s in all), then SystemError_ STEP_FAILED, exit 3. is_locked opens the file for append, so the robot account needs modify rights on the inbox (archive needs them too). Without them is_locked raises RobotError NO_ACCESS: not retried, exit 5, fix the access. The robot does not wait 150 s for a lock that is not there."
   - "Read every column as text (dtype=str), then convert only the amount and the value date (to_number, to_date): account numbers keep their leading zeros and long references do not turn into floats."
   - "Header variants go through ALIASES (standard_columns, which also forgives case, spaces and punctuation: 'VALUE_DATE'); then all four standard names must be there. read_any(required=) alone would reject another name ('Val Dt'), so it is not used here."
   - "Reject the whole file with a BusinessError and a code (exit 2, tell the owner): MISSING_COLUMNS (also two columns for one name), UNREADABLE (no header, an unknown file type, a broken or password-protected workbook), EMPTY_INPUT (no rows once wholly blank rows such as ',,,' are dropped), BAD_VALUES (a blank ref, or an amount or date that is blank or does not parse), DUPLICATE_KEY (assert_unique on ref trimmed and in capitals, checked after BAD_VALUES so two blank refs are not called duplicates), WRONG_TYPES, TOTALS_MISMATCH. One bad row usually means the export changed; processing the rest would hide that. A broken workbook raises zipfile.BadZipFile, which the template would call a bug (exit 5), so it is caught as UNREADABLE."
@@ -22,12 +22,8 @@ governance:
   - "ALIASES is configuration the process owner signs off: a new header spelling is a reviewed change, not a quiet code fix."
   - "The archive keeps the file as YYYYMMDD_name, the input evidence for audit, under the bank's retention rule. archive() keeps the day's first file of a name, so a second one stays in the inbox as ARCHIVE_EXISTS for a person to check."
 """
-import os
-import time
 import zipfile
 from datetime import date, datetime
-
-import pandas as pd
 
 from toolbank import (RETRY_PROFILES, BusinessError, MissingColumns, SystemError_, archive, assert_totals_match,
                       assert_unique, attempt, check_schema, cleanse, control_totals, file_sha256, is_locked, read_any,
@@ -38,17 +34,17 @@ ALIASES = {"ref": ["Reference", "Txn Ref", "Payment Ref"], "account": ["Account 
 SCHEMA = {"ref": "text", "account": "text", "amount": "number", "value_date": "date"}
 
 
-def wait_for_input(pattern, day=None, timeout_s=3600, stable_s=30, poll_s=10, locked=is_locked, log=print,
-                   sleep=time.sleep):
-    """The file of business date `day` (a date, today if None) once complete and closed; else SystemError_ (exit 3)."""
+def wait_for_input(pattern, day=None, timeout_s=3600, stable_s=30, poll_s=10, log=print):
+    """The file of business date `day` (a date, today if None) once complete and closed; else SystemError_ (exit 3),
+    or RobotError NO_ACCESS (exit 5) when the robot account cannot modify it."""
     since = datetime.combine(day or date.today(), datetime.min.time())
     path = wait_for_file(pattern, timeout_s=timeout_s, poll_s=poll_s, stable_s=stable_s, min_mtime=since)
 
     def closed():
-        if locked(path):
+        if is_locked(path):                               # no modify rights: RobotError NO_ACCESS, not retried
             raise SystemError_("the input is open in another program", code="FILE_LOCKED", file=path.name)
 
-    attempt(closed, name=f"open {path.name}", log=log, sleep=sleep, **RETRY_PROFILES["file_lock"])
+    attempt(closed, name=f"open {path.name}", log=log, **RETRY_PROFILES["file_lock"])
     return path
 
 
@@ -99,13 +95,25 @@ def archive_if_final(path, evidence, exit_code, archive_dir):
     return target
 
 
+# --- demo ---
+
+
 def demo(tmp):
     """Today's file is taken, yesterday's is not; other headers give the same totals; a file kept open gives up
-    after 150 s; empty, headerless, unreadable, duplicate and bad files are rejected by code; archive when final."""
+    after 150 s, a file the robot may not modify stops at once; empty, headerless, unreadable, duplicate and bad
+    files are rejected by code; archive when final."""
+    import os
+    from functools import partial
+    from unittest import mock
+
+    import pandas as pd
+
+    from toolbank import RobotError
+
     def expect(code, fn, *args, **kw):
         try:
             fn(*args, **kw)
-        except (BusinessError, SystemError_) as e:
+        except RobotError as e:                           # BusinessError and SystemError_ are RobotErrors too
             assert e.code == code and "00123456" not in str(e), f"{code} without data expected, got {e}"
         else:
             raise AssertionError(f"{code} expected")
@@ -119,9 +127,15 @@ def demo(tmp):
     os.utime(tmp / "old" / "payments.csv", (since - 3600, since - 3600))     # last saved yesterday evening
     expect("FILE_TIMEOUT", wait_for_input, tmp / "old" / "*.csv", stable_s=0, poll_s=0, timeout_s=0.01)
     waits, log = [], []                                   # fake sleep: records the waits, takes no time
-    expect("STEP_FAILED", wait_for_input, tmp / "inbox" / "*.csv", stable_s=0, poll_s=0, timeout_s=1,
-           locked=lambda p: True, log=log.append, sleep=waits.append)
-    assert waits == [10, 20, 40, 80] and len(log) == 5    # 5 tries, 150 s in all
+    with mock.patch.dict(globals(), attempt=partial(attempt, sleep=waits.append)):
+        with mock.patch.dict(globals(), is_locked=lambda p: True):         # someone keeps the file open
+            expect("STEP_FAILED", wait_for_input, tmp / "inbox" / "*.csv", stable_s=0, poll_s=0, timeout_s=1,
+                   log=log.append)
+        assert waits == [10, 20, 40, 80] and len(log) == 5                # 5 tries, 150 s in all
+        with mock.patch("os.open", side_effect=PermissionError(13, "Permission denied")):   # no modify rights
+            expect("NO_ACCESS", wait_for_input, tmp / "inbox" / "*.csv", stable_s=0, poll_s=0, timeout_s=1,
+                   log=log.append)                                  # raised by the real is_locked
+        assert waits == [10, 20, 40, 80] and len(log) == 5                # no try again, no wait
 
     path = wait_for_input(tmp / "inbox" / "*.csv", stable_s=0, poll_s=0, timeout_s=1)
     df, ev = load_input(path, expected={"rows": 2, "sum": 950.5})

@@ -6,10 +6,10 @@ when: >-
   checks): they keep them in a rules workbook the owner signs off, and the robot flags and routes every item by it.
 tags: [rules, controls]
 needs: []
-blocks: [RobotError, apply_rules, condition, file_sha256, first_match, flag_summary, rules_from_excel, safe_write_excel, to_date, validate_rules]
+blocks: [RobotError, apply_rules, condition, file_sha256, first_match, flag_summary, rules_from_excel, safe_write_excel, validate_rules]
 decisions:
-  - "One sheet, Rules: code | column | op | value | severity | active | description. Operators are typed as words (eq, ne, gt, ge, lt, le, in, not in, is blank, between): in Excel a cell starting with '=' becomes a formula. Rows with the same code must all hold (AND); active = N switches a rule off without deleting it."
-  - "The whole sheet is checked against the day's data before any item is touched: unknown operator, half-filled row, column not in the data, severity other than HIGH or MEDIUM, gt / ge / lt / le / between on a text column (as text '999' > '1000000'), a comma between digits in a list on a number or date column ('between 1,000, 2,000' reads as 4 values: type '1000, 2000'), a value a number or date column cannot read ('thirty', '2026-13-45': the rule would match nothing and say nothing), any other value the condition cannot apply, no active rule. Any problem raises RobotError BAD_RULES with the problems (exit 5). Not a BusinessError per row: one typo would make every item an exception. Not SystemError_: a re-run fails the same way."
+  - "One sheet, Rules: code | column | op | value | severity | active | description. Operators are typed as words (eq, ne, gt, ge, lt, le, in, not in, is blank, between): in Excel a cell starting with '=' becomes a formula. Lists ('in', 'between') take ', ' or ';' between values: ';' when a number has thousands commas ('1,000; 2,000'). Known gap in toolbank: rules_from_excel checks 'between' before it knows the column's type, so it compares the bounds as text and refuses 'between 500; 1000' on a number column; until that is fixed, write a range as two rows with one code, ge 500 and le 1000. Rows with the same code must all hold (AND). active = N switches a rule off without deleting it and a blank counts as on; a value that is not clearly yes or no ('Active') stops the run rather than guess."
+  - "The whole sheet is checked against the day's data before any item is touched. toolbank (rules_from_excel, then validate_rules one row at a time against the data's column types) finds an unknown operator, a half-filled row, an unclear active value, a column not in the data, a blank value where the operator needs one, 'between' without two values or with low above high, and a value a number or date column cannot read ('thirty', '2026-13-45', an ambiguous '1,5': the rule would match nothing and say nothing). The block adds what toolbank does not check: severity other than HIGH or MEDIUM, gt / ge / lt / le / between on a text column (as text '999' > '1000000'), a comma between digits in a comma-separated list on a number or date column ('in 1,5, 2,5' reads as 4 values), any other error the rule raises on today's data (a bad regex), no active rule. Any problem raises RobotError BAD_RULES with the problems (exit 5). Not a BusinessError per row: one typo would make every item an exception. Not SystemError_: a re-run fails the same way."
   - "Routing is code, not sheet: first_match over ROUTES. Any HIGH flag -> ESCALATE, any flag -> REVIEW, a blank in a column a rule reads -> REVIEW, else AUTO. Operations can add and tighten checks; changing who sees an item (ROUTES, SEVERITIES) is a robot release."
   - "A blank never matches a rule: 'ccy not in USD, EUR' is false for a blank ccy, so that row would pass every check unseen and go AUTO. missing_input sends it to REVIEW. An amount that did not parse is NaN and counts as blank. A column blank by design would flood REVIEW: fill its blanks with a value before the rules and write the rule on that value."
   - "The workbook is copied into the run folder first, and the hash, the read and the evidence all use the copy: someone saving the shared file mid-run cannot change what ran. The copy's name, and the evidence file's, carry the first 12 characters of its SHA-256, so a re-run with another version keeps both. A rules file that is missing or locked fails the copy with an OSError: SystemError_ (exit 3), run again once it is back."
@@ -27,41 +27,41 @@ from pathlib import Path
 import pandas as pd
 
 from toolbank import (RobotError, apply_rules, condition, file_sha256, first_match, flag_summary, rules_from_excel,
-                      safe_write_excel, to_date, validate_rules)
+                      safe_write_excel, validate_rules)
 
 SEVERITIES = ("HIGH", "MEDIUM")
 ORDER_OPS = {">", ">=", "<", "<=", "gt", "ge", "gte", "lt", "le", "lte", "greater than", "less than", "above",
              "below", "at least", "at most", "between"}  # compare by size: only on number and date columns
-LIST_OPS = {"in", "not in", "one of", "not one of", "between"}   # the value is split at every comma
+LIST_OPS = {"in", "not in", "one of", "not one of", "between"}   # split at ';' if there is one, else at commas
 ROUTES = [("ESCALATE", [("high_flags", "ge", 1)]),        # the first line that holds wins; a change is a release
           ("REVIEW", [("flags_count", "ge", 1)]), ("REVIEW", [("missing_input", "is true", None)])]  # blank: never AUTO
 
 
 def check_rules(rules, df):
-    """Every problem of the rules on this data ([] = OK): columns, severities, values the column cannot use."""
+    """Every problem of the active rules on this data ([] = OK): validate_rules, plus what it does not check."""
     if rules.empty:                                       # every rule switched off: nothing would ever be flagged
         return ["no active rule: every item would go to AUTO"]
-    probs = validate_rules(rules, df)                     # columns missing from the data
-    for r in rules.itertuples():
-        if str(getattr(r, "severity", "")).strip().upper() not in SEVERITIES:
-            probs.append(f"{r.code}: severity must be HIGH or MEDIUM")
-        if r.column not in df.columns:
-            continue                                      # validate_rules reported it
-        op, s, typed = str(r.op).strip().lower(), df[r.column], str(r.value)
-        date = pd.api.types.is_datetime64_any_dtype(s)
-        sized = date or (pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s))
-        vs = pd.Series(typed.split(",") if op in LIST_OPS else [typed.replace(",", "")]).str.strip()  # as condition
+    probs = []
+    for i, r in rules.iterrows():
+        if str(r.get("severity")).strip().upper() not in SEVERITIES:
+            probs.append(f"{r['code']}: severity must be HIGH or MEDIUM")
+        if bad := validate_rules(rules.loc[[i]], df):     # column, blank or unreadable value, 'between': each once
+            probs += bad
+            continue
+        op, s, typed = str(r["op"]).strip().lower(), df[r["column"]], str(r["value"])
+        sized = pd.api.types.is_datetime64_any_dtype(s) or \
+            (pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s))
         if op in ORDER_OPS and not sized:
-            probs.append(f"{r.code}: column {r.column!r} is text; convert it (to_number, to_date) before {r.op!r}")
-        elif sized and op in LIST_OPS and re.search(r"\d,\d", typed):
-            probs.append(f"{r.code}: in {r.value!r} put ', ' between values and no commas inside a number")
-        elif sized and pd.notna(r.value) and (to_date(vs) if date else pd.to_numeric(vs, errors="coerce")).isna().any():
-            probs.append(f"{r.code}: {r.value!r} is not a {'date' if date else 'number'}: the rule would never match")
+            probs.append(f"{r['code']}: column {r['column']!r} is text; convert it (to_number, to_date) before "
+                         f"{r['op']!r}")
+        elif sized and op in LIST_OPS and ";" not in typed and re.search(r"\d,\d", typed):   # '1,5, 2,5': 4 values
+            probs.append(f"{r['code']}: in {r['value']!r} a comma sits between digits: type '1.5, 2.5', or "
+                         "'1,000; 2,000' for thousands")
         else:
             try:
-                condition(df, r.column, r.op, r.value)    # the rule on today's data, before any item
-            except Exception as e:                        # a value the column cannot compare, a bad regex...
-                probs.append(f"{r.code}: {e}")
+                condition(df, r["column"], r["op"], r["value"])   # the rule on today's data, before any item
+            except Exception as e:                        # a bad regex, a value the column cannot compare...
+                probs.append(f"{r['code']}: {e}")
     return probs
 
 
@@ -108,9 +108,13 @@ def apply_signed_rules(df, rules_path, register, run_folder, key="id", log=print
     return out
 
 
+# --- demo ---
+
+
 def demo(tmp):
     """Six payments flagged and routed by a signed-off rules workbook, with the evidence an audit needs. Refused
-    before any item: an unknown operator, 'thirty' days, 'gt' on amounts read as text, an edit nobody signed off."""
+    before any item: an unknown operator, 'thirty' days, a list '1,5, 2,5', an unclear active value, 'gt' on
+    amounts read as text, an edit nobody signed off."""
     rules = pd.DataFrame([["LARGE", "amount", "gt", "1,000,000", "HIGH", "Y"],
                           ["EXOTIC_CCY", "ccy", "not in", "USD, EUR, GBP, SGD", "MEDIUM", "Y"],
                           ["NEW_CPTY_LARGE", "amount", "ge", "100000", "MEDIUM", "Y"],    # same code: both hold
@@ -142,8 +146,14 @@ def demo(tmp):
     assert list(ev["Items"]) == ["id", "flags", "missing_input", "route"]               # no amounts
     e = run(book(rules.assign(op=rules["op"].replace("gt", "bigger than")), "typo.xlsx"), df, "run2")
     assert e.code == "BAD_RULES" and "LARGE: unknown operator 'bigger than'" in e.context["problems"][0]
-    e = run(book(rules.assign(value=rules["value"].replace("30", "thirty")), "words.xlsx"), df, "run3")
-    assert e.context["problems"] == ["NEW_CPTY_LARGE: 'thirty' is not a number: the rule would never match"]
+    typos = pd.concat([rules.assign(value=rules["value"].replace("30", "thirty")),
+                       pd.DataFrame([["ODD", "amount", "in", "1,5, 2,5", "MEDIUM", "Y"]], columns=rules.columns)])
+    e = run(book(typos, "words.xlsx"), df, "run3")       # toolbank finds the first, the block the second
+    assert e.context["problems"] == [
+        "NEW_CPTY_LARGE: rule value 'thirty' is not a number, but the column holds numbers",
+        "ODD: in '1,5, 2,5' a comma sits between digits: type '1.5, 2.5', or '1,000; 2,000' for thousands"]
+    e = run(book(rules.assign(active=rules["active"].replace("N", "Paused")), "paused.xlsx"), df, "run6")
+    assert e.code == "BAD_RULES" and "have active ['Paused']" in e.context["problems"][0]   # on or off? never guess
     e = run(tmp / "rules.xlsx", df.assign(amount=df["amount"].astype(str)), "run5")       # amounts read as text
     assert e.code == "BAD_RULES" and [p.split(":")[0] for p in e.context["problems"]] == ["LARGE", "NEW_CPTY_LARGE"]
     e = run(book(rules.assign(description="limit raised"), "rules.xlsx"), df, "run4")   # nobody signed this off

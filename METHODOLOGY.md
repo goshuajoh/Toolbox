@@ -273,7 +273,7 @@ Route by the error code in the last line of `run.log.jsonl`, not by the exit cod
 |---|---|---|
 | `STEP_FAILED`, `SYSTEM_STREAK`, `SYSTEM`, `DONE_CHECK_FAILED` | Support | Fix or wait for the system, then re-run; repeated exit 3 means the environment needs a fix |
 | `FILE_TIMEOUT` | Process owner | Chase the sender; re-run when the file is there |
-| `STOPPED` | Operations | Intended; remove `STOP` when the robot may run again |
+| `STOPPED` | Operations | Intended; remove `STOP` when the robot may run again (name the file exactly `STOP`: with hidden extensions Windows may save `STOP.txt.txt`, which the robot does not see) |
 | `AWAITING_CHECKER` | None | The checker has not finished; the next scheduled run picks it up |
 | `STEP_UNCONFIRMED`, `SUBMIT_UNCONFIRMED` | Process owner | Check the target system, record what arrived, clear the hold; never just re-run |
 | `AUTH`, `NO_SECRET`, `NO_ACCESS` | Access admin | Unlock or renew the account, secret or folder right |

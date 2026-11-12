@@ -15,7 +15,7 @@ decisions:
   - "Duplicate refs on one side (after normalising) raise BusinessError DUPLICATE_KEYS and nothing is matched: which of the two rows pairs with the other side would be a guess."
   - "A blank or unreadable amount, currency or date raises BusinessError UNREADABLE with the source rows (a currency of spaces is blank): reconcile counts blank against blank as equal, so two broken rows would match."
   - "A blank ref does not stop the run: the row gets the key NOREF-L-<row> or NOREF-R-<row> and lands in Left only or Right only."
-  - "Breaks are a result, not an error: BREAK, LEFT_ONLY and RIGHT_ONLY rows go to the report, and exit_code returns 2 when there are any (the template's code for 'send the report to the owner'), 0 when every ref matched."
+  - "Breaks are a result, not an error: BREAK, LEFT_ONLY and RIGHT_ONLY rows go to the report, and exit_code returns 2 when there are any (the template's code for 'the owner works the report'), 0 when every ref matched."
 governance:
   - "Every row keeps its source row number (row_l, row_r = index + 2: the Excel row when the header is on row 1), so a reviewer can find it in the input file."
   - "Summary lists all four statuses (zeros included) and each side's row count: matched + break + left only = rows left, and the same for the right."
@@ -104,8 +104,11 @@ def run_recon(left, left_cols, right, right_cols, path, tol_cents=TOL_CENTS, log
 
 
 def exit_code(recon):
-    """The template's exit code: 0 when every ref matched, 2 (send the report to the owner) when any did not."""
+    """The template's exit code: 0 when every ref matched, 2 (the owner works the report) when any did not."""
     return 2 if (recon["status"] != "MATCHED").any() else 0
+
+
+# --- demo ---
 
 
 def demo(tmp):

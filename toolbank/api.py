@@ -236,6 +236,8 @@ class TokenCache:
             if self.scope:
                 form["scope"] = self.scope
             j = api_call(self.session or http_session(), "POST", self.token_url, data=form)
+            if not isinstance(j, dict) or not j.get("access_token"):
+                raise RobotError("the token endpoint returned no access_token", code="AUTH")
             self._token = j["access_token"]
             self._expires = time.time() + float(j.get("expires_in", 3600))
             return self._token

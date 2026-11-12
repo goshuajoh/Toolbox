@@ -35,20 +35,45 @@ def newest_file(pattern):
     return Path(max(files, key=os.path.getmtime)) if files else None
 
 
+_WINDOWS = os.name == "nt"
+
+
+def _win_write_error(path):
+    """Windows: 0 if the file opens for writing (others may still read and write), else the Win32 error code."""
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateFileW.restype = wintypes.HANDLE
+    k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID, wintypes.DWORD,
+                                wintypes.DWORD, wintypes.HANDLE]
+    h = k32.CreateFileW(str(path), 0x40000000, 0x1 | 0x2, None, 3, 0, None)   # GENERIC_WRITE, share r/w, OPEN_EXISTING
+    if h == wintypes.HANDLE(-1).value:
+        return ctypes.get_last_error()
+    k32.CloseHandle(h)
+    return 0
+
+
 def is_locked(path):
     """True if the file is open/locked by someone else (Windows Excel lock). A missing file is not locked, and
     checking never creates it. The check needs modify rights: without them RobotError NO_ACCESS (fix the access,
-    do not wait); a folder -> ValueError."""
+    do not wait); a folder -> RobotError NOT_A_FILE."""
+    p = Path(path)
+    if p.is_dir():
+        raise RobotError(f"{p.name} is a folder, not a file", code="NOT_A_FILE")
+    if _WINDOWS:                                          # os.open reports a sharing violation as plain 'denied'
+        err = _win_write_error(p)
+        if err in (0, 2, 3):                              # opened, file not found, path not found
+            return False
+        if err in (32, 33):                               # sharing / lock violation: someone has it open
+            return True
+        raise RobotError(f"no write access to {p.name} (Windows error {err}): the robot account needs modify "
+                         "rights", code="NO_ACCESS")
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_APPEND)
+        fd = os.open(p, os.O_WRONLY | os.O_APPEND)
     except FileNotFoundError:
         return False
-    except IsADirectoryError:
-        raise ValueError(f"{Path(path).name} is a folder, not a file") from None
     except PermissionError as e:
-        if getattr(e, "winerror", None) in (32, 33):      # Windows sharing / lock violation: someone has it open
-            return True
-        raise RobotError(f"no write access to {Path(path).name}: the robot account needs modify rights",
+        raise RobotError(f"no write access to {p.name}: the robot account needs modify rights",
                          code="NO_ACCESS") from e
     os.close(fd)
     return False
