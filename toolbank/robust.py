@@ -104,6 +104,96 @@ def retry(max_attempts=3, base_delay=1.0, backoff=2.0, retry_on=(SystemError_, O
     return deco
 
 
+# How many tries, how long to wait: one reviewed place instead of numbers scattered through robots.
+# Use as attempt(action, verify, **RETRY_PROFILES["ui"]); copy and change a profile per robot if a screen needs it.
+RETRY_PROFILES = {
+    "ui": dict(tries=3, wait_s=2.0, verify_timeout_s=10.0),           # click / type / select: screens lag, pop-ups
+    "page_load": dict(tries=2, wait_s=5.0, verify_timeout_s=60.0),    # open a screen, navigate, search results
+    "file_lock": dict(tries=5, wait_s=10.0, backoff=2.0, verify_timeout_s=0.0),  # a file someone has open
+    "read": dict(tries=3, wait_s=2.0, backoff=2.0, verify_timeout_s=0.0),        # API GET, query, download
+    "submit": dict(tries=1, verify_timeout_s=30.0),     # post / pay / send: more tries only with already_done=
+    "login": dict(tries=1, verify_timeout_s=30.0),      # a repeated wrong password locks the service account
+}
+
+
+def _wait_for(check, timeout_s, poll_s, sleep, clock):
+    """check() until truthy (returned) or timeout -> None. An exception from check counts as 'not yet'."""
+    deadline = clock() + max(0.0, timeout_s)
+    while True:
+        try:
+            result = check()
+        except Exception:                                 # element not there yet, window still opening...
+            result = None
+        if result:
+            return result
+        if clock() >= deadline:
+            return None
+        sleep(min(poll_s, max(0.0, deadline - clock())))
+
+
+def attempt(action, verify=None, *, tries=3, wait_s=2.0, backoff=1.0, verify_timeout_s=10.0, poll_s=0.5,
+            recover=None, fallbacks=(), already_done=None, on_give_up=None, name=None, log=print,
+            sleep=time.sleep, clock=time.monotonic):
+    """One robot step done safely: action(), then wait until verify() is truthy (the screen / file / record shows
+    it worked). On an error or a failed check: recover() (e.g. press Esc, close a pop-up, re-focus the window),
+    wait, try again, up to `tries`; then each of `fallbacks` (another way to do the same thing: keyboard instead of
+    mouse, API instead of screen) once; then on_give_up() (screenshot, close the app) and SystemError_ STEP_FAILED
+    with every try in .context['history'] (process_all counts it towards its stop-after-N rule; the template exits 3).
+    already_done() is checked before every try, also the first: if it is truthy the step is not repeated. Give it
+    for anything that must not happen twice (submit, pay, send) or keep tries=1. BusinessError (the data is wrong)
+    and a non-retryable RobotError (AUTH) stop at once. Returns action()'s result (None when already done).
+    Profiles: attempt(click, verify, **RETRY_PROFILES['ui'])."""
+    if not isinstance(tries, int) or isinstance(tries, bool) or tries < 1:
+        raise ValueError(f"tries must be a whole number >= 1, not {tries!r}")
+    name = name or getattr(action, "__name__", None) or "step"
+    fallbacks = [fallbacks] if callable(fallbacks) else list(fallbacks or ())
+    routes = [("primary", action, n) for n in range(1, tries + 1)] + \
+             [(f"fallback {i}", fb, 1) for i, fb in enumerate(fallbacks, start=1)]
+    history, delay = [], wait_s
+    for k, (route, fn, n) in enumerate(routes):
+        if already_done is not None and _wait_for(already_done, 0, poll_s, sleep, clock):
+            history.append({"route": route, "try": n, "outcome": "already done", "error": ""})
+            log(f"{name}: already done, not repeated")
+            return None
+        try:
+            result = fn()
+        except BusinessError:
+            raise
+        except RobotError as e:
+            if not e.retryable:
+                raise
+            history.append({"route": route, "try": n, "outcome": "error", "error": f"{type(e).__name__}: {e}"})
+        except Exception as e:
+            history.append({"route": route, "try": n, "outcome": "error", "error": f"{type(e).__name__}: {e}"[:300]})
+        else:
+            if verify is None or _wait_for(verify, verify_timeout_s, poll_s, sleep, clock):
+                if k:
+                    log(f"{name}: ok on {route} try {n}")
+                return result
+            history.append({"route": route, "try": n, "outcome": "not verified",
+                            "error": f"check not true within {verify_timeout_s:g}s"})
+        last = history[-1]
+        log(f"{name}: {route} try {n} failed ({last['outcome']}: {last['error']})")
+        if k == len(routes) - 1:
+            break
+        if recover is not None:
+            try:
+                recover()
+            except Exception as e:                            # a failed clean-up must not hide the real problem
+                log(f"{name}: recover failed: {type(e).__name__}: {e}")
+        if delay:
+            sleep(delay)
+        delay *= backoff
+    if on_give_up is not None:
+        try:
+            on_give_up()
+        except Exception as e:
+            log(f"{name}: on_give_up failed: {type(e).__name__}: {e}")
+    last = history[-1]
+    raise SystemError_(f"{name}: failed after {tries} tries and {len(fallbacks)} fallbacks; last: {last['error']}",
+                       code="STEP_FAILED", step=name, history=history)
+
+
 _FAILURE_COLS = ["item", "code", "message", "type", "where", "retryable"]
 
 

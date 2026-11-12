@@ -383,3 +383,73 @@ def test_template_exit_codes(tmp_path, monkeypatch):
     del m.cleanse
     with single_instance("my_robot", lock_dir=tmp_path / "work" / "my_robot" / "2026-03-06"):
         assert m.main(args) == 6
+
+
+class _FakeTime:
+    def __init__(self):
+        self.now, self.slept = 0.0, []
+
+    def clock(self):
+        return self.now
+
+    def sleep(self, s):
+        self.slept.append(s)
+        self.now += s
+
+
+def test_attempt_retry_fallback_give_up():
+    t, log = _FakeTime(), []
+    kw = dict(log=log.append, sleep=t.sleep, clock=t.clock)
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise RuntimeError("element not found")
+        return "ok"
+    assert attempt(flaky, tries=3, wait_s=1, backoff=2, verify_timeout_s=0, **kw) == "ok"
+    assert [s for s in t.slept if s >= 1] == [1, 2]                    # backoff between tries
+    recovered, shots = [], []
+
+    def boom():
+        raise RuntimeError("down")
+
+    def bad_recover():
+        recovered.append(1)
+        raise OSError("esc failed")
+    with pytest.raises(SystemError_) as e:
+        attempt(boom, tries=2, fallbacks=boom, recover=bad_recover, on_give_up=lambda: shots.append(1) or 1 / 0,
+                name="Save", **kw)
+    assert e.value.code == "STEP_FAILED" and e.value.context["step"] == "Save" and len(recovered) == 2 and shots
+    assert [h["route"] for h in e.value.context["history"]] == ["primary", "primary", "fallback 1"]
+    assert "Save: recover failed: OSError: esc failed" in log and any("on_give_up failed" in m for m in log)
+    seen = {"v": 0}
+
+    def verify():
+        seen["v"] += 1
+        if seen["v"] < 3:
+            raise LookupError("not on screen yet")                    # an error while checking = not yet
+        return True
+    assert attempt(lambda: "x", verify=verify, verify_timeout_s=5, poll_s=1, **kw) == "x"
+
+
+def test_attempt_stops_and_never_repeats():
+    t, log = _FakeTime(), []
+    kw = dict(log=log.append, sleep=t.sleep, clock=t.clock)
+    for exc in (BusinessError("closed", code="CLOSED"), RobotError("401", code="AUTH")):
+        calls = []
+
+        def fail(exc=exc, calls=calls):
+            calls.append(1)
+            raise exc
+        with pytest.raises(type(exc)):
+            attempt(fail, tries=3, **kw)
+        assert len(calls) == 1                                         # data / access problems are not retried
+    sent = []
+    assert attempt(lambda: sent.append(1), already_done=lambda: True, **kw) is None and sent == []
+    with pytest.raises(ValueError):
+        attempt(lambda: 1, tries=0)
+    with pytest.raises(ValueError):
+        attempt(lambda: 1, tries=True)
+    assert set(RETRY_PROFILES) == {"ui", "page_load", "file_lock", "read", "submit", "login"}
+    assert RETRY_PROFILES["submit"]["tries"] == 1 and RETRY_PROFILES["login"]["tries"] == 1

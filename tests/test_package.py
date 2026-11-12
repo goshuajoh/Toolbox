@@ -49,6 +49,9 @@ def test_index_generator_covers_every_module():
 
 def test_docs_site_in_sync():
     import runpy
+
+    import pytest
+    pytest.importorskip("markdown")              # build-time only: renders METHODOLOGY.md for the site
     m = runpy.run_path(str(ROOT / "make_index.py"), run_name="not_main")
     assert m["main"](["--check"]) == 0, "README index or docs/ out of date: run python make_index.py"
     data = json.loads((ROOT / "docs" / "toolbox.json").read_text(encoding="utf-8"))

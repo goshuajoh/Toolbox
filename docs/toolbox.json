@@ -1,8 +1,9 @@
 {
  "counts": {
-  "functions": 429,
+  "functions": 430,
   "methods": 58,
-  "modules": 36
+  "modules": 36,
+  "patterns": 1
  },
  "exit_codes": [
   {
@@ -30,6 +31,7 @@
    "meaning": "already running (a second copy was started)"
   }
  ],
+ "method_html": "<h1 id=\"delivery-method-for-governed-automation\">Delivery method for governed automation</h1>\n<p>How to take a repetitive operations process from the first stakeholder call to a robot that runs in production,\npasses audit, and fails safely. There are seven stages. Each stage ends with a <strong>gate</strong>: a named person signs a named\nartefact before the next stage starts. The toolbox supplies the building blocks for every design decision, so robots\nlook and fail the same way.</p>\n<p>This page is a method, not your bank's policy. Where your bank has its own standard (technology risk, change\nmanagement, data classification, end-user computing, outsourcing), that standard wins. Use the artefacts here as the\nevidence it asks for.</p>\n<h2 id=\"principles\">Principles</h2>\n<ol>\n<li><strong>Deterministic.</strong> The same input gives the same output. Every decision the robot makes is a written rule with an\n   owner. No hidden judgement in code.</li>\n<li><strong>Fail loud, never silently wrong.</strong> A value the robot cannot read becomes blank and an exception. It is never\n   guessed.</li>\n<li><strong>Every item ends in exactly one state:</strong> done, exception with a reason, or retry later. Nothing disappears.</li>\n<li><strong>Nothing irreversible happens twice or without four eyes.</strong> Submits, payments and emails are checked before every\n   retry. Money movements and customer-facing actions go through maker-checker.</li>\n<li><strong>Least privilege.</strong> The robot uses a service account with only the access the process needs. Secrets live in a\n   vault, never in code or config.</li>\n<li><strong>Evidence by default.</strong> Every run keeps what came in, what went out, control totals, who approved, and which\n   version and rules ran.</li>\n<li><strong>The business owns the rules.</strong> Thresholds, mappings and routing live in a rules sheet or config the process\n   owner signs off. The robot applies them.</li>\n<li><strong>There is always a manual fallback,</strong> and the team has rehearsed it.</li>\n</ol>\n<h2 id=\"the-seven-stages\">The seven stages</h2>\n<table>\n<thead>\n<tr>\n<th>#</th>\n<th>Stage</th>\n<th>Goal</th>\n<th>You produce</th>\n<th>Gate: who signs</th>\n<th>Toolbox</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>1</td>\n<td>Intake and triage</td>\n<td>Decide if this is worth automating, and how much</td>\n<td>Intake record, suitability score</td>\n<td>Your lead / automation CoE</td>\n<td></td>\n</tr>\n<tr>\n<td>2</td>\n<td>Discovery</td>\n<td>Understand the process exactly as it runs today</td>\n<td>Process definition (PDD), samples</td>\n<td>Process owner</td>\n<td><code>describe_shape</code>, <code>synth</code></td>\n</tr>\n<tr>\n<td>3</td>\n<td>Design</td>\n<td>Decide how the robot does each step and how it fails</td>\n<td>Solution design (SDD), exception table, controls</td>\n<td>Peer review; risk / controls where required</td>\n<td>patterns, <code>RETRY_PROFILES</code></td>\n</tr>\n<tr>\n<td>4</td>\n<td>Build</td>\n<td>Build from tested blocks, the same way every time</td>\n<td>Robot code, config, rules sheet, unit tests</td>\n<td>Code review</td>\n<td>template, patterns, recipes</td>\n</tr>\n<tr>\n<td>5</td>\n<td>Test</td>\n<td>Prove it on every edge case and in UAT</td>\n<td>Test evidence, UAT sign-off</td>\n<td>Process owner</td>\n<td><code>--dry-run</code>, <code>synth</code></td>\n</tr>\n<tr>\n<td>6</td>\n<td>Deploy</td>\n<td>Release through change control</td>\n<td>Change record, runbook, access approvals</td>\n<td>Change approver</td>\n<td><code>schtasks_create</code>, <code>single_instance</code></td>\n</tr>\n<tr>\n<td>7</td>\n<td>Run and improve</td>\n<td>Monitor, handle exceptions, keep it current, retire it cleanly</td>\n<td>KPIs, incident log, periodic review</td>\n<td>Process owner, yearly</td>\n<td>exit codes, logs, evidence pack</td>\n</tr>\n</tbody>\n</table>\n<h2 id=\"1-intake-and-triage\">1. Intake and triage</h2>\n<p>Score the request before you book a long call. Score each line 0, 1 or 2.</p>\n<table>\n<thead>\n<tr>\n<th>Question</th>\n<th>0</th>\n<th>1</th>\n<th>2</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>Are the decisions rules, not judgement?</td>\n<td>Mostly judgement</td>\n<td>Some judgement</td>\n<td>All rules</td>\n</tr>\n<tr>\n<td>Are the inputs digital and structured?</td>\n<td>Paper / free text</td>\n<td>Mixed</td>\n<td>Files, tables, systems</td>\n</tr>\n<tr>\n<td>Are the systems and screens stable?</td>\n<td>Change monthly</td>\n<td>Change yearly</td>\n<td>Stable or API</td>\n</tr>\n<tr>\n<td>Volume</td>\n<td>A few a month</td>\n<td>Daily</td>\n<td>Many per day, or peaks</td>\n</tr>\n<tr>\n<td>Cost of an error today</td>\n<td>Low</td>\n<td>Medium</td>\n<td>High (money, customer, regulatory)</td>\n</tr>\n<tr>\n<td>Time it takes people today</td>\n<td>&lt; 2 h / month</td>\n<td>2–20 h / month</td>\n<td>&gt; 20 h / month</td>\n</tr>\n<tr>\n<td>Exceptions</td>\n<td>Most items</td>\n<td>Some</td>\n<td>Few</td>\n</tr>\n</tbody>\n</table>\n<ul>\n<li><strong>10 or more:</strong> automate end to end (unattended).</li>\n<li><strong>6 to 9:</strong> automate the preparation and checks, keep a human for the decisions (attended, or maker-checker).</li>\n<li><strong>Under 6:</strong> fix the process or the data first. A robot would copy the mess faster.</li>\n</ul>\n<p>Rough benefit: hours saved per month = items per month × minutes per item ÷ 60 × (1 − exception rate). Put the\nerror-cost reduction next to it. In a bank it is often worth more than the hours.</p>\n<h2 id=\"2-discovery-the-stakeholder-call\">2. Discovery: the stakeholder call</h2>\n<p><strong>Before the call</strong> ask for: the procedure document if one exists, a screen recording of one normal item and one\nawkward item, two or three masked sample inputs and outputs, the list of systems and who grants access. Run\n<code>describe_shape(df)</code> on a sample to see column patterns without seeing values. That output is safe to share and to\npaste into an AI tool.</p>\n<p><strong>On the call</strong> walk through a real item live, click by click. Ask \"what do you do if…\" at every step. Use these\nquestions:</p>\n<ul>\n<li><strong>Outcome.</strong> What is the result, who uses it, and what happens if it is late or wrong?</li>\n<li><strong>Trigger and timing.</strong> What starts the work? When? Which cut-offs, time zones and holiday calendars apply? What\n  happens at month end?</li>\n<li><strong>Inputs.</strong> Where does each input come from, in what format, at what time? How often is it late, incomplete or\n  laid out differently? Do the headers change?</li>\n<li><strong>Steps and rules.</strong> Which decisions are made, on what rule, written down where? Who owns each rule?</li>\n<li><strong>Systems and access.</strong> Which applications, which versions? Is it Citrix? Is there MFA? Can a service account be\n  used? Is there an API or an export instead of screens?</li>\n<li><strong>Outputs and handover.</strong> What is produced, where is it stored, who is told?</li>\n<li><strong>Exceptions.</strong> What are the five things that go wrong most often? What do you do for each one? How often does\n  each happen?</li>\n<li><strong>Controls.</strong> What do you check today: totals, reconciliations, a second pair of eyes, sign-offs? What would an\n  auditor ask for?</li>\n<li><strong>Data.</strong> Is there customer or personal data? What is its classification? Who may see it?</li>\n<li><strong>Volumes.</strong> Items per day, the peak, the month-end spike, the longest single item.</li>\n<li><strong>Fallback.</strong> If the robot is down, who does the work by hand, and how fast must it be done?</li>\n<li><strong>Change.</strong> How often do screens, files or rules change, and who tells you?</li>\n</ul>\n<p><strong>Listen for</strong> these phrases. Each one changes the design:</p>\n<table>\n<thead>\n<tr>\n<th>They say</th>\n<th>It means</th>\n<th>Design response</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>\"We usually just…\"</td>\n<td>An unwritten rule</td>\n<td>Write it down, give it an owner, put it in the rules sheet</td>\n</tr>\n<tr>\n<td>\"Sometimes the file is late\"</td>\n<td>Trigger and timeout</td>\n<td><code>wait_for_file</code> with a deadline, then hand over to a human</td>\n</tr>\n<tr>\n<td>\"We check it against…\"</td>\n<td>A control</td>\n<td><code>control_totals</code>, <code>reconcile</code></td>\n</tr>\n<tr>\n<td>\"Only Jane knows how\"</td>\n<td>Key-person risk</td>\n<td>Document the rule before you build</td>\n</tr>\n<tr>\n<td>\"We fix it by hand\"</td>\n<td>An exception path</td>\n<td>BusinessError code plus an exceptions report</td>\n</tr>\n<tr>\n<td>\"It depends on the client\"</td>\n<td>A decision table</td>\n<td><code>first_match</code> with the table in Excel</td>\n</tr>\n<tr>\n<td>\"The screen sometimes freezes\"</td>\n<td>Retry and fallback</td>\n<td><code>attempt</code> with <code>RETRY_PROFILES['ui']</code></td>\n</tr>\n</tbody>\n</table>\n<p><strong>Capture the process</strong> in one table, one row per step:</p>\n<table>\n<thead>\n<tr>\n<th>#</th>\n<th>Actor</th>\n<th>System</th>\n<th>Action</th>\n<th>Input</th>\n<th>Output</th>\n<th>Rule / decision</th>\n<th>Exceptions</th>\n<th>Control</th>\n<th>Volume / time</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>1</td>\n<td>Ops</td>\n<td>Outlook</td>\n<td>Save the attachment from the custodian mail</td>\n<td>Mail</td>\n<td>.xlsx</td>\n<td>Sender is custodian X</td>\n<td>No mail by 09:00</td>\n<td>–</td>\n<td>1 / day</td>\n</tr>\n</tbody>\n</table>\n<p><strong>After the call</strong> send the table and a one-page summary back within two days and ask the process owner to confirm\nit. <strong>Gate:</strong> the process owner signs the process definition (PDD).</p>\n<h2 id=\"3-design\">3. Design</h2>\n<p>Design each step, then design how each step fails. Write both into the solution design (SDD).</p>\n<p><strong>Choose the route for each step,</strong> best first:</p>\n<ol>\n<li>Remove the step: does anyone use its output?</li>\n<li>Data or API: an official API, a database view, or the JSON the portal page itself calls (<code>api_over_ui</code> pattern).</li>\n<li>A file export the system already produces.</li>\n<li>The screen: desktop (<code>pywinauto</code>), web (<code>Browser</code>), Citrix (<code>pyautogui</code> images). Use it only when nothing above\n   exists.</li>\n</ol>\n<p><strong>Map each step to a block.</strong> Every row of the process table should name the toolbox function or pattern it uses. If\nnothing fits, design a new block and add it to the toolbox, instead of hand-coding it in one robot.</p>\n<p><strong>Exception design.</strong> Every failure has a kind, an action and an audience:</p>\n<table>\n<thead>\n<tr>\n<th>Failure</th>\n<th>Kind</th>\n<th>Robot does</th>\n<th>Who is told</th>\n<th>Block</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>Account not found, amount mismatch</td>\n<td>Business (data is wrong)</td>\n<td>Record it, skip the item, carry on</td>\n<td>Process owner, in the exceptions report</td>\n<td><code>BusinessError</code>, <code>process_all</code></td>\n</tr>\n<tr>\n<td>File locked, screen slow, network blip</td>\n<td>System (environment)</td>\n<td>Retry per profile, then stop after 3 in a row</td>\n<td>Support, by exit code 3</td>\n<td><code>attempt</code>, <code>process_all</code></td>\n</tr>\n<tr>\n<td>Login refused, password expired</td>\n<td>Access</td>\n<td>Stop at once, never retry</td>\n<td>Owner and support</td>\n<td><code>RobotError</code> AUTH, <code>login_once</code></td>\n</tr>\n<tr>\n<td>A bug (<code>TypeError</code>, <code>AttributeError</code>)</td>\n<td>Bug</td>\n<td>Stop at once</td>\n<td>Developer, exit code 5</td>\n<td><code>classify</code></td>\n</tr>\n<tr>\n<td>Input missing or broken</td>\n<td>Input</td>\n<td>Stop before processing</td>\n<td>Process owner, exit code 2</td>\n<td><code>safe_input</code></td>\n</tr>\n<tr>\n<td>Past the cut-off</td>\n<td>Timing</td>\n<td>Do not submit; hand over</td>\n<td>Process owner</td>\n<td><code>assert_before_cutoff</code></td>\n</tr>\n</tbody>\n</table>\n<p><strong>Retry policy.</strong> Use the named profiles in <code>RETRY_PROFILES</code> and change them only in one place:</p>\n<table>\n<thead>\n<tr>\n<th>Profile</th>\n<th>Tries</th>\n<th>Wait</th>\n<th>Check up to</th>\n<th>Why</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td><code>ui</code></td>\n<td>3</td>\n<td>2 s</td>\n<td>10 s</td>\n<td>Screens lag and pop-ups steal focus; still fails within about a minute</td>\n</tr>\n<tr>\n<td><code>page_load</code></td>\n<td>2</td>\n<td>5 s</td>\n<td>60 s</td>\n<td>Slow searches and reports; one reload is enough</td>\n</tr>\n<tr>\n<td><code>file_lock</code></td>\n<td>5</td>\n<td>10 s, doubling</td>\n<td>–</td>\n<td>Someone has the file open in Excel</td>\n</tr>\n<tr>\n<td><code>read</code></td>\n<td>3</td>\n<td>2 s, doubling</td>\n<td>–</td>\n<td>API GET, query, download: safe to repeat</td>\n</tr>\n<tr>\n<td><code>submit</code></td>\n<td>1</td>\n<td>–</td>\n<td>30 s</td>\n<td>Post, pay, send: more tries only with an <code>already_done</code> check</td>\n</tr>\n<tr>\n<td><code>login</code></td>\n<td>1</td>\n<td>–</td>\n<td>30 s</td>\n<td>A repeated wrong password locks the service account</td>\n</tr>\n</tbody>\n</table>\n<p>On top of the profiles: after a step gives up, the item loop stops after 3 system failures in a row, so a dead\nsystem is not hammered for every item.</p>\n<p><strong>Controls.</strong></p>\n<ul>\n<li>Input control totals (rows, sum, absolute sum, distinct keys) are recorded before processing and reconciled after.</li>\n<li>An output reconciliation runs against the source or the target system.</li>\n<li>Maker-checker applies to anything irreversible or customer-facing. The checker is a named person, never the robot's\n  account.</li>\n<li>Segregation of duties: the developer does not approve production changes or hold production credentials.</li>\n<li>Every run keeps an evidence pack: inputs and outputs with hashes, totals, approvals, rule file version, log.</li>\n</ul>\n<p><strong>Data protection.</strong> Classify the data. Logs carry ids, never values (<code>get_logger</code> redacts). Screenshots stay in the\nrun folder under the retention rule. Test with synthetic data (<code>synth</code>). Share shapes, not values (<code>describe_shape</code>).</p>\n<p><strong>Access.</strong> Use a service account per robot, with least privilege. Credentials come from the vault (<code>get_secret</code>).\nPlan MFA with the security team early, since it decides whether a step can be unattended.</p>\n<p><strong>Run design.</strong> Choose the trigger: schedule, file arrival, mail or webhook. Add a single-instance lock,\nbusiness-day and cut-off guards, a run folder per business date, and exit codes that monitoring understands. Choose\nattended or unattended.</p>\n<p><strong>Fallback.</strong> The manual procedure stays current. The robot has a kill switch (a STOP file) and a dry-run mode.</p>\n<p><strong>Solution design (SDD) outline:</strong> purpose and scope, process (to-be) with the route per step, inputs and outputs,\nrules and owners, exception table, retry policy, controls, data classification and protection, access and\ncredentials, schedule and triggers, evidence and retention, monitoring and exit codes, fallback and kill switch,\nopen risks. <strong>Gate:</strong> peer review, plus risk or controls review where your policy requires it.</p>\n<h2 id=\"4-build\">4. Build</h2>\n<ul>\n<li>Start from <code>templates/robot_template.py</code>. It gives you <code>--env</code>, <code>--dry-run</code>, <code>--business-date</code>, a lock, a run\n  folder, JSON logs, a checkpoint and exit codes.</li>\n<li>Build steps from <strong>patterns</strong> (copy the block, keep its decisions). Build data flows from <strong>recipes</strong> (a YAML spec\n  validated against the real functions, which can generate the script).</li>\n<li>Keep one config per environment. Secrets never go in config. Rules live in a sheet the business owns.</li>\n<li>Make every step safe to re-run: business keys, not row numbers; checkpoints; <code>already_done</code> before any repeat of a\n  submit.</li>\n<li>Test with synthetic data first.</li>\n</ul>\n<p><strong>Code review checklist:</strong></p>\n<ul>\n<li>Every failure path raises the right kind: <code>BusinessError</code>, <code>SystemError_</code>, or a stop.</li>\n<li>Nothing sends, pays or submits without dry-run support and a double-send guard.</li>\n<li>No secrets, no data in logs, no personal accounts.</li>\n<li>Control totals are reconciled in and out.</li>\n<li>Edge cases from the test checklist are covered by tests.</li>\n<li>The version and the rules file hash are recorded in the evidence.</li>\n</ul>\n<p><strong>Gate:</strong> code review by a second engineer.</p>\n<h2 id=\"5-test\">5. Test</h2>\n<p><strong>Data edge cases</strong> that every robot is tested against:</p>\n<ul>\n<li>Upper / lower / mixed case, leading and trailing spaces, non-breaking spaces, tabs.</li>\n<li>Blanks, <code>NA</code>, <code>-</code>, zero; duplicate keys; zero-padded ids (<code>00123</code> vs <code>123</code>).</li>\n<li>Number formats: <code>(1,000)</code>, <code>1,000-</code>, <code>1,000 DR</code>, <code>1.234,56</code>, currency symbols and codes.</li>\n<li>Date formats: day-first, ISO, Excel serials, <code>20260306</code>, <code>9999-12-31</code>, dates without a year.</li>\n<li>An empty file, missing or renamed columns, extra columns, a very large file, non-Latin names.</li>\n</ul>\n<p><strong>Environment edge cases:</strong></p>\n<ul>\n<li>A late, missing or locked file; an application that is down, slow or shows a pop-up.</li>\n<li>An expired session or password; a network timeout after a submit.</li>\n<li>A run after the cut-off or on a holiday; a second copy started by the scheduler.</li>\n<li>A crash mid-run, then a re-run: it must resume, and nothing may be sent twice.</li>\n</ul>\n<p><strong>Levels:</strong></p>\n<ol>\n<li><strong>Unit tests</strong> with synthetic data (<code>pytest</code>).</li>\n<li><strong>System test</strong> in the test environment, first with <code>--dry-run</code>, then live.</li>\n<li><strong>UAT</strong> on masked real samples. The process owner checks the outputs and the exceptions report.</li>\n<li><strong>Parallel run:</strong> the robot and the team process the same days, typically 5 to 10 business days. Compare the\n   results until they match.</li>\n</ol>\n<p><strong>Gate:</strong> the process owner signs UAT, with the test evidence attached.</p>\n<h2 id=\"6-deploy\">6. Deploy</h2>\n<p>The change record carries the robot version, the SDD, the test evidence, the runbook, access approvals, the schedule,\nand a rollback plan (disable the schedule, run by hand). Hypercare runs for the first two weeks: the developer checks\nevery run.</p>\n<p><strong>Runbook</strong> (one page): what the robot does and when; inputs and where they come from; outputs and who receives them;\nthe exit code table and what to do for each code; how to re-run for a business date; how to stop it (the kill\nswitch); the manual fallback; contacts.</p>\n<table>\n<thead>\n<tr>\n<th>Exit</th>\n<th>Meaning</th>\n<th>Action</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>0</td>\n<td>OK</td>\n<td>None</td>\n</tr>\n<tr>\n<td>2</td>\n<td>Business exceptions, or input rejected</td>\n<td>Owner works the exceptions report; if no report, read <code>run.log.jsonl</code></td>\n</tr>\n<tr>\n<td>3</td>\n<td>System failure</td>\n<td>Re-run later; the checkpoint resumes</td>\n</tr>\n<tr>\n<td>4</td>\n<td>Config error</td>\n<td>Support fixes the config</td>\n</tr>\n<tr>\n<td>5</td>\n<td>Robot error</td>\n<td>Developer fixes; run by hand meanwhile</td>\n</tr>\n<tr>\n<td>6</td>\n<td>Already running</td>\n<td>None, or check for a stuck run</td>\n</tr>\n</tbody>\n</table>\n<p><strong>Gate:</strong> the change approver signs the change record.</p>\n<h2 id=\"7-run-monitor-improve-retire\">7. Run, monitor, improve, retire</h2>\n<ul>\n<li><strong>Monitor exit codes</strong> and exception counts after every run. Repeated exit 3 means the environment needs a fix, not\n  more retries.</li>\n<li><strong>KPIs per month:</strong> items processed, straight-through rate, exceptions by code, run time, failed runs, hours\n  saved.</li>\n<li><strong>Exceptions SLA:</strong> the owner works the report the same day.</li>\n<li><strong>Change triggers:</strong> a screen, file layout or rule change sends the robot back to stage 3. Rule changes in the\n  rules sheet need the owner's sign-off and show up in the evidence through the file hash.</li>\n<li><strong>Periodic review,</strong> at least yearly: confirm access, rules, owner, fallback and that the robot is still needed.</li>\n<li><strong>Retire cleanly:</strong> remove the schedule, revoke the service account, archive the evidence under the retention rule,\n  and update the procedure.</li>\n</ul>\n<h2 id=\"artefacts-at-a-glance\">Artefacts at a glance</h2>\n<table>\n<thead>\n<tr>\n<th>Artefact</th>\n<th>Stage</th>\n<th>Written by</th>\n<th>Approved by</th>\n<th>Toolbox help</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>Intake record and score</td>\n<td>1</td>\n<td>You</td>\n<td>Lead / CoE</td>\n<td>Section 1 table</td>\n</tr>\n<tr>\n<td>Process definition (PDD)</td>\n<td>2</td>\n<td>You</td>\n<td>Process owner</td>\n<td>Capture table, <code>describe_shape</code></td>\n</tr>\n<tr>\n<td>Solution design (SDD)</td>\n<td>3</td>\n<td>You</td>\n<td>Peer; risk / controls</td>\n<td>Exception and retry tables, patterns</td>\n</tr>\n<tr>\n<td>Rules sheet</td>\n<td>3–4</td>\n<td>Process owner</td>\n<td>Process owner</td>\n<td><code>rules_from_excel</code>, <code>business_rules</code> pattern</td>\n</tr>\n<tr>\n<td>Code, config, tests</td>\n<td>4</td>\n<td>You</td>\n<td>Code reviewer</td>\n<td>Template, patterns, recipes, <code>synth</code></td>\n</tr>\n<tr>\n<td>Test evidence, UAT sign-off</td>\n<td>5</td>\n<td>You, owner</td>\n<td>Process owner</td>\n<td><code>--dry-run</code>, evidence pack</td>\n</tr>\n<tr>\n<td>Change record, runbook</td>\n<td>6</td>\n<td>You</td>\n<td>Change approver</td>\n<td>Exit code table, <code>schtasks_create</code></td>\n</tr>\n<tr>\n<td>Run evidence</td>\n<td>Every run</td>\n<td>The robot</td>\n<td>Kept per retention</td>\n<td><code>controls_evidence</code>, <code>get_logger</code></td>\n</tr>\n<tr>\n<td>Periodic review</td>\n<td>7</td>\n<td>You, owner</td>\n<td>Process owner</td>\n<td>KPIs from logs</td>\n</tr>\n</tbody>\n</table>\n<h2 id=\"from-design-decision-to-block\">From design decision to block</h2>\n<table>\n<thead>\n<tr>\n<th>You need to…</th>\n<th>Use</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td>Click, type or select on a screen, and survive lag and pop-ups</td>\n<td><code>ui_step</code> pattern, <code>attempt</code>, <code>RETRY_PROFILES['ui']</code></td>\n</tr>\n<tr>\n<td>Stop cleanly on any failure: close apps, keep evidence, notify</td>\n<td><code>shutdown_cleanup</code> pattern</td>\n</tr>\n<tr>\n<td>Submit, pay or send exactly once</td>\n<td><code>idempotent_submit</code> pattern</td>\n</tr>\n<tr>\n<td>Log in without locking the account</td>\n<td><code>login_once</code> pattern, <code>get_secret</code></td>\n</tr>\n<tr>\n<td>Work a list of items with exceptions and resume</td>\n<td><code>item_loop</code> pattern, <code>process_all</code>, <code>Checkpoint</code></td>\n</tr>\n<tr>\n<td>Accept an input file only when it is complete and correct</td>\n<td><code>safe_input</code> pattern, <code>read_any(required=…)</code></td>\n</tr>\n<tr>\n<td>Reconcile two sources</td>\n<td><code>reconcile_report</code> pattern, <code>reconcile</code></td>\n</tr>\n<tr>\n<td>Prove what the robot did</td>\n<td><code>controls_evidence</code> pattern, <code>control_totals</code>, <code>file_sha256</code></td>\n</tr>\n<tr>\n<td>Let a named human approve before anything is executed</td>\n<td><code>maker_checker</code> pattern, <code>propose</code>, <code>approved_actions</code></td>\n</tr>\n<tr>\n<td>Let operations own the rules</td>\n<td><code>business_rules</code> pattern, <code>rules_from_excel</code>, <code>first_match</code></td>\n</tr>\n<tr>\n<td>Run only on business days and before the cut-off</td>\n<td><code>cutoff_calendar</code> pattern</td>\n</tr>\n<tr>\n<td>Tell people and hand over to a human</td>\n<td><code>notify_handover</code> pattern</td>\n</tr>\n<tr>\n<td>Use the data behind a portal instead of clicking</td>\n<td><code>api_over_ui</code> pattern</td>\n</tr>\n<tr>\n<td>Describe a data flow once and generate the code</td>\n<td><code>recipe</code> (<code>load_recipe</code>, <code>run_recipe</code>, <code>recipe_to_code</code>)</td>\n</tr>\n</tbody>\n</table>",
  "modules": [
   {
    "doc": "Errors, retry, item loop, checkpoint, dry run, step timer, run folder.",
@@ -212,9 +214,97 @@
      "tuple": false
     },
     {
+     "doc": "One robot step done safely: action(), then wait until verify() is truthy (the screen / file / record shows\nit worked). On an error or a failed check: recover() (e.g. press Esc, close a pop-up, re-focus the window),\nwait, try again, up to `tries`; then each of `fallbacks` (another way to do the same thing: keyboard instead of\nmouse, API instead of screen) once; then on_give_up() (screenshot, close the app) and SystemError_ STEP_FAILED\nwith every try in .context['history'] (process_all counts it towards its stop-after-N rule; the template exits 3).\nalready_done() is checked before every try, also the first: if it is truthy the step is not repeated. Give it\nfor anything that must not happen twice (submit, pay, send) or keep tries=1. BusinessError (the data is wrong)\nand a non-retryable RobotError (AUTH) stop at once. Returns action()'s result (None when already done).\nProfiles: attempt(click, verify, **RETRY_PROFILES['ui']).",
+     "kind": "function",
+     "line": 134,
+     "methods": [],
+     "name": "attempt",
+     "needs": [],
+     "params": [
+      {
+       "default": null,
+       "kind": "pos",
+       "name": "action"
+      },
+      {
+       "default": "None",
+       "kind": "pos",
+       "name": "verify"
+      },
+      {
+       "default": "3",
+       "kind": "kwonly",
+       "name": "tries"
+      },
+      {
+       "default": "2.0",
+       "kind": "kwonly",
+       "name": "wait_s"
+      },
+      {
+       "default": "1.0",
+       "kind": "kwonly",
+       "name": "backoff"
+      },
+      {
+       "default": "10.0",
+       "kind": "kwonly",
+       "name": "verify_timeout_s"
+      },
+      {
+       "default": "0.5",
+       "kind": "kwonly",
+       "name": "poll_s"
+      },
+      {
+       "default": "None",
+       "kind": "kwonly",
+       "name": "recover"
+      },
+      {
+       "default": "()",
+       "kind": "kwonly",
+       "name": "fallbacks"
+      },
+      {
+       "default": "None",
+       "kind": "kwonly",
+       "name": "already_done"
+      },
+      {
+       "default": "None",
+       "kind": "kwonly",
+       "name": "on_give_up"
+      },
+      {
+       "default": "None",
+       "kind": "kwonly",
+       "name": "name"
+      },
+      {
+       "default": "print",
+       "kind": "kwonly",
+       "name": "log"
+      },
+      {
+       "default": "sleep",
+       "kind": "kwonly",
+       "name": "sleep"
+      },
+      {
+       "default": "monotonic",
+       "kind": "kwonly",
+       "name": "clock"
+      }
+     ],
+     "signature": "(action, verify=None, *, tries=3, wait_s=2.0, backoff=1.0, verify_timeout_s=10.0, poll_s=0.5, recover=None, fallbacks=(), already_done=None, on_give_up=None, name=None, log=print, sleep=sleep, clock=monotonic)",
+     "summary": "One robot step done safely: action(), then wait until verify() is truthy (the screen / file / record shows it worked). On an error or a failed check: recover() (e.g. press Esc, close a pop-up, re-focus the window), wait, try again, up to `tries`; then each of `fallbacks` (another way to do the same thing: keyboard instead of mouse, API instead of screen) once; then on_give_up() (screenshot, close the app) and SystemError_ STEP_FAILED with every try in .context['history'] (process_all counts it towards its stop-after-N rule; the template exits 3). already_done() is checked before every try, also the first: if it is truthy the step is not repeated. Give it for anything that must not happen twice (submit, pay, send) or keep tries=1. BusinessError (the data is wrong) and a non-retryable RobotError (AUTH) stop at once. Returns action()'s result (None when already done). Profiles: attempt(click, verify, **RETRY_PROFILES['ui']).",
+     "tuple": false
+    },
+    {
      "doc": "Run handler(item) for each item and record what happened, so the robot can report and resume:\nBusinessError (data is wrong) -> recorded with retryable False and skipped; SystemError_ / OSError\n(environment) -> recorded with retryable True, and N in a row -> abort with SYSTEM_STREAK naming the last\nerror; any other RobotError or a plain bug (AttributeError, auth failure, bad SQL...) -> stop at once, since\nevery item would fail the same way (the error carries item= and where=). Only successes are written to the\noptional Checkpoint, so a re-run retries every failure and reports it again until it is fixed; with a\ncheckpoint a blank key or a key repeated in the same run is recorded as MISSING_KEY / DUPLICATE_KEY, never\nsilently skipped. log=print reports each failure as it happens.\nReturns (done_items, failures_df) with columns item, code, message, type, where, retryable:\nfailures.retryable.any() -> re-run later (exit 3); other failures -> report to the owner (exit 2).",
      "kind": "function",
-     "line": 114,
+     "line": 204,
      "methods": [],
      "name": "process_all",
      "needs": [],
@@ -257,7 +347,7 @@
     {
      "doc": "Remember done keys in a JSON file so a re-run resumes. Key = business id, never row number.",
      "kind": "class",
-     "line": 174,
+     "line": 264,
      "methods": [],
      "name": "Checkpoint",
      "needs": [],
@@ -275,7 +365,7 @@
     {
      "doc": "Call a side-effecting function unless dry_run; then only log what would happen (argument names, not values:\nthey may hold data).",
      "kind": "function",
-     "line": 196,
+     "line": 286,
      "methods": [],
      "name": "act",
      "needs": [],
@@ -313,7 +403,7 @@
     {
      "doc": "`with step('load'):` -> START / DONE (ms) / FAIL lines (FAIL names the function and line that raised).",
      "kind": "function",
-     "line": 206,
+     "line": 296,
      "methods": [],
      "name": "step",
      "needs": [],
@@ -336,7 +426,7 @@
     {
      "doc": "work/<robot>/<YYYY-MM-DD>/ — logs, checkpoint and outputs for one run.",
      "kind": "function",
-     "line": 219,
+     "line": 309,
      "methods": [],
      "name": "run_dir",
      "needs": [],
@@ -13270,6 +13360,12 @@
   },
   {
    "modules": [
+    "robust"
+   ],
+   "need": "One screen step that checks itself, retries, falls back and gives up with evidence"
+  },
+  {
+   "modules": [
     "perf"
    ],
    "need": "Parallel API calls, chunks, progress with ETA, smaller DataFrames"
@@ -13312,6 +13408,49 @@
     "desktop"
    ],
    "need": "Desktop apps (pywinauto / pyautogui)"
+  }
+ ],
+ "patterns": [
+  {
+   "blocks": [
+    "RETRY_PROFILES",
+    "SystemError_",
+    "attempt",
+    "ctl_click",
+    "ctl_text",
+    "hotkey",
+    "screen_capture"
+   ],
+   "code": "from toolbank import RETRY_PROFILES, SystemError_, attempt, ctl_click, ctl_text, hotkey, screen_capture\n\n\ndef save_record(window, ref, run_folder):\n    \"\"\"Desktop app: click Save, confirm the status bar shows the reference; Ctrl+S as the fallback.\"\"\"\n    def saved():\n        return ref in (ctl_text(window, auto_id=\"statusBar\", timeout=1) or \"\")\n\n    def recover():\n        hotkey(\"esc\")                                     # close whatever pop-up took focus\n        window.set_focus()\n\n    return attempt(\n        lambda: ctl_click(window, title=\"Save\", control_type=\"Button\"),\n        verify=saved,\n        recover=recover,\n        fallbacks=[lambda: hotkey(\"ctrl\", \"s\")],\n        already_done=saved,                               # never save twice\n        on_give_up=lambda: screen_capture(run_folder / f\"save_failed_{ref}.png\"),\n        name=f\"save {ref}\",\n        **RETRY_PROFILES[\"ui\"],\n    )\n\n\ndef search_account(b, account):\n    \"\"\"Web portal (b = toolbank Browser): search, confirm the account appears; Enter as the fallback.\"\"\"\n    return attempt(\n        lambda: (b.fill(\"#account\", account), b.click(\"button#search\")),\n        verify=lambda: b.exists(f\"text={account}\", ms=500),\n        recover=lambda: b.press(\"#account\", \"Escape\"),\n        fallbacks=[lambda: b.press(\"#account\", \"Enter\")],\n        on_give_up=lambda: b.screenshot(f\"search_failed_{account}\"),\n        name=f\"search {account}\",\n        **RETRY_PROFILES[\"ui\"],\n    )\n\n\nclass FakeTime:\n    \"\"\"For the demo and tests: sleeping only moves this clock, so waits take no real time.\"\"\"\n    now = 0.0\n\n    def clock(self):\n        return self.now\n\n    def sleep(self, s):\n        self.now += s\n\n\ndef demo(tmp):\n    \"\"\"A fake screen that shows a pop-up on the first click: the step recovers and succeeds on try 2.\n    A screen that never responds: the step gives up with evidence and STEP_FAILED.\"\"\"\n    t = FakeTime()\n    screen = {\"popup\": True, \"saved\": False, \"clicks\": 0}\n\n    def click_save():\n        screen[\"clicks\"] += 1\n        if screen[\"popup\"]:\n            return                                        # the click lands on the pop-up, nothing is saved\n        screen[\"saved\"] = True\n\n    def close_popup():\n        screen[\"popup\"] = False\n\n    log = []\n    attempt(click_save, verify=lambda: screen[\"saved\"], recover=close_popup, already_done=lambda: screen[\"saved\"],\n            name=\"save T1\", log=log.append, sleep=t.sleep, clock=t.clock, **RETRY_PROFILES[\"ui\"])\n    assert screen == {\"popup\": False, \"saved\": True, \"clicks\": 2}\n    assert log[-1] == \"save T1: ok on primary try 2\"\n\n    evidence = []\n    try:\n        attempt(lambda: None, verify=lambda: False, fallbacks=[lambda: None],\n                on_give_up=lambda: evidence.append(tmp / \"save_failed_T2.png\"),\n                name=\"save T2\", log=log.append, sleep=t.sleep, clock=t.clock, **RETRY_PROFILES[\"ui\"])\n    except SystemError_ as e:\n        assert e.code == \"STEP_FAILED\" and len(e.context[\"history\"]) == 4 and evidence\n    else:\n        raise AssertionError(\"expected STEP_FAILED\")\n",
+   "decisions": [
+    "Check the result on the screen, not the click: a click that 'worked' but saved nothing is the failure that matters.",
+    "3 tries 2 s apart, each checked for up to 10 s (RETRY_PROFILES['ui']): covers a slow screen and one pop-up, and still fails within about a minute.",
+    "Between tries press Esc and re-focus the window (recover), so one stray dialog does not spoil every retry.",
+    "One fallback route (the keyboard shortcut instead of the button): a different way in beats repeating the same one.",
+    "On giving up: screenshot as evidence, then SystemError_ STEP_FAILED. process_all stops after 3 such failures in a row and the template exits 3 (re-run later)."
+   ],
+   "demo": true,
+   "file": "patterns/ui_step.py",
+   "governance": [
+    "already_done checks the record before every try, so a slow save is never posted twice.",
+    "Screenshots can show customer data: keep them in the run folder, under your data retention rule, never in a shared drive.",
+    "The log line for each failed try names the step and the reference only, never field values."
+   ],
+   "needs": [
+    "pywinauto",
+    "pyautogui"
+   ],
+   "order": 10,
+   "slug": "ui_step",
+   "tags": [
+    "computer-use",
+    "desktop",
+    "web",
+    "retry",
+    "fallback"
+   ],
+   "title": "Screen step that checks itself, retries, falls back and gives up",
+   "when": "Any click, type or select on a desktop app (pywinauto), a Citrix screen (pyautogui) or a web portal (toolbank Browser) where the screen can lag, a pop-up can steal focus, or a control can move."
   }
  ],
  "repo": "https://github.com/goshuajoh/Toolbox",

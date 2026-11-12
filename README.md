@@ -5,8 +5,13 @@ formulas, reconciliations, rules and flags, OCR, browsers, APIs, email, database
 scheduling, robot plumbing, recipes that generate robot code. No business logic, no data.
 
 **Browse the toolbox:** <https://goshuajoh.github.io/Toolbox/> — a searchable catalogue of every function (real
-signatures and docstrings, which optional library each one needs) plus a script builder. Generated from the code by
-`python make_index.py`, served from the `docs/` folder (see [The toolbox website](#the-toolbox-website)).
+signatures and docstrings, which optional library each one needs), tested code patterns, the delivery method and a
+script builder. Generated from the code by `python make_index.py`, served from the `docs/` folder (see
+[The toolbox website](#the-toolbox-website)).
+
+**How to deliver a robot:** [METHODOLOGY.md](METHODOLOGY.md) takes a process from the first stakeholder call to
+production in seven stages, each with a gate and the artefacts your governance asks for, and maps every design
+decision to a block in this toolbox.
 
 ## Use it
 
@@ -16,6 +21,11 @@ pip install -r Toolbox/requirements.txt            # pandas, openpyxl, pyyaml
 pip install -r Toolbox/requirements-optional.txt   # only what you need (see comments in the file)
 ```
 
+**Without git:** recreate the same folders and copy the files from GitHub's **Raw** view, saved as UTF-8 (several
+files contain characters such as `€`). You need every `.py` file in `toolbank/` (the modules import each other and
+`__init__.py` loads all of them), plus `templates/robot_template.py` for robots and any `patterns/*.py` you use.
+`tests/` is optional, to check your setup. Then `pip install pandas openpyxl pyyaml`.
+
 In Jupyter / a script:
 
 ```python
@@ -24,8 +34,8 @@ import pandas as pd
 from toolbank import *            # every function below
 ```
 
-The repo is **Toolbox**; the Python package inside it is **`toolbank`**. A single module file can also be copied on
-its own — most depend only on pandas plus `robust.py`.
+The repo is **Toolbox**; the Python package inside it is **`toolbank`**. Copy the whole `toolbank` folder: its
+modules import each other, so a single file does not work on its own.
 
 ## Which module?
 
@@ -55,6 +65,7 @@ its own — most depend only on pandas plus `robust.py`.
 | Triggers: folder watch, every N minutes, cron, Windows Task Scheduler, webhook receiver, work queue, one-copy lock | `triggers` |
 | Alteryx-style workflow with row counts and timings per step | `flow` |
 | A robot as a YAML spec: validated against the function signatures, run as a Flow, or generated as a script | `recipe` |
+| One screen step that checks itself, retries, falls back and gives up with evidence | `robust` (`attempt`, `RETRY_PROFILES`) |
 | Parallel API calls, chunks, progress with ETA, smaller DataFrames | `perf` |
 | Errors, retry, checkpoints, dry run, logs, config, secrets, Teams messages | `robust`, `logs`, `config`, `notify` |
 | Business days, holidays, T+n, roll conventions, cut-offs, time zones | `dates` |
@@ -67,6 +78,8 @@ its own — most depend only on pandas plus `robust.py`.
 |---|---|
 | `toolbank/` | the functions (one module per topic) |
 | `templates/robot_template.py` | robot skeleton: `--env --dry-run --business-date`, one-copy lock, exit codes |
+| `patterns/` | tested code blocks for recurring robot decisions (retry and fallback, submit once, login, evidence…) |
+| `METHODOLOGY.md` | the delivery method: stages, gates, discovery questions, design tables, test checklist, runbook |
 | `vba/` | `.bas` modules — Excel: Developer > Visual Basic > File > Import |
 | `tests/` | `pytest` — run after copying to check your environment |
 | `docs/` | the website (generated: `index.html`, `toolbox.json`); `site/index.template.html` is its template |
@@ -139,28 +152,59 @@ inside any parameter and `$name` an input or an earlier `as:` result (`$$1,000` 
 of replacing the frame; `label:` names the step in the trace. Dates typed in YAML become `pd.Timestamp(...)` in the
 script. The website's **Build a script** tab writes both the script and the YAML.
 
+## Patterns: blocks for the decisions every robot faces
+
+Functions answer "how do I read this file". Patterns answer "how should this step behave when things go wrong": how
+many tries, what to check after an action, the fallback, when to stop, what evidence to keep. Each file in
+`patterns/` holds a copyable block, the decisions it encodes (with numbers and reasons), the controls it gives you,
+and a `demo()` that runs it offline. The tests run every demo, so a block that stops working fails the build.
+
+The core block is `attempt`:
+
+```python
+attempt(
+    lambda: ctl_click(window, title="Save", control_type="Button"),   # the action
+    verify=saved,                          # what the screen shows when it worked
+    recover=close_popup,                   # between tries: Esc, re-focus
+    fallbacks=[lambda: hotkey("ctrl", "s")],   # another way to do the same thing
+    already_done=saved,                    # never repeat a save that landed
+    on_give_up=lambda: screen_capture(run_folder / "save_failed.png"),
+    **RETRY_PROFILES["ui"],                # 3 tries, 2 s apart, each checked for up to 10 s
+)
+```
+
+After the tries and fallbacks it raises `SystemError_` STEP_FAILED with every try in its context; `process_all`
+stops after 3 such failures in a row and the template exits 3. The retry profiles (`ui`, `page_load`, `file_lock`,
+`read`, `submit`, `login`) keep how many tries and how long to wait in one reviewed place.
+
 ## The toolbox website
 
 `docs/index.html` is a self-contained page (no CDN, works offline and behind a proxy) built from the docstrings:
 a function finder with search and module filter, the "I need to…" table, every signature with its full docstring,
-source links, `pip install` hints, a script builder, the robot skeleton and exit codes.
+source links, `pip install` hints, the patterns with copy buttons, the delivery method, a script builder, the robot
+skeleton and exit codes.
 
 - Regenerate after changing code or docstrings: `python make_index.py` (rewrites the README index and `docs/`).
   `python make_index.py --check` fails when they are stale; CI and `tests/test_package.py` run it.
 - Publish on GitHub Pages once: repository **Settings → Pages → Build and deployment → Source: Deploy from a
   branch → Branch: `main`, folder: `/docs` → Save**. The page is then at <https://goshuajoh.github.io/Toolbox/> and
-  updates with every push to `main`.
+  updates with every push to `main`. The branch must contain `docs/`: until a feature branch is merged, select that
+  branch instead.
 - `docs/toolbox.json` holds the same catalogue as data (name, signature, parameters, docstring, needs) for any other
   tool, e.g. an internal wiki or a code generator.
 
 ## Develop
 
 ```bash
-pip install -r requirements.txt pytest ruff
+pip install -r requirements.txt pytest ruff markdown
 ruff check .                 # lint (rules in pyproject.toml)
 python -m pytest -q          # tests; optional libraries skip their tests when absent
-python make_index.py         # README index + docs/ from the docstrings
+python make_index.py         # README index + docs/ from the docstrings, patterns and METHODOLOGY.md
 ```
+
+A new pattern is one file in `patterns/` with a YAML docstring (title, order, when, tags, needs, blocks, decisions,
+governance) and a `demo(tmp)`; copy `patterns/ui_step.py` as the starting point. `tests/test_patterns.py` checks the
+format, that `blocks` lists exactly what the file imports from toolbank, and runs the demo.
 
 Every public function needs a one-paragraph docstring (a test checks it): it is the index entry, the website card and
 the `copy` snippet. Keep functions generic (no business logic, no data), raise `BusinessError` for bad data and
@@ -182,6 +226,7 @@ without them.
 | `error_where(exc)` | 'function (file.py:123)' of the deepest frame in your own code (not pandas, the standard library or toolbank) where exc was raised; the deepest frame of all when none is yours. '' without a traceback. |
 | `error_info(exc)` | Plain dict for logs and exception reports: type, code, message, retryable, where (see error_where), context (ids given to RobotError). Works for any exception; plain errors are classified first. |
 | `retry(max_attempts=3, base_delay=1.0, backoff=2.0, retry_on=(SystemError…)` | Decorator: call the function up to max_attempts times (so 2 retries by default) with exponential backoff + jitter. Use on reads only, never around sends/submits. log=print (or logger.warning) reports each retry: 'retry 1/2 in 2.1s after OSError: ...'. |
+| `attempt(action, verify=None, *, tries=3, wait_s=2.0, backoff=1.0, verify_t…)` | One robot step done safely: action(), then wait until verify() is truthy (the screen / file / record shows it worked). On an error or a failed check: recover() (e.g. press Esc, close a pop-up, re-focus the window), wait, try again, up to `tries`; then each of `fallbacks` (another way to do the same thing: keyboard instead of mouse, API instead of screen) once; then on_give_up() (screenshot, close the app) and SystemError_ STEP_FAILED with every try in .context['history'] (process_all counts it towards its stop-after-N rule; the template exits 3). already_done() is checked before every try, also the first: if it is truthy the step is not repeated. Give it for anything that must not happen twice (submit, pay, send) or keep tries=1. BusinessError (the data is wrong) and a non-retryable RobotError (AUTH) stop at once. Returns action()'s result (None when already done). Profiles: attempt(click, verify, \*\*RETRY_PROFILES['ui']). |
 | `process_all(items, handler, max_consecutive_system=3, checkpoint=None, key=str…)` | Run handler(item) for each item and record what happened, so the robot can report and resume: BusinessError (data is wrong) -&gt; recorded with retryable False and skipped; SystemError_ / OSError (environment) -&gt; recorded with retryable True, and N in a row -&gt; abort with SYSTEM_STREAK naming the last error; any other RobotError or a plain bug (AttributeError, auth failure, bad SQL...) -&gt; stop at once, since every item would fail the same way (the error carries item= and where=). Only successes are written to the optional Checkpoint, so a re-run retries every failure and reports it again until it is fixed; with a checkpoint a blank key or a key repeated in the same run is recorded as MISSING_KEY / DUPLICATE_KEY, never silently skipped. log=print reports each failure as it happens. Returns (done_items, failures_df) with columns item, code, message, type, where, retryable: failures.retryable.any() -&gt; re-run later (exit 3); other failures -&gt; report to the owner (exit 2). |
 | `Checkpoint(…)` | Remember done keys in a JSON file so a re-run resumes. Key = business id, never row number. |
 | `act(fn, *args, dry_run=False, log=print, **kwargs)` | Call a side-effecting function unless dry_run; then only log what would happen (argument names, not values: they may hold data). |

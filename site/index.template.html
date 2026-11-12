@@ -83,6 +83,28 @@ main { padding: 18px 0 60px; }
 .methods li { padding: 4px 0; border-top: 1px solid var(--line); font-size: 14px; overflow-wrap: anywhere; }
 .methods code { color: var(--accent); }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 12px; }
+.chip { font-size: 13px; border: 1px solid var(--line); background: var(--panel); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+.chip[aria-pressed="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.pat h3 { margin: 0; font-size: 15px; }
+.pat .when { color: var(--muted); font-size: 14px; grid-column: 1 / -1; }
+.pat .cols { display: grid; gap: 4px 18px; margin: 10px 0; font-size: 14px; }
+@media (min-width: 900px) { .pat .cols { grid-template-columns: 1fr 1fr; } }
+.pat .cols h4 { margin: 0 0 4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.pat .cols ul { margin: 0; padding-left: 18px; }
+.pat .cols li { margin: 3px 0; overflow-wrap: anywhere; }
+.pat pre { max-height: 520px; }
+.related { margin: 0 0 12px; display: grid; gap: 6px; }
+.related a { cursor: pointer; }
+.md { font-size: 15px; max-width: 900px; overflow-wrap: anywhere; }
+.md h1 { font-size: 24px; margin: 0 0 10px; }
+.md h2 { font-size: 19px; margin: 28px 0 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.md table { display: block; overflow-x: auto; max-width: 100%; margin: 10px 0; }
+.md td, .md th { min-width: 90px; }
+.md code { background: var(--code); border-radius: 4px; padding: 0 4px; }
+.md li { margin: 4px 0; }
+.toc { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.md h2, .md h3, .pat { scroll-margin-top: 110px; }
 .mod { cursor: pointer; }
 .mod:hover { border-color: var(--accent); }
 .mod h3 { font-size: 15px; margin: 0 0 4px; }
@@ -126,6 +148,8 @@ kbd { font-family: var(--mono); font-size: 12px; border: 1px solid var(--line); 
     </div>
     <nav class="tabs" role="tablist">
       <button role="tab" data-tab="find" aria-selected="true">Find a function</button>
+      <button role="tab" data-tab="patterns" aria-selected="false">Patterns</button>
+      <button role="tab" data-tab="method" aria-selected="false">Method</button>
       <button role="tab" data-tab="modules" aria-selected="false">Modules</button>
       <button role="tab" data-tab="build" aria-selected="false">Build a script</button>
       <button role="tab" data-tab="robot" aria-selected="false">Robot skeleton</button>
@@ -139,7 +163,7 @@ kbd { font-family: var(--mono); font-size: 12px; border: 1px solid var(--line); 
       <div class="card">
         <h2>Use it</h2>
         <pre id="install"></pre>
-        <div class="hint" style="margin-top:8px">Press <kbd>/</kbd> to search. Every card shows the real signature and docstring from the code; <b>needs</b> tells you which optional library to install.</div>
+        <div class="hint" style="margin-top:8px">Press <kbd>/</kbd> to search. Every card shows the real signature and docstring from the code; <b>needs</b> tells you which optional library to install. Copy each file from GitHub's <b>Raw</b> view and save it as UTF-8.</div>
       </div>
       <div class="card">
         <h2>In the box</h2>
@@ -152,11 +176,26 @@ kbd { font-family: var(--mono); font-size: 12px; border: 1px solid var(--line); 
       <button id="clear" class="small">Clear</button>
     </div>
     <div class="needs" id="needs"></div>
+    <div class="related" id="related"></div>
     <div id="results"></div>
   </section>
 
+  <section class="panel" id="panel-patterns" role="tabpanel">
+    <p class="hint">Tested building blocks for the decisions every robot faces: how many tries, what to check, the fallback, how to stop. Each block names the toolbox functions it uses, the decisions it encodes and the controls it gives you. Copy the code into a robot built on the template; the <code>demo()</code> at the bottom of each file shows it working and runs in the test suite.</p>
+    <div class="searchbar">
+      <input type="search" id="pq" placeholder="Search patterns: retry, login, approval, cut-off, evidence…" autocomplete="off" aria-label="Search patterns">
+    </div>
+    <div class="chips" id="pattern-tags"></div>
+    <div id="patterns"></div>
+  </section>
+
+  <section class="panel" id="panel-method" role="tabpanel">
+    <div class="toc" id="method-toc"></div>
+    <div class="card md" id="method"></div>
+  </section>
+
   <section class="panel" id="panel-modules" role="tabpanel">
-    <p class="hint">One module per topic. Most depend only on pandas plus <code>robust.py</code>, so a single file can be copied on its own. Click a module to browse its functions.</p>
+    <p class="hint">One module per topic. Modules import each other (most need <code>robust.py</code>) and <code>__init__.py</code> loads all of them, so copy the whole <code>toolbank</code> folder. Click a module to browse its functions.</p>
     <div class="grid" id="modules"></div>
     <h2 style="font-size:16px;margin:24px 0 8px">VBA modules (<code>vba/*.bas</code>)</h2>
     <p class="hint">Excel: Developer &gt; Visual Basic &gt; File &gt; Import, or <code>vba_import_bas(path, files)</code> from Python.</p>
@@ -255,8 +294,8 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
   $('#repo-link').href = DATA.repo;
   $$('footer a')[0].href = DATA.repo;
   $('#template-link').href = DATA.repo + '/blob/main/templates/robot_template.py';
-  $('#install').textContent = 'git clone ' + DATA.repo + '.git\npip install -r Toolbox/requirements.txt            # pandas, openpyxl, pyyaml\n\nimport sys; sys.path.append(r"C:\\path\\to\\Toolbox")  # the folder that contains toolbank/\nfrom toolbank import *';
-  $('#stats').innerHTML = `<span><b>${DATA.counts.modules}</b> modules</span><span><b>${DATA.counts.functions}</b> functions &amp; classes</span><span><b>${DATA.counts.methods}</b> methods</span><span><b>${DATA.vba.length}</b> VBA modules</span>`;
+  $('#install').textContent = '# copy every .py file of toolbank/ into C:\\path\\to\\Toolbox\\toolbank\\ (or: git clone ' + DATA.repo + '.git)\npip install pandas openpyxl pyyaml\n\nimport sys; sys.path.append(r"C:\\path\\to\\Toolbox")  # the folder that contains toolbank/\nfrom toolbank import *';
+  $('#stats').innerHTML = `<span><b>${DATA.counts.modules}</b> modules</span><span><b>${DATA.counts.functions}</b> functions &amp; classes</span><span><b>${DATA.counts.patterns}</b> patterns</span><span><b>${DATA.counts.methods}</b> methods</span><span><b>${DATA.vba.length}</b> VBA modules</span>`;
   $('#exit-codes').innerHTML = '<tr><th>exit</th><th>meaning</th></tr>' + DATA.exit_codes.map(e => `<tr><td><code>${e.code}</code></td><td>${esc(e.meaning)}</td></tr>`).join('');
   $('#vba').innerHTML = '<tr><th>module</th><th>what it does</th></tr>' + DATA.vba.map(v => `<tr><td><code>${esc(v.file)}</code></td><td>${esc(v.summary)}</td></tr>`).join('');
 
@@ -270,7 +309,8 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
   function showTab(name) {
     $$('nav.tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
     $$('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
-    if (location.hash.replace('#', '') !== name) history.replaceState(null, '', '#' + name);
+    const cur = location.hash.replace('#', '');
+    if (cur !== name && !(name === 'patterns' && cur.startsWith('pattern-'))) history.replaceState(null, '', '#' + name);
     if (name === 'find') $('#q').focus();
   }
   $$('nav.tabs button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
@@ -279,6 +319,59 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
   // ---------- modules ----------
   $('#modules').innerHTML = DATA.modules.map(m => `<div class="card mod" data-module="${esc(m.name)}" role="button" tabindex="0"><span class="n">${m.functions.length}</span><h3>${esc(m.title)}</h3><p>${esc(m.doc)}</p><code>${esc(m.file)}</code></div>`).join('');
   $$('.mod').forEach(el => { const go = () => { sel.value = el.dataset.module; $('#q').value = ''; showTab('find'); search(); }; el.addEventListener('click', go); el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } }); });
+
+  // ---------- patterns ----------
+  const PATS = DATA.patterns || [];
+  const USED_IN = {};
+  PATS.forEach(p => p.blocks.forEach(b => (USED_IN[b] = USED_IN[b] || []).push(p)));
+  function patText(p) { return [p.title, p.when, p.slug, p.tags.join(' '), p.blocks.join(' '), p.decisions.join(' '), p.governance.join(' ')].join(' ').toLowerCase(); }
+  function patScore(p, tokens) {
+    const title = (p.title + ' ' + p.slug + ' ' + p.tags.join(' ')).toLowerCase(), all = patText(p);
+    let s = 0;
+    for (const t of tokens) { const hit = (title.includes(t) ? 4 : 0) + (all.includes(t) ? 1 : 0); if (!hit) return 0; s += hit; }
+    return s;
+  }
+  let patTag = '';
+  const TAGS = Array.from(new Set(PATS.flatMap(p => p.tags))).sort();
+  $('#pattern-tags').innerHTML = ['all'].concat(TAGS).map(t => `<button class="chip" data-tag="${t === 'all' ? '' : esc(t)}" aria-pressed="${t === 'all'}">${esc(t)}</button>`).join('');
+  function patCard(p) {
+    const needs = p.needs.map(n => `<span class="badge need">pip install ${esc(n)}</span>`).join(' ');
+    const blocks = p.blocks.map(b => byName[b] ? `<span class="tag" data-fn="${esc(b)}">${esc(b)}</span>` : `<code>${esc(b)}</code>`).join(' ');
+    const li = xs => xs.map(x => `<li>${esc(x)}</li>`).join('');
+    return `<details class="fn pat" id="pattern-${esc(p.slug)}" data-slug="${esc(p.slug)}"><summary><h3>${esc(p.title)}</h3><div class="acts"><button class="small" data-pcopy="${esc(p.slug)}" title="Copy the code">copy code</button></div><div class="when">${esc(p.when)}</div></summary><div class="body"><div class="cols"><div><h4>Decisions it encodes</h4><ul>${li(p.decisions)}</ul></div><div><h4>Governance</h4><ul>${li(p.governance)}</ul></div></div><pre>${esc(p.code)}</pre><div class="meta"><span>uses: ${blocks}</span>${needs}<span>file: <a href="${DATA.repo}/blob/main/${esc(p.file)}" target="_blank" rel="noopener">${esc(p.file)}</a>${p.demo ? ' · demo() runs in the tests' : ''}</span></div></div></details>`;
+  }
+  function renderPatterns() {
+    const tokens = $('#pq').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    let list = PATS.filter(p => !patTag || p.tags.includes(patTag));
+    if (tokens.length) list = list.map(p => [patScore(p, tokens), p]).filter(x => x[0] > 0).sort((a, b) => b[0] - a[0]).map(x => x[1]);
+    $('#patterns').innerHTML = list.length ? list.map(patCard).join('') : '<div class="empty">No pattern matches. Try another word or tag.</div>';
+  }
+  function openPattern(slug) {
+    $('#pq').value = ''; patTag = '';
+    $$('#pattern-tags .chip').forEach(c => c.setAttribute('aria-pressed', String(c.dataset.tag === '')));
+    renderPatterns();
+    const el = document.getElementById('pattern-' + slug);
+    if (el) { el.open = true; el.scrollIntoView({block: 'start'}); }
+  }
+  $('#pq').addEventListener('input', renderPatterns);
+  $('#pattern-tags').addEventListener('click', e => {
+    const c = e.target.closest('.chip'); if (!c) return;
+    patTag = c.dataset.tag;
+    $$('#pattern-tags .chip').forEach(x => x.setAttribute('aria-pressed', String(x === c)));
+    renderPatterns();
+  });
+  $('#patterns').addEventListener('click', e => {
+    const b = e.target.closest('button[data-pcopy]');
+    if (b) { e.preventDefault(); const p = PATS.find(x => x.slug === b.dataset.pcopy); copy(p.code); return; }
+    const t = e.target.closest('.tag[data-fn]');
+    if (t) { e.preventDefault(); $('#q').value = t.dataset.fn; sel.value = ''; showTab('find'); search(); }
+  });
+  renderPatterns();
+
+  // ---------- method ----------
+  $('#method').innerHTML = DATA.method_html || '';
+  $('#method-toc').innerHTML = $$('#method h2').map(h => `<a class="chip" href="#${'m-' + h.id}" data-target="${esc(h.id)}">${esc(h.textContent)}</a>`).join('');
+  $('#method-toc').addEventListener('click', e => { const a = e.target.closest('a[data-target]'); if (!a) return; e.preventDefault(); const h = document.getElementById(a.dataset.target); if (h) h.scrollIntoView({block: 'start'}); });
 
   // ---------- search ----------
   function score(f, tokens) {
@@ -305,9 +398,10 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
     const sig = f.kind === 'class' ? `<span class="cls">${esc(f.name)}</span>${esc(f.signature)}` : `<b>${esc(f.name)}</b>${esc(f.signature)}`;
     const needs = f.needs.length ? f.needs.map(n => `<span class="badge need">pip install ${esc(n)}</span>`).join(' ') : '';
     const src = f.line ? `<a href="${DATA.repo}/blob/main/${f.file}#L${f.line}" target="_blank" rel="noopener">${esc(f.file)}:${f.line}</a>` : esc(f.file);
+    const used = (USED_IN[f.name] || []).map(p => `<a class="tag" href="#pattern-${esc(p.slug)}">${esc(p.slug)}</a>`).join(' ');
     const methods = f.methods.length ? `<ul class="methods">${f.methods.map(m => `<li><code>.${esc(m.name)}${esc(m.signature)}</code> — ${esc(m.summary)}</li>`).join('')}</ul>` : '';
     const extra = f.doc.trim() !== f.summary.trim() ? `<p style="white-space:pre-wrap">${esc(f.doc)}</p>` : '';
-    return `<details class="fn" data-name="${esc(f.name)}"><summary><div class="sig">${sig}</div><div class="acts"><button class="small" data-act="copy" title="Copy a call with every parameter">copy</button><button class="small primary" data-act="add" title="Add to the script builder">+ build</button></div><div class="sum">${esc(f.summary)}</div></summary><div class="body">${extra}${methods}<div class="meta"><span class="tag" data-module="${esc(f.module)}">${esc(f.module)}</span>${needs}<span>source: ${src}</span></div></div></details>`;
+    return `<details class="fn" data-name="${esc(f.name)}"><summary><div class="sig">${sig}</div><div class="acts"><button class="small" data-act="copy" title="Copy a call with every parameter">copy</button><button class="small primary" data-act="add" title="Add to the script builder">+ build</button></div><div class="sum">${esc(f.summary)}</div></summary><div class="body">${extra}${methods}<div class="meta"><span class="tag" data-module="${esc(f.module)}">${esc(f.module)}</span>${needs}<span>source: ${src}</span>${used ? `<span>used in patterns: ${used}</span>` : ''}</div></div></details>`;
   }
   function search() {
     const q = $('#q').value.trim().toLowerCase(), mod = sel.value;
@@ -316,6 +410,8 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
     if (tokens.length) list = list.map(f => [score(f, tokens), f]).filter(x => x[0] > 0).sort((a, b) => b[0] - a[0] || a[1].name.localeCompare(b[1].name)).map(x => x[1]);
     const needs = tokens.length && !mod ? DATA.needs.filter(n => tokens.every(t => n.need.toLowerCase().includes(t) || n.modules.some(m => m.includes(t)))).slice(0, 5) : [];
     $('#needs').innerHTML = needs.map(n => `<div class="need"><span>${esc(n.need)}</span><span class="mods">${n.modules.map(m => `<span class="tag" data-module="${esc(m)}">${esc(m)}</span>`).join(' ')}</span></div>`).join('');
+    const rel = tokens.length && !mod ? PATS.map(p => [patScore(p, tokens), p]).filter(x => x[0] > 0).sort((x, y) => y[0] - x[0]).slice(0, 3).map(x => x[1]) : [];
+    $('#related').innerHTML = rel.map(p => `<div class="need"><span class="badge">pattern</span><a href="#pattern-${esc(p.slug)}">${esc(p.title)}</a></div>`).join('');
     const out = [];
     if (!list.length) { out.push('<div class="empty">Nothing matches. Try another word, or clear the module filter.</div>'); }
     else if (tokens.length) { out.push(`<div class="hint">${list.length} result${list.length === 1 ? '' : 's'}</div>`); list.slice(0, 150).forEach(f => out.push(fnCard(f))); if (list.length > 150) out.push(`<div class="hint">…and ${list.length - 150} more; narrow the search.</div>`); }
@@ -466,8 +562,10 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
   renderSteps();
   search();
   const hash = location.hash.replace('#', '');
-  if (['find', 'modules', 'build', 'robot'].includes(hash)) showTab(hash);
-  window.addEventListener('hashchange', () => { const h = location.hash.replace('#', ''); if (['find', 'modules', 'build', 'robot'].includes(h)) showTab(h); });
+  const TABS = ['find', 'patterns', 'method', 'modules', 'build', 'robot'];
+  if (TABS.includes(hash)) showTab(hash);
+  else if (hash.startsWith('pattern-')) { showTab('patterns'); openPattern(hash.slice(8)); }
+  window.addEventListener('hashchange', () => { const h = location.hash.replace('#', ''); if (TABS.includes(h)) showTab(h); else if (h.startsWith('pattern-')) { showTab('patterns'); openPattern(h.slice(8)); } });
 })();
 </script>
 </body>

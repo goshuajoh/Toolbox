@@ -172,6 +172,44 @@ def catalog():
     return mods
 
 
+PATTERN_KEYS = {"title": str, "order": int, "when": str, "tags": list, "blocks": list, "decisions": list,
+                "governance": list}
+
+
+def pattern_meta(path):
+    """Front matter (the YAML docstring) and code of one patterns/*.py file -> dict; raises ValueError if the
+    file breaks the pattern format (see patterns/README.md)."""
+    from toolbank.config import yaml_load
+    text = Path(path).read_text(encoding="utf-8")
+    tree = ast.parse(text)
+    doc = ast.get_docstring(tree, clean=True)
+    if not doc:
+        raise ValueError(f"{path}: needs a YAML docstring")
+    meta = yaml_load(doc)
+    if not isinstance(meta, dict):
+        raise ValueError(f"{path}: docstring is not YAML key: value pairs")
+    for k, typ in PATTERN_KEYS.items():
+        if not isinstance(meta.get(k), typ):
+            raise ValueError(f"{path}: front matter needs {k}: <{typ.__name__}>")
+    meta.setdefault("needs", [])
+    imported = sorted({a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == "toolbank"
+                       for a in n.names})
+    if sorted(meta["blocks"]) != imported:
+        raise ValueError(f"{path}: blocks {sorted(meta['blocks'])} must equal the names imported from toolbank "
+                         f"{imported}")
+    end = tree.body[0].end_lineno                         # the code starts after the docstring
+    code = "\n".join(text.splitlines()[end:]).strip("\n") + "\n"
+    meta.update(slug=Path(path).stem, file=f"patterns/{Path(path).name}", code=code,
+                demo=any(isinstance(n, ast.FunctionDef) and n.name == "demo" for n in tree.body))
+    return meta
+
+
+def patterns():
+    """Every pattern, in `order`."""
+    found = [pattern_meta(p) for p in sorted((ROOT / "patterns").glob("*.py"))]
+    return sorted(found, key=lambda m: (m["order"], m["slug"]))
+
+
 def vba_modules():
     out = []
     for f in sorted((ROOT / "vba").glob("*.bas")):
@@ -213,12 +251,21 @@ def build(mods=None):
     return "\n".join(out) + "\n"
 
 
+def method_html():
+    """METHODOLOGY.md as HTML for the site's Method tab (needs the markdown package at build time only)."""
+    import markdown
+    text = (ROOT / "METHODOLOGY.md").read_text(encoding="utf-8")
+    return markdown.markdown(text, extensions=["tables", "fenced_code", "toc"], output_format="html")
+
+
 def site_data(mods, readme_text):
     n_fn = sum(len(m["functions"]) for m in mods)
     n_me = sum(len(f["methods"]) for m in mods for f in m["functions"])
+    pats = patterns()
     return {"version": toolbank.__version__, "repo": REPO, "modules": mods, "vba": vba_modules(),
             "needs": needs_table(readme_text), "exit_codes": [{"code": c, "meaning": m} for c, m in EXIT_CODES],
-            "counts": {"modules": len(mods), "functions": n_fn, "methods": n_me}}
+            "patterns": pats, "method_html": method_html(),
+            "counts": {"modules": len(mods), "functions": n_fn, "methods": n_me, "patterns": len(pats)}}
 
 
 def render(readme_text=None):

@@ -58,6 +58,7 @@ def run(args, cfg, rd, log, cp):
 
         def handle(row):
             # TODO: business rules -> raise BusinessError("why", code="SHORT_CODE")
+            # Screen steps: attempt(action, verify, ..., **RETRY_PROFILES["ui"]); see patterns/ for tested blocks
             results.append({"id": row["id"], "status": "OK"})
 
         done, failures = process_all([r for _, r in df.iterrows()], handle, checkpoint=cp, key=lambda r: r["id"],
