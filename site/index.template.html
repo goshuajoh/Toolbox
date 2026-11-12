@@ -104,7 +104,9 @@ main { padding: 18px 0 60px; }
 .md code { background: var(--code); border-radius: 4px; padding: 0 4px; }
 .md li { margin: 4px 0; }
 .toc { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
-.md h2, .md h3, .pat { scroll-margin-top: 110px; }
+.md h2, .md h3, .pat { scroll-margin-top: calc(var(--hdr, 110px) + 10px); }
+.demo { margin: 8px 0; }
+.demo summary { cursor: pointer; color: var(--muted); font-size: 13px; }
 .mod { cursor: pointer; }
 .mod:hover { border-color: var(--accent); }
 .mod h3 { font-size: 15px; margin: 0 0 4px; }
@@ -186,17 +188,17 @@ kbd { font-family: var(--mono); font-size: 12px; border: 1px solid var(--line); 
       <input type="search" id="pq" placeholder="Search patterns: retry, login, approval, cut-off, evidence…" autocomplete="off" aria-label="Search patterns">
     </div>
     <div class="chips" id="pattern-tags"></div>
-    <div id="patterns"></div>
+    <div id="pattern-list"></div>
   </section>
 
   <section class="panel" id="panel-method" role="tabpanel">
     <div class="toc" id="method-toc"></div>
-    <div class="card md" id="method"></div>
+    <div class="card md" id="method-body"></div>
   </section>
 
   <section class="panel" id="panel-modules" role="tabpanel">
     <p class="hint">One module per topic. Modules import each other (most need <code>robust.py</code>) and <code>__init__.py</code> loads all of them, so copy the whole <code>toolbank</code> folder. Click a module to browse its functions.</p>
-    <div class="grid" id="modules"></div>
+    <div class="grid" id="module-grid"></div>
     <h2 style="font-size:16px;margin:24px 0 8px">VBA modules (<code>vba/*.bas</code>)</h2>
     <p class="hint">Excel: Developer &gt; Visual Basic &gt; File &gt; Import, or <code>vba_import_bas(path, files)</code> from Python.</p>
     <table id="vba"></table>
@@ -280,6 +282,10 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
   };
   const download = (name, text) => { const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], {type: 'text/plain'})); a.download = name; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 1000); };
 
+  // ---------- sticky header height (scroll targets land below it) ----------
+  const setHdr = () => document.documentElement.style.setProperty('--hdr', $('header.top').offsetHeight + 'px');
+  setHdr(); window.addEventListener('resize', setHdr);
+
   // ---------- theme ----------
   const root = document.documentElement;
   const savedTheme = store.get('toolbank.theme', null);
@@ -310,14 +316,14 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
     $$('nav.tabs button').forEach(b => b.setAttribute('aria-selected', String(b.dataset.tab === name)));
     $$('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
     const cur = location.hash.replace('#', '');
-    if (cur !== name && !(name === 'patterns' && cur.startsWith('pattern-'))) history.replaceState(null, '', '#' + name);
+    if (cur !== name && !(name === 'patterns' && cur.startsWith('pattern-')) && !(name === 'method' && cur.startsWith('m-'))) history.replaceState(null, '', '#' + name);
     if (name === 'find') $('#q').focus();
   }
   $$('nav.tabs button').forEach(b => b.addEventListener('click', () => showTab(b.dataset.tab)));
   document.addEventListener('keydown', e => { if (e.key === '/' && !/input|textarea|select/i.test(e.target.tagName)) { e.preventDefault(); showTab('find'); $('#q').select(); } });
 
   // ---------- modules ----------
-  $('#modules').innerHTML = DATA.modules.map(m => `<div class="card mod" data-module="${esc(m.name)}" role="button" tabindex="0"><span class="n">${m.functions.length}</span><h3>${esc(m.title)}</h3><p>${esc(m.doc)}</p><code>${esc(m.file)}</code></div>`).join('');
+  $('#module-grid').innerHTML = DATA.modules.map(m => `<div class="card mod" data-module="${esc(m.name)}" role="button" tabindex="0"><span class="n">${m.functions.length}</span><h3>${esc(m.title)}</h3><p>${esc(m.doc)}</p><code>${esc(m.file)}</code></div>`).join('');
   $$('.mod').forEach(el => { const go = () => { sel.value = el.dataset.module; $('#q').value = ''; showTab('find'); search(); }; el.addEventListener('click', go); el.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } }); });
 
   // ---------- patterns ----------
@@ -338,13 +344,13 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
     const needs = p.needs.map(n => `<span class="badge need">pip install ${esc(n)}</span>`).join(' ');
     const blocks = p.blocks.map(b => byName[b] ? `<span class="tag" data-fn="${esc(b)}">${esc(b)}</span>` : `<code>${esc(b)}</code>`).join(' ');
     const li = xs => xs.map(x => `<li>${esc(x)}</li>`).join('');
-    return `<details class="fn pat" id="pattern-${esc(p.slug)}" data-slug="${esc(p.slug)}"><summary><h3>${esc(p.title)}</h3><div class="acts"><button class="small" data-pcopy="${esc(p.slug)}" title="Copy the code">copy code</button></div><div class="when">${esc(p.when)}</div></summary><div class="body"><div class="cols"><div><h4>Decisions it encodes</h4><ul>${li(p.decisions)}</ul></div><div><h4>Governance</h4><ul>${li(p.governance)}</ul></div></div><pre>${esc(p.code)}</pre><div class="meta"><span>uses: ${blocks}</span>${needs}<span>file: <a href="${DATA.repo}/blob/main/${esc(p.file)}" target="_blank" rel="noopener">${esc(p.file)}</a>${p.demo ? ' · demo() runs in the tests' : ''}</span></div></div></details>`;
+    return `<details class="fn pat" id="pattern-${esc(p.slug)}" data-slug="${esc(p.slug)}"><summary><h3>${esc(p.title)}</h3><div class="acts"><button class="small" data-pcopy="${esc(p.slug)}" title="Copy the code">copy code</button></div><div class="when">${esc(p.when)}</div></summary><div class="body"><div class="cols"><div><h4>Decisions it encodes</h4><ul>${li(p.decisions)}</ul></div><div><h4>Governance</h4><ul>${li(p.governance)}</ul></div></div><pre>${esc(p.code)}</pre><details class="demo"><summary>demo: the block working on fakes, offline (runs in the tests; not for copying)</summary><pre>${esc(p.demo_code)}</pre></details><div class="meta"><span>uses: ${blocks}</span>${needs}<span>file: <a href="${DATA.repo}/blob/main/${esc(p.file)}" target="_blank" rel="noopener">${esc(p.file)}</a></span></div></div></details>`;
   }
   function renderPatterns() {
     const tokens = $('#pq').value.trim().toLowerCase().split(/\s+/).filter(Boolean);
     let list = PATS.filter(p => !patTag || p.tags.includes(patTag));
     if (tokens.length) list = list.map(p => [patScore(p, tokens), p]).filter(x => x[0] > 0).sort((a, b) => b[0] - a[0]).map(x => x[1]);
-    $('#patterns').innerHTML = list.length ? list.map(patCard).join('') : '<div class="empty">No pattern matches. Try another word or tag.</div>';
+    $('#pattern-list').innerHTML = list.length ? list.map(patCard).join('') : '<div class="empty">No pattern matches. Try another word or tag.</div>';
   }
   function openPattern(slug) {
     $('#pq').value = ''; patTag = '';
@@ -360,7 +366,7 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
     $$('#pattern-tags .chip').forEach(x => x.setAttribute('aria-pressed', String(x === c)));
     renderPatterns();
   });
-  $('#patterns').addEventListener('click', e => {
+  $('#pattern-list').addEventListener('click', e => {
     const b = e.target.closest('button[data-pcopy]');
     if (b) { e.preventDefault(); const p = PATS.find(x => x.slug === b.dataset.pcopy); copy(p.code); return; }
     const t = e.target.closest('.tag[data-fn]');
@@ -369,9 +375,10 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
   renderPatterns();
 
   // ---------- method ----------
-  $('#method').innerHTML = DATA.method_html || '';
-  $('#method-toc').innerHTML = $$('#method h2').map(h => `<a class="chip" href="#${'m-' + h.id}" data-target="${esc(h.id)}">${esc(h.textContent)}</a>`).join('');
-  $('#method-toc').addEventListener('click', e => { const a = e.target.closest('a[data-target]'); if (!a) return; e.preventDefault(); const h = document.getElementById(a.dataset.target); if (h) h.scrollIntoView({block: 'start'}); });
+  $('#method-body').innerHTML = DATA.method_html || '';
+  $('#method-toc').innerHTML = $$('#method-body h2').map(h => `<a class="chip" href="#${'m-' + h.id}" data-target="${esc(h.id)}">${esc(h.textContent)}</a>`).join('');
+  function openSection(id) { const h = document.getElementById(id); if (h) h.scrollIntoView({block: 'start'}); }
+  $('#method-toc').addEventListener('click', e => { const a = e.target.closest('a[data-target]'); if (!a) return; e.preventDefault(); history.replaceState(null, '', a.getAttribute('href')); openSection(a.dataset.target); });
 
   // ---------- search ----------
   function score(f, tokens) {
@@ -563,9 +570,13 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
   search();
   const hash = location.hash.replace('#', '');
   const TABS = ['find', 'patterns', 'method', 'modules', 'build', 'robot'];
-  if (TABS.includes(hash)) showTab(hash);
-  else if (hash.startsWith('pattern-')) { showTab('patterns'); openPattern(hash.slice(8)); }
-  window.addEventListener('hashchange', () => { const h = location.hash.replace('#', ''); if (TABS.includes(h)) showTab(h); else if (h.startsWith('pattern-')) { showTab('patterns'); openPattern(h.slice(8)); } });
+  function route(h) {
+    if (TABS.includes(h)) showTab(h);
+    else if (h.startsWith('pattern-')) { showTab('patterns'); openPattern(h.slice(8)); }
+    else if (h.startsWith('m-')) { showTab('method'); openSection(h.slice(2)); }
+  }
+  route(hash);
+  window.addEventListener('hashchange', () => route(location.hash.replace('#', '')));
 })();
 </script>
 </body>

@@ -4,11 +4,12 @@ JavaScript, network capture (the JSON behind a page), HAR recording, and handing
 Works in Jupyter too: there the browser runs on its own thread automatically."""
 import asyncio
 import functools
+import os
 import re
 import threading
 import time
-from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 
 import pandas as pd
@@ -156,12 +157,12 @@ class Browser:
         return fn(self.page)
 
     def screenshot(self, label):
-        """Full-page PNG into screenshots_dir, named <time>_<n>_<label>.png so a re-run never overwrites earlier
+        """Full-page PNG into screenshots_dir, named <time>_<pid>_<n>_<label>.png so a re-run never overwrites earlier
         evidence; returns path (None if it failed)."""
         self.dir.mkdir(parents=True, exist_ok=True)
         self.n += 1
         safe = re.sub(r"[^A-Za-z0-9_-]", "_", label)[:60]
-        p = self.dir / f"{datetime.now():%Y%m%d-%H%M%S}_{self.n:03d}_{safe}.png"
+        p = self.dir / f"{datetime.now():%Y%m%d-%H%M%S-%f}_{os.getpid()}_{self.n:03d}_{safe}.png"
         try:
             self.page.screenshot(path=str(p), full_page=True)
             return p

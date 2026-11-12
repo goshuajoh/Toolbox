@@ -20,7 +20,7 @@ def _clean(v):
     if isinstance(v, str):
         return redact(v)
     if isinstance(v, int):
-        return v
+        return redact(str(v)) if abs(v) >= 10_000_000 else v     # 8+ digits: an account number, as in text
     if isinstance(v, float):
         return v if math.isfinite(v) else None
     if isinstance(v, dict):

@@ -309,3 +309,25 @@ def test_rule_values_fail_loud(tmp_path):
         condition(nums, "a", "between", "1,000, 2,000")
     assert condition(nums, "a", "between", "1,000; 2,000").tolist() == [True, False]
     assert condition(nums, "a", "in", "100, 200, 300").tolist() == [False, True]
+
+
+def test_rule_values_second_review():
+    nums = pd.DataFrame({"a": [1.5, 1500.0]})
+    for v in ("1,5", "1.000,50"):
+        with pytest.raises(ValueError, match="ambiguous"):
+            condition(nums, "a", ">", v)
+    assert condition(nums, "a", ">", "1,234.5").tolist() == [False, True]
+    for op in ("gt", "in", "contains"):
+        with pytest.raises(ValueError, match="needs a value"):
+            condition(nums, "a", op, None)
+    with pytest.raises(ValueError, match="above high"):
+        condition(nums, "a", "between", "2000; 100")
+    with pytest.raises(ValueError, match="type Y or N"):
+        apply_rules(nums, pd.DataFrame([{"code": "BIG", "column": "a", "op": "gt", "value": "1000", "active": "Active"}]))
+    assert apply_rules(nums, pd.DataFrame([{"code": "BIG", "column": "a", "op": "gt", "value": "1000",
+                                            "active": 1.0}]))["flags"].tolist() == ["", "BIG"]
+    probs = validate_rules(pd.DataFrame([{"code": "X", "column": "a", "op": "gt", "value": None},
+                                         {"code": "Y", "column": "a", "op": "between", "value": "5"},
+                                         {"code": "Z", "column": "d", "op": "in", "value": "2026-01-01, x"}]),
+                           pd.DataFrame({"a": [1.0], "d": pd.to_datetime(["2026-01-01"])}))
+    assert [p.split(":")[0] for p in probs] == ["X", "Y", "Z"]

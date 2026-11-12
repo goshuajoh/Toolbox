@@ -8,7 +8,7 @@ import zipfile
 from datetime import date, datetime
 from pathlib import Path
 
-from .robust import SystemError_
+from .robust import RobotError, SystemError_
 
 
 def wait_for_file(pattern, timeout_s=600, poll_s=10, stable_s=10, min_mtime=None):
@@ -37,13 +37,19 @@ def newest_file(pattern):
 
 def is_locked(path):
     """True if the file is open/locked by someone else (Windows Excel lock). A missing file is not locked, and
-    checking never creates it."""
+    checking never creates it. The check needs modify rights: without them RobotError NO_ACCESS (fix the access,
+    do not wait); a folder -> ValueError."""
     try:
         fd = os.open(path, os.O_WRONLY | os.O_APPEND)
     except FileNotFoundError:
         return False
-    except OSError:
-        return True
+    except IsADirectoryError:
+        raise ValueError(f"{Path(path).name} is a folder, not a file") from None
+    except PermissionError as e:
+        if getattr(e, "winerror", None) in (32, 33):      # Windows sharing / lock violation: someone has it open
+            return True
+        raise RobotError(f"no write access to {Path(path).name}: the robot account needs modify rights",
+                         code="NO_ACCESS") from e
     os.close(fd)
     return False
 

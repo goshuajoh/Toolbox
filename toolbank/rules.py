@@ -43,6 +43,28 @@ def feature_flag(name, cfg=None, default=False, env_prefix="FLAG_"):
     return default
 
 
+_NEEDS_VALUE = {">", ">=", "<", "<=", "in", "not in", "contains", "not contains", "startswith", "endswith", "regex",
+                "between"}
+
+
+def _blank_value(value):
+    return value is None or (isinstance(value, float) and np.isnan(value)) or \
+        (isinstance(value, str) and not value.strip())
+
+
+def _active(v):
+    """True / False for an 'active' cell: blank counts as active; anything not clearly yes or no is None."""
+    if v is None or (isinstance(v, float) and np.isnan(v)):
+        return True
+    if isinstance(v, (bool, np.bool_)):
+        return bool(v)
+    if isinstance(v, (int, float, np.integer, np.floating)):
+        return {1: True, 0: False}.get(v)
+    t = str(v).strip().lower()
+    t = t[:-2] if t.endswith(".0") else t
+    return True if t in _TRUE else False if t in _FALSE else None
+
+
 def _is_text(s):
     return s.dtype == object or pd.api.types.is_string_dtype(s)
 
@@ -55,8 +77,11 @@ def _cast(series, value):
     if pd.api.types.is_bool_dtype(series):
         return truthy(value)
     if pd.api.types.is_numeric_dtype(series):
+        text = str(value).strip()
+        if "," in text and not re.fullmatch(r"[+-]?\d{1,3}(,\d{3})+(\.\d+)?", text):
+            raise ValueError(f"rule value {value!r} is ambiguous: type 1.5 or 1500 (a comma only between thousands)")
         try:
-            return float(str(value).replace(",", ""))
+            return float(text.replace(",", ""))
         except ValueError:
             raise ValueError(f"rule value {value!r} is not a number, but the column holds numbers") from None
     if pd.api.types.is_datetime64_any_dtype(series):
@@ -90,6 +115,8 @@ def condition(df, column, op, value=None, case=False):
     s = df[column]
     op = _ALIASES.get(str(op).strip().lower(), str(op).strip().lower())
     text = _is_text(s)
+    if op in _NEEDS_VALUE and _blank_value(value):
+        raise ValueError(f"operator {op!r} needs a value (blank in the rule)")
     norm = (lambda x: x.astype("string").str.strip().str.upper()) if text and not case else (lambda x: x)
     blank = (s.isna() | (s.astype("string").str.strip() == "").fillna(False)) if text else s.isna()
     if op == "is null":
@@ -110,6 +137,8 @@ def condition(df, column, op, value=None, case=False):
         if len(bounds) != 2:
             raise ValueError(f"'between' needs two values, low and high, e.g. '100; 200'; got {value!r}")
         lo, hi = [_cast(s, v) for v in bounds]
+        if lo > hi:
+            raise ValueError(f"'between' low {bounds[0]!r} is above high {bounds[1]!r}")
         m = s.between(lo, hi)
     elif op in ("contains", "not contains", "startswith", "endswith", "regex"):
         t = s.astype("string")
@@ -155,7 +184,12 @@ def _rules_frame(rules):
         r["value"] = None
     r = r[r[["code", "column", "op"]].notna().any(axis=1).astype(bool)]      # skip fully blank lines
     if "active" in r.columns:
-        r = r[r["active"].map(lambda v: True if pd.isna(v) else truthy(v)).astype(bool)]
+        act = r["active"].map(_active)
+        unclear = act.isna()
+        if unclear.any():                                       # 'Active', 'Live': never switch a rule off silently
+            raise ValueError(f"rules rows {[int(i) + 2 for i in r.index[unclear.to_numpy(dtype=bool)]]} have active "
+                             f"{r.loc[unclear, 'active'].tolist()}: type Y or N")
+        r = r[act.astype(bool)]
     partial = r[["code", "column", "op"]].isna().any(axis=1)
     if partial.any():                                           # never drop a half-filled active rule silently
         raise ValueError(f"rules rows {[int(i) + 2 for i in r.index[partial]]} miss code/column/op "
@@ -174,6 +208,12 @@ def validate_rules(rules, df=None):
                          "becomes a formula: type eq, ne, gt, ge, lt, le)")
         if df is not None and row["column"] not in df.columns:
             probs.append(f"{row['code']}: column {row['column']!r} not in data")
+        elif op in OPS:
+            try:                                                # the value against the column's type, no rows
+                condition(df.iloc[:0] if df is not None else pd.DataFrame({row["column"]: pd.Series(dtype=object)}),
+                          row["column"], op, row["value"])
+            except ValueError as e:
+                probs.append(f"{row['code']}: {e}")
     return probs
 
 

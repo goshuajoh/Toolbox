@@ -235,6 +235,7 @@ def test_template_robot_runs(tmp_path):
     pd.DataFrame({"id": ["A", "B"]}).to_excel(tmp_path / "in.xlsx", index=False)
     (tmp_path / "cfg").mkdir()
     (tmp_path / "cfg" / "default.yaml").write_text(f"input_path: {tmp_path / 'in.xlsx'}\nworkdir: {tmp_path / 'work'}\n")
+    (tmp_path / "cfg" / "dev.yaml").write_text("")
     assert m.main(["--config-dir", str(tmp_path / "cfg"), "--business-date", "2026-03-06"]) == 0
     assert (tmp_path / "work" / "my_robot" / "2026-03-06" / "my_robot_report.xlsx").exists()
 
@@ -367,11 +368,18 @@ def test_template_exit_codes(tmp_path, monkeypatch):
     (cfg / "prod.yaml").write_text(f"input_path: {tmp_path / 'noid.xlsx'}\nworkdir: {tmp_path / 'work'}\n")
     (cfg / "gone.yaml").write_text(f"input_path: {tmp_path / 'nope.xlsx'}\nworkdir: {tmp_path / 'work'}\n")
     args = ["--config-dir", str(cfg), "--business-date", "2026-03-06"]
+    assert m.main(args) == 4                                               # no dev.yaml: config error, not a live run
+    (cfg / "dev.yaml").write_text("")
+    with pytest.raises(SystemExit):                                        # only YYYY-MM-DD: one folder per date
+        m.main(["--config-dir", str(cfg), "--business-date", "06/03/2026"])
+    day = tmp_path / "work" / "my_robot" / "2026-03-06"
     assert m.main(args + ["--dry-run"]) == 0
-    log_file = tmp_path / "work" / "my_robot" / "2026-03-06" / "run.log.jsonl"
-    lines = [json.loads(ln) for ln in log_file.read_text().splitlines()]
-    assert not (tmp_path / "work" / "my_robot" / "2026-03-06" / "my_robot_report.xlsx").exists()
-    assert lines[0]["dry_run"] is True and any(ln["msg"].startswith("[dry-run] would call safe_write_excel") for ln in lines)
+    lines = [json.loads(ln) for ln in (day / "run.log.jsonl").read_text().splitlines()]
+    assert lines[0]["dry_run"] is True and (day / "my_robot_report_dryrun.xlsx").exists()
+    assert not (day / "my_robot_report.xlsx").exists() and not (day / "checkpoint.json").exists()   # live run still does all
+    assert m.main(args) == 0 and sorted(Checkpoint(day / "checkpoint.json").done) == ["A", "B"]
+    (day / "checkpoint.json").unlink()
+    log_file = day / "run.log.jsonl"
     monkeypatch.setenv("BOT_ENV", "prod")                                  # BOT_ENV is honoured by --env's default
     assert m.main(args) == 2                                               # missing required column -> owner
     last = json.loads(log_file.read_text().splitlines()[-1])
@@ -383,6 +391,8 @@ def test_template_exit_codes(tmp_path, monkeypatch):
     del m.cleanse
     with single_instance("my_robot", lock_dir=tmp_path / "work" / "my_robot" / "2026-03-06"):
         assert m.main(args) == 6
+    (cfg / "dev.yaml").write_text(f"workdir: {tmp_path / 'in.xlsx'}\n")              # work folder is a file
+    assert m.main(args) == 3
 
 
 class _FakeTime:
@@ -471,3 +481,108 @@ def test_shared_fixes_from_pattern_review(tmp_path):
     msg = build_email("a@x.test", "b@x.test", "s", text="t")
     save_eml(msg, tmp_path / "d" / "m.eml")
     assert [f.name for f in (tmp_path / "d").iterdir()] == ["m.eml"]  # no temp file left behind
+
+
+def test_attempt_never_repeats_blind():
+    t, log = _FakeTime(), []
+    kw = dict(log=log.append, sleep=t.sleep, clock=t.clock)
+    sent = []
+
+    def send():
+        sent.append(1)
+        raise TimeoutError("no reply")
+
+    def lookup_down():
+        if sent:
+            raise ConnectionError("target down")
+        return False
+    with pytest.raises(SystemError_) as e:                     # cannot tell if it arrived: stop, do not resend
+        attempt(send, already_done=lookup_down, **dict(RETRY_PROFILES["submit"], tries=2), **kw)
+    assert e.value.code == "DONE_CHECK_FAILED" and sent == [1]
+    with pytest.raises(ValueError, match="already_done"):     # irreversible: no second route without a check
+        attempt(send, fallbacks=send, **RETRY_PROFILES["submit"], **kw)
+    sent.clear()
+    with pytest.raises(RobotError) as e:                      # unconfirmed send: a person checks, never re-run
+        attempt(lambda: sent.append(1), verify=lambda: False, **RETRY_PROFILES["submit"], **kw)
+    assert e.value.code == "STEP_UNCONFIRMED" and not e.value.retryable and sent == [1]
+    with pytest.raises(RobotError) as e:
+        process_all(["PAY1", "PAY2"], lambda i: attempt(lambda: sent.append(i), verify=lambda: False,
+                                                        **RETRY_PROFILES["submit"], **kw))
+    assert e.value.code == "STEP_UNCONFIRMED" and sent == [1, "PAY1"]   # the run stops at the first one
+    with pytest.raises(TypeError, match="already_done must be a function"):
+        attempt(lambda: 1, already_done=True)
+    with pytest.raises(ValueError, match="poll_s"):
+        attempt(lambda: 1, poll_s=0)
+
+
+def test_attempt_bugs_data_frames_and_redaction():
+    t, log = _FakeTime(), []
+    kw = dict(log=log.append, sleep=t.sleep, clock=t.clock)
+    calls = []
+
+    def bug():
+        calls.append(1)
+        return None.click()
+    with pytest.raises(AttributeError):
+        attempt(bug, **RETRY_PROFILES["ui"], **kw)
+    assert calls == [1]                                        # a bug is not retried
+    with pytest.raises(BusinessError) as e:
+        attempt(lambda: {}["amount"], **RETRY_PROFILES["ui"], **kw)
+    assert e.value.code == "BAD_DATA"
+    rows = iter([pd.DataFrame(), pd.DataFrame({"ref": ["PAY1"]})])
+    assert attempt(lambda: "ok", verify=lambda: next(rows), verify_timeout_s=5, poll_s=1, **kw) == "ok"
+
+    def leaky():
+        raise RuntimeError("locator('text=jane.tan@example.com 4111 1111 1111 1111') not found")
+    with pytest.raises(SystemError_):
+        attempt(leaky, tries=1, **kw)
+    assert "jane.tan@example.com" not in " ".join(log) and "<email:***>" in " ".join(log)
+
+
+def test_approval_four_eyes_and_round_trip(tmp_path):
+    import decimal
+    p = tmp_path / "a.xlsx"
+    odd = {"action_id": 1001, "action": "PAY", "amt": decimal.Decimal("101.50"), "na": pd.NA, "z": -0.0,
+           "ts": pd.Timestamp("2026-03-06 10:30:15.123456"), "txt": "a\r\nb", "acct": "00123"}
+    propose(p, [odd, {"action_id": "PAY-2", "action": "HOLD", "amt": 5000}, {"action_id": "PAY-3", "action": "PAY", "amt": 1}])
+    wb = load_workbook(p); ws = wb["Approvals"]
+    hdr = {c.value: c.column for c in ws[1]}
+    for row, checker in ((2, "ben"), (3, "ben"), (4, "svc_robot")):
+        ws.cell(row, hdr["decision"]).value, ws.cell(row, hdr["checker"]).value = "APPROVED", checker
+    ws.cell(3, hdr["action"]).value = "PAY"                                  # HOLD changed to PAY
+    wb.save(p)
+    why = read_decisions(p, maker="svc_robot", approvers=["ben", "ann"]).set_index("action_id")["why"].to_dict()
+    assert why == {"1001": "OK", "PAY-2": "TAMPERED", "PAY-3": "SAME_PERSON"}   # odd values survive; ids are text
+    assert approved_actions(p, approvers=["ann"]) == ([], ["1001", "PAY-2", "PAY-3"])
+    ws.append([ws.cell(2, c).value for c in range(1, ws.max_column + 1)])    # a copied row
+    wb.save(p)
+    assert read_decisions(p)["why"].tolist().count("DUPLICATE") == 2
+
+
+def test_shared_fixes_second_review(tmp_path):
+    from unittest import mock
+    f = tmp_path / "x.csv"
+    f.write_text("a")
+    with mock.patch("os.open", side_effect=PermissionError(13, "denied")):
+        with pytest.raises(RobotError) as e:
+            is_locked(f)
+    assert e.value.code == "NO_ACCESS"
+    sharing = PermissionError(13, "sharing violation")
+    sharing.winerror = 32
+    with mock.patch("os.open", side_effect=sharing):
+        assert is_locked(f) is True
+    with pytest.raises(ValueError, match="folder"):
+        is_locked(tmp_path)
+    log = get_logger(tmp_path / "r.jsonl", run_id="R", console=False)
+    log.info("x", extra={"item_id": 40012345678, "rows": 5})
+    rec = json.loads((tmp_path / "r.jsonl").read_text())
+    assert rec["item_id"] == "<account:***>" and rec["rows"] == 5
+    shape = describe_shape(pd.DataFrame({"acct": [40012345678, 40098765432], "bal": [1234567.89, -98.12]}))
+    assert shape["shape"].tolist() == ["up to 11 digits", "up to 7 digits, decimals, negatives"]
+    with pytest.raises(BusinessError) as e:                    # a Monday re-run of Friday's date is late
+        assert_before_cutoff("17:30", now=datetime(2026, 11, 30, 9, 0, tzinfo=SG), business_date="2026-11-27")
+    assert e.value.code == "PAST_CUTOFF"
+    assert assert_before_cutoff("17:30", now=datetime(2026, 11, 27, 17, 0, tzinfo=SG), business_date="2026-11-27") == 30
+    with pytest.raises(KeyError) as e:
+        get_secret("TOOLBANK_TEST_NO_SUCH_SECRET")
+    assert isinstance(e.value, RobotError) and classify(e.value).code == "NO_SECRET"

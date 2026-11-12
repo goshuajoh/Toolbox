@@ -41,6 +41,10 @@ def test_star_import_exports_functions_not_modules():
 
 def test_index_generator_covers_every_module():
     import runpy
+
+    import pytest
+    if not (ROOT / "make_index.py").exists():
+        pytest.skip("make_index.py not copied")
     text = runpy.run_path(str(ROOT / "make_index.py"), run_name="not_main")["build"]()
     for m in toolbank._MODULES:
         assert f"`toolbank/{m}.py`" in text
@@ -51,6 +55,8 @@ def test_docs_site_in_sync():
     import runpy
 
     import pytest
+    if not (ROOT / "make_index.py").exists():
+        pytest.skip("make_index.py not copied")
     pytest.importorskip("markdown")              # build-time only: renders METHODOLOGY.md for the site
     m = runpy.run_path(str(ROOT / "make_index.py"), run_name="not_main")
     assert m["main"](["--check"]) == 0, "README index or docs/ out of date: run python make_index.py"

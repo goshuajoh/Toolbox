@@ -8,6 +8,8 @@ import pytest
 import toolbank
 
 ROOT = Path(__file__).resolve().parents[1]
+if not (ROOT / "make_index.py").exists():                 # a copy of toolbank/ only: nothing to check here
+    pytest.skip("make_index.py not copied", allow_module_level=True)
 MI = runpy.run_path(str(ROOT / "make_index.py"), run_name="not_main")
 FILES = sorted((ROOT / "patterns").glob("*.py"))
 
@@ -19,8 +21,8 @@ def test_pattern(path, tmp_path, monkeypatch):
     assert meta["decisions"] and meta["governance"] and len(meta["title"]) <= 70
     monkeypatch.chdir(tmp_path)
     ns = runpy.run_path(str(path), run_name="pattern")
-    if meta["demo"]:
-        ns["demo"](tmp_path)
+    ns["demo"](tmp_path)                                  # every block is shown working
+    compile(meta["code"], f"{path.name} (block)", "exec")  # the copied part stands on its own
 
 
 def test_patterns_unique_and_ordered():

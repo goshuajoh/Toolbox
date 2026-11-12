@@ -185,11 +185,15 @@ PATTERN_TAGS = {"screens": "clicking, typing and reading desktop, web or Citrix 
                 "api": "data behind the screen"}
 
 
+DEMO_MARKER = "# --- demo ---"
+
+
 def pattern_meta(path):
     """Front matter (the YAML docstring) and code of one patterns/*.py file -> dict; raises ValueError if the
-    file breaks the pattern format (see patterns/README.md)."""
+    file breaks the pattern format (README, Develop): the block above the line '# --- demo ---' is what people
+    copy; demo(tmp) below it shows the block working and runs in the tests."""
     from toolbank.config import yaml_load
-    text = Path(path).read_text(encoding="utf-8")
+    text = Path(path).read_text(encoding="utf-8-sig").replace("\r\n", "\n")
     tree = ast.parse(text)
     doc = ast.get_docstring(tree, clean=True)
     if not doc:
@@ -197,22 +201,34 @@ def pattern_meta(path):
     meta = yaml_load(doc)
     if not isinstance(meta, dict):
         raise ValueError(f"{path}: docstring is not YAML key: value pairs")
-    for k, typ in PATTERN_KEYS.items():
+    meta["needs"] = meta.get("needs") or []
+    for k, typ in {**PATTERN_KEYS, "needs": list}.items():
         if not isinstance(meta.get(k), typ):
             raise ValueError(f"{path}: front matter needs {k}: <{typ.__name__}>")
-    meta.setdefault("needs", [])
+        if typ is list and not all(isinstance(x, str) and x.strip() for x in meta[k]):
+            raise ValueError(f"{path}: every {k} item must be text; quote items that contain ': '")
     unknown = [t for t in meta["tags"] if t not in PATTERN_TAGS]
     if unknown:
         raise ValueError(f"{path}: unknown tags {unknown}; use {sorted(PATTERN_TAGS)}")
+    for n in ast.walk(tree):
+        if (isinstance(n, ast.Import) and any(a.name.split(".")[0] == "toolbank" for a in n.names)) or \
+                (isinstance(n, ast.ImportFrom) and (n.module or "").startswith("toolbank.")):
+            raise ValueError(f"{path}: import blocks with 'from toolbank import name' so blocks stays exact")
     imported = sorted({a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == "toolbank"
                        for a in n.names})
     if sorted(meta["blocks"]) != imported:
         raise ValueError(f"{path}: blocks {sorted(meta['blocks'])} must equal the names imported from toolbank "
                          f"{imported}")
-    end = tree.body[0].end_lineno                         # the code starts after the docstring
-    code = "\n".join(text.splitlines()[end:]).strip("\n") + "\n"
-    meta.update(slug=Path(path).stem, file=f"patterns/{Path(path).name}", code=code,
-                demo=any(isinstance(n, ast.FunctionDef) and n.name == "demo" for n in tree.body))
+    lines = text.split("\n")                              # not splitlines(): U+2028 inside a string is not a line end
+    marks = [i for i, ln in enumerate(lines) if ln.strip() == DEMO_MARKER]
+    if len(marks) != 1:
+        raise ValueError(f"{path}: needs exactly one line '{DEMO_MARKER}' between the block and its demo")
+    if not any(isinstance(n, ast.FunctionDef) and n.name == "demo" and n.lineno > marks[0] for n in tree.body):
+        raise ValueError(f"{path}: needs def demo(tmp) below '{DEMO_MARKER}'")
+    end = tree.body[0].end_lineno                         # the block starts after the docstring
+    code = "\n".join(lines[end:marks[0]]).strip("\n") + "\n"
+    demo_code = "\n".join(lines[marks[0] + 1:]).strip("\n") + "\n"
+    meta.update(slug=Path(path).stem, file=f"patterns/{Path(path).name}", code=code, demo_code=demo_code, demo=True)
     return meta
 
 
@@ -264,10 +280,16 @@ def build(mods=None):
 
 
 def method_html():
-    """METHODOLOGY.md as HTML for the site's Method tab (needs the markdown package at build time only)."""
+    """METHODOLOGY.md as HTML for the site's Method tab (needs the markdown package at build time only). Raw HTML
+    in the file is shown as text, never run: the page puts this into innerHTML."""
     import markdown
-    text = (ROOT / "METHODOLOGY.md").read_text(encoding="utf-8")
-    return markdown.markdown(text, extensions=["tables", "fenced_code", "toc"], output_format="html")
+
+    class NoHTML(markdown.Extension):
+        def extendMarkdown(self, md):
+            md.preprocessors.deregister("html_block")
+            md.inlinePatterns.deregister("html")
+    text = (ROOT / "METHODOLOGY.md").read_text(encoding="utf-8-sig")
+    return markdown.markdown(text, extensions=["tables", "fenced_code", "toc", NoHTML()], output_format="html")
 
 
 def site_data(mods, readme_text):

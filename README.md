@@ -23,8 +23,9 @@ pip install -r Toolbox/requirements-optional.txt   # only what you need (see com
 
 **Without git:** recreate the same folders and copy the files from GitHub's **Raw** view, saved as UTF-8 (several
 files contain characters such as `€`). You need every `.py` file in `toolbank/` (the modules import each other and
-`__init__.py` loads all of them), plus `templates/robot_template.py` for robots and any `patterns/*.py` you use.
-`tests/` is optional, to check your setup. Then `pip install pandas openpyxl pyyaml`.
+`__init__.py` loads all of them), plus `templates/robot_template.py` for robots and the blocks you use from
+`patterns/`. `tests/` is optional, to check your setup: `python -m pytest tests` checks the library and skips the
+website and pattern checks when `make_index.py` is not there. Then `pip install pandas openpyxl pyyaml`.
 
 In Jupyter / a script:
 
@@ -156,8 +157,9 @@ script. The website's **Build a script** tab writes both the script and the YAML
 
 Functions answer "how do I read this file". Patterns answer "how should this step behave when things go wrong": how
 many tries, what to check after an action, the fallback, when to stop, what evidence to keep. Each file in
-`patterns/` holds a copyable block, the decisions it encodes (with numbers and reasons), the controls it gives you,
-and a `demo()` that runs it offline. The tests run every demo, so a block that stops working fails the build.
+`patterns/` holds a copyable block (above the line `# --- demo ---`), the decisions it encodes (with numbers and
+reasons), the controls it gives you, and below the line a `demo()` that runs the block offline on fakes. Copy only
+the block. The tests run every demo, so a block that stops working fails the build.
 
 The core block is `attempt`:
 
@@ -167,15 +169,26 @@ attempt(
     verify=saved,                          # what the screen shows when it worked
     recover=close_popup,                   # between tries: Esc, re-focus
     fallbacks=[lambda: hotkey("ctrl", "s")],   # another way to do the same thing
-    already_done=saved,                    # never repeat a save that landed
-    on_give_up=lambda: screen_capture(run_folder / "save_failed.png"),
+    already_done=saved,                    # checked before every try: never repeat a save that landed
+    on_give_up=lambda: screen_capture(run_folder / f"save_failed_{ref}_{datetime.now():%H%M%S}.png"),
+    log=log.warning,                       # every failed try in the run log, redacted
     **RETRY_PROFILES["ui"],                # 3 tries, 2 s apart, each checked for up to 10 s
 )
 ```
 
 After the tries and fallbacks it raises `SystemError_` STEP_FAILED with every try in its context; `process_all`
-stops after 3 such failures in a row and the template exits 3. The retry profiles (`ui`, `page_load`, `file_lock`,
-`read`, `submit`, `login`) keep how many tries and how long to wait in one reviewed place.
+stops after 3 such failures in a row and the template exits 3. What it will not do:
+
+- **Retry a bug or bad data.** `TypeError`, `AttributeError` and the like are raised at once (exit 5); `KeyError` and
+  `ValueError` become `BusinessError` BAD_DATA.
+- **Repeat when it cannot tell.** If `already_done` raises (the window is frozen, the lookup is down), the step stops
+  with DONE_CHECK_FAILED instead of acting again.
+- **Send twice.** `RETRY_PROFILES["submit"]` sets `irreversible=True`: one execution, no retry and no fallback unless
+  `already_done` asks the target first. If the send cannot be confirmed it raises `RobotError` STEP_UNCONFIRMED,
+  which stops the run for a person to check, instead of being re-run.
+
+The retry profiles (`ui`, `page_load`, `file_lock`, `read`, `submit`, `login`) keep how many tries and how long to
+wait in one reviewed place.
 
 ## The toolbox website
 
@@ -203,7 +216,8 @@ python make_index.py         # README index + docs/ from the docstrings, pattern
 ```
 
 A new pattern is one file in `patterns/` with a YAML docstring (title, order, when, tags, needs, blocks, decisions,
-governance) and a `demo(tmp)`; copy `patterns/ui_step.py` as the starting point. Tags come from the short list in
+governance), the block, the line `# --- demo ---`, and below it a `demo(tmp)` with any fakes it needs; copy
+`patterns/ui_step.py` as the starting point. Tags come from the short list in
 `make_index.py` (`PATTERN_TAGS`). `tests/test_patterns.py` checks the
 format, that `blocks` lists exactly what the file imports from toolbank, and runs the demo.
 

@@ -36,8 +36,22 @@ def shape_of(v):
     return "".join("9" if c.isdigit() else "A" if c.isupper() else "a" if c.isalpha() else c for c in str(v))
 
 
+def _number_shape(nn):
+    """'up to 11 digits, decimals, negatives': the size of the numbers, not their values."""
+    big = float(nn.abs().max())
+    digits = len(str(int(big))) if big >= 1 else 1
+    parts = [f"up to {digits} digit{'s' if digits > 1 else ''}"]
+    if (nn != nn.round()).any():
+        parts.append("decimals")
+    if (nn < 0).any():
+        parts.append("negatives")
+    return ", ".join(parts)
+
+
 def describe_shape(df):
-    """Column type, null %, uniqueness, pattern / length / rounded range — no cell values. Safe to paste into AI."""
+    """Column type, null %, uniqueness and a shape per column: a text pattern ('AA-999999'), a length range, or for
+    numbers only the size ('11 digits, decimals, negatives'), never a value. Review it before you share it and follow
+    your bank's data and AI-use policy: column names and rare patterns can still identify things."""
     rows = []
     for c in df.columns:
         s = df[c]
@@ -47,7 +61,7 @@ def describe_shape(df):
         if pd.api.types.is_bool_dtype(s):
             info.update(type="boolean")
         elif pd.api.types.is_numeric_dtype(s):
-            info.update(type="number", shape=f"{round(nn.min(), -1)} .. {round(nn.max(), -1)}" if len(nn) else "")
+            info.update(type="number", shape=_number_shape(nn) if len(nn) else "")
         elif pd.api.types.is_datetime64_any_dtype(s):
             info.update(type="date")
         else:

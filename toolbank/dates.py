@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 
-from .robust import BusinessError, RobotError
+from .robust import BusinessError
 
 
 def load_holidays(path, col="date"):
@@ -127,13 +127,20 @@ def month_end(d, business=False, holidays=()):
     return last
 
 
-def assert_before_cutoff(cutoff="17:30", tz="Asia/Singapore", now=None, grace_minutes=0):
-    """Raise RobotError(PAST_CUTOFF) if local time in tz is past the deadline."""
+def assert_before_cutoff(cutoff="17:30", tz="Asia/Singapore", now=None, grace_minutes=0, business_date=None):
+    """Minutes left before the cut-off (time of day in tz), else BusinessError PAST_CUTOFF: that item is handed
+    over, never submitted late. business_date= also refuses a run on a later day (a Monday re-run for Friday's
+    business date is past Friday's cut-off)."""
     now = (now or datetime.now(ZoneInfo(tz))).astimezone(ZoneInfo(tz))
     hh, mm = map(int, cutoff.split(":"))
+    if business_date is not None and now.date() > _d(business_date):
+        raise BusinessError(f"past cut-off {cutoff} {tz} of {_d(business_date)}; today is {now:%Y-%m-%d}",
+                            code="PAST_CUTOFF")
     limit = now.replace(hour=hh, minute=mm, second=0, microsecond=0) + timedelta(minutes=grace_minutes)
+    if business_date is not None and now.date() < _d(business_date):
+        return int((limit - now).total_seconds() // 60) + 24 * 60 * (_d(business_date) - now.date()).days
     if now > limit:
-        raise RobotError(f"past cut-off {cutoff} {tz}; now {now:%H:%M}", code="PAST_CUTOFF")
+        raise BusinessError(f"past cut-off {cutoff} {tz}; now {now:%H:%M}", code="PAST_CUTOFF")
     return int((limit - now).total_seconds() // 60)
 
 

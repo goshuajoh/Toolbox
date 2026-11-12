@@ -4,6 +4,8 @@ import os
 import re
 from pathlib import Path
 
+from .robust import RobotError
+
 
 def _loader():
     """yaml.SafeLoader with YAML 1.2 core-schema numbers and booleans: only true / false are booleans
@@ -91,8 +93,18 @@ def require(cfg, *keys):
     return cfg
 
 
+class MissingSecret(RobotError, KeyError):
+    """A secret that is not set: an access problem for the access admin (RobotError NO_SECRET, exit 5), not bad data.
+    Still a KeyError, so existing `except KeyError` code keeps working."""
+
+    def __init__(self, message):
+        super().__init__(message, code="NO_SECRET")
+
+
 def get_secret(name, service="robot"):
-    """Secret from env var, else Windows Credential Manager / OS keyring (pip install keyring). Never hard-code."""
+    """Secret from an environment variable, else the Windows Credential Manager / OS keyring (pip install keyring).
+    Not a vault client: for a bank vault add an adapter, and leave the env var unset in production. Never hard-code.
+    Missing -> MissingSecret (a RobotError NO_SECRET)."""
     v = os.environ.get(name)
     if v:
         return v
@@ -102,5 +114,5 @@ def get_secret(name, service="robot"):
     except ImportError:
         v = None
     if not v:
-        raise KeyError(f"secret {name} not found in environment or keyring service '{service}'")
+        raise MissingSecret(f"secret {name} not found in environment or keyring service '{service}'")
     return v

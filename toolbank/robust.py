@@ -97,8 +97,9 @@ def retry(max_attempts=3, base_delay=1.0, backoff=2.0, retry_on=(SystemError_, O
                         raise
                     delay = base_delay * backoff ** (attempt - 1) * random.uniform(0.7, 1.3)
                     if log is not None:
-                        log(f"{fn.__name__}: retry {attempt}/{max_attempts - 1} in {delay:.1f}s after "
-                            f"{type(e).__name__}: {str(e)[:200]}")
+                        from .privacy import redact
+                        log(redact(f"{fn.__name__}: retry {attempt}/{max_attempts - 1} in {delay:.1f}s after "
+                            f"{type(e).__name__}: {str(e)[:200]}"))
                     time.sleep(delay)
         return wrapper
     return deco
@@ -111,49 +112,96 @@ RETRY_PROFILES = {
     "page_load": dict(tries=2, wait_s=5.0, verify_timeout_s=60.0),    # open a screen, navigate, search results
     "file_lock": dict(tries=5, wait_s=10.0, backoff=2.0, verify_timeout_s=0.0),  # a file someone has open
     "read": dict(tries=3, wait_s=2.0, backoff=2.0, verify_timeout_s=0.0),        # API GET, query, download
-    "submit": dict(tries=1, verify_timeout_s=30.0),     # post / pay / send: more tries only with already_done=
-    "login": dict(tries=1, verify_timeout_s=30.0),      # a repeated wrong password locks the service account
+    # post / pay / send: runs once; a second try or a fallback only with already_done=, and an unconfirmed
+    # outcome stops the run (STEP_UNCONFIRMED) instead of being re-run
+    "submit": dict(tries=1, verify_timeout_s=30.0, poll_s=5.0, irreversible=True),
+    "login": dict(tries=1, verify_timeout_s=30.0, poll_s=1.0),       # a repeated wrong password locks the account
 }
 
+_BUGS = (TypeError, AttributeError, NameError, AssertionError, ImportError, NotImplementedError)
 
-def _wait_for(check, timeout_s, poll_s, sleep, clock):
-    """check() until truthy (returned) or timeout -> None. An exception from check counts as 'not yet'."""
+
+def _truth(result, what):
+    """True / False from what a check returned; an empty DataFrame or Series is False."""
+    if isinstance(result, (pd.DataFrame, pd.Series)):
+        return not result.empty
+    try:
+        return bool(result)
+    except Exception as e:
+        raise TypeError(f"{what} must return True or False, not {type(result).__name__}") from e
+
+
+def _wait_for(check, timeout_s, poll_s, sleep, clock, what="verify"):
+    """True once check() is true, None at the timeout. An exception from check counts as 'not yet'."""
     deadline = clock() + max(0.0, timeout_s)
     while True:
         try:
             result = check()
         except Exception:                                 # element not there yet, window still opening...
             result = None
-        if result:
-            return result
+        if _truth(result, what):
+            return True
         if clock() >= deadline:
             return None
         sleep(min(poll_s, max(0.0, deadline - clock())))
 
 
 def attempt(action, verify=None, *, tries=3, wait_s=2.0, backoff=1.0, verify_timeout_s=10.0, poll_s=0.5,
-            recover=None, fallbacks=(), already_done=None, on_give_up=None, name=None, log=print,
+            recover=None, fallbacks=(), already_done=None, irreversible=False, on_give_up=None, name=None, log=print,
             sleep=time.sleep, clock=time.monotonic):
-    """One robot step done safely: action(), then wait until verify() is truthy (the screen / file / record shows
-    it worked). On an error or a failed check: recover() (e.g. press Esc, close a pop-up, re-focus the window),
-    wait, try again, up to `tries`; then each of `fallbacks` (another way to do the same thing: keyboard instead of
-    mouse, API instead of screen) once; then on_give_up() (screenshot, close the app) and SystemError_ STEP_FAILED
-    with every try in .context['history'] (process_all counts it towards its stop-after-N rule; the template exits 3).
-    already_done() is checked before every try, also the first: if it is truthy the step is not repeated. Give it
-    for anything that must not happen twice (submit, pay, send) or keep tries=1. BusinessError (the data is wrong)
-    and a non-retryable RobotError (AUTH) stop at once. Returns action()'s result (None when already done).
-    Profiles: attempt(click, verify, **RETRY_PROFILES['ui'])."""
+    """One robot step done safely: action(), then wait until verify() is true (the screen / file / record shows it
+    worked). On a failure: recover() (e.g. Esc, close a pop-up, re-focus the window), wait, try again, up to `tries`;
+    then each of `fallbacks` (another way to do the same thing: keyboard instead of mouse, API instead of screen)
+    once; then on_give_up() (screenshot, close the app) and SystemError_ STEP_FAILED with every try in
+    .context['history'] (process_all counts it towards its stop-after-N rule; the template exits 3).
+    What is retried: errors from the screen, file or network. Not retried: BusinessError (data is wrong), a
+    non-retryable RobotError (AUTH), a bug (TypeError, AttributeError...: raised at once, exit 5) and KeyError /
+    ValueError (classified as BusinessError BAD_DATA).
+    Anything that must not happen twice (post, pay, send) is irreversible=True (RETRY_PROFILES['submit']): it runs
+    once unless already_done is given, and if it cannot be confirmed it raises RobotError STEP_UNCONFIRMED, which
+    stops the run (not re-run: a person checks the target). already_done() is called before every try, the first
+    too; it returns True / False and raises only when it cannot tell, which stops the step (DONE_CHECK_FAILED)
+    instead of repeating it. verify / already_done may return a DataFrame (empty = no). Log lines are redacted.
+    Returns action()'s result (None when already done). Profiles: attempt(click, verify, **RETRY_PROFILES['ui'])."""
+    from .privacy import redact
     if not isinstance(tries, int) or isinstance(tries, bool) or tries < 1:
         raise ValueError(f"tries must be a whole number >= 1, not {tries!r}")
-    name = name or getattr(action, "__name__", None) or "step"
+    if not poll_s > 0 or wait_s < 0 or verify_timeout_s < 0 or backoff < 0:
+        raise ValueError("poll_s must be > 0, and wait_s, verify_timeout_s and backoff >= 0")
     fallbacks = [fallbacks] if callable(fallbacks) else list(fallbacks or ())
+    for what, fn in [("action", action), ("verify", verify), ("recover", recover), ("already_done", already_done),
+                     ("on_give_up", on_give_up)] + [("fallback", f) for f in fallbacks]:
+        if fn is not None and not callable(fn):
+            raise TypeError(f"{what} must be a function (e.g. lambda: ...), not {type(fn).__name__}")
+    if irreversible and already_done is None and (tries > 1 or fallbacks):
+        raise ValueError("an irreversible step may run a second time only with already_done= (check the target "
+                         "first); otherwise use tries=1 and no fallbacks")
+    name = name or getattr(action, "__name__", None) or "step"
+    say = (lambda m: log(redact(m))) if log is not None else (lambda m: None)
     routes = [("primary", action, n) for n in range(1, tries + 1)] + \
              [(f"fallback {i}", fb, 1) for i, fb in enumerate(fallbacks, start=1)]
     history, delay = [], wait_s
+
+    def done_already(route, n):
+        try:
+            return _truth(already_done(), "already_done")
+        except (BusinessError, *_BUGS):
+            raise
+        except RobotError as e:
+            if not e.retryable:
+                raise
+            err = e
+        except Exception as e:
+            err = e
+        history.append({"route": route, "try": n, "outcome": "done check failed",
+                        "error": f"{type(err).__name__}: {err}"[:300]})
+        raise SystemError_(f"{name}: cannot tell whether it was already done ({type(err).__name__}); not repeated",
+                           code="DONE_CHECK_FAILED", step=name, history=history) from err
+
     for k, (route, fn, n) in enumerate(routes):
-        if already_done is not None and _wait_for(already_done, 0, poll_s, sleep, clock):
+        if already_done is not None and done_already(route, n):
             history.append({"route": route, "try": n, "outcome": "already done", "error": ""})
-            log(f"{name}: already done, not repeated")
+            say(f"{name}: already done, not repeated")
             return None
         try:
             result = fn()
@@ -162,25 +210,29 @@ def attempt(action, verify=None, *, tries=3, wait_s=2.0, backoff=1.0, verify_tim
         except RobotError as e:
             if not e.retryable:
                 raise
-            history.append({"route": route, "try": n, "outcome": "error", "error": f"{type(e).__name__}: {e}"})
+            history.append({"route": route, "try": n, "outcome": "error", "error": f"{type(e).__name__}: {e}"[:300]})
+        except _BUGS:
+            raise                                             # a bug: every try would fail the same way
+        except (KeyError, ValueError) as e:
+            raise classify(e) from e                          # bad data, not a slow screen
         except Exception as e:
             history.append({"route": route, "try": n, "outcome": "error", "error": f"{type(e).__name__}: {e}"[:300]})
         else:
             if verify is None or _wait_for(verify, verify_timeout_s, poll_s, sleep, clock):
                 if k:
-                    log(f"{name}: ok on {route} try {n}")
+                    say(f"{name}: ok on {route} try {n}")
                 return result
             history.append({"route": route, "try": n, "outcome": "not verified",
                             "error": f"check not true within {verify_timeout_s:g}s"})
         last = history[-1]
-        log(f"{name}: {route} try {n} failed ({last['outcome']}: {last['error']})")
+        say(f"{name}: {route} try {n} failed ({last['outcome']}: {last['error']})")
         if k == len(routes) - 1:
             break
         if recover is not None:
             try:
                 recover()
             except Exception as e:                            # a failed clean-up must not hide the real problem
-                log(f"{name}: recover failed: {type(e).__name__}: {e}")
+                say(f"{name}: recover failed: {type(e).__name__}: {e}")
         if delay:
             sleep(delay)
         delay *= backoff
@@ -188,8 +240,11 @@ def attempt(action, verify=None, *, tries=3, wait_s=2.0, backoff=1.0, verify_tim
         try:
             on_give_up()
         except Exception as e:
-            log(f"{name}: on_give_up failed: {type(e).__name__}: {e}")
+            say(f"{name}: on_give_up failed: {type(e).__name__}: {e}")
     last = history[-1]
+    if irreversible and already_done is None:
+        raise RobotError(f"{name}: not confirmed; it may have happened: check the target before running it again "
+                         f"(last: {last['error']})", code="STEP_UNCONFIRMED", step=name, history=history)
     raise SystemError_(f"{name}: failed after {tries} tries and {len(fallbacks)} fallbacks; last: {last['error']}",
                        code="STEP_FAILED", step=name, history=history)
 
@@ -212,7 +267,9 @@ def process_all(items, handler, max_consecutive_system=3, checkpoint=None, key=s
     silently skipped. log=print reports each failure as it happens.
     Returns (done_items, failures_df) with columns item, code, message, type, where, retryable:
     failures.retryable.any() -> re-run later (exit 3); other failures -> report to the owner (exit 2)."""
+    from .privacy import redact
     done, failures, streak, seen = [], [], 0, set()
+    say = (lambda m: log(redact(m))) if log is not None else (lambda m: None)
 
     def record(k, code, message, info=None, retryable=False):
         failures.append({"item": k, "code": code, "message": message, "type": info["type"] if info else "",
@@ -240,21 +297,18 @@ def process_all(items, handler, max_consecutive_system=3, checkpoint=None, key=s
             if isinstance(err, BusinessError):
                 record(k, err.code, err.message, info)
                 streak = 0
-                if log is not None:
-                    log(f"skip {k}: [{err.code}] {err.message} at {info['where']}")
+                say(f"skip {k}: [{err.code}] {err.message} at {info['where']}")
             elif not err.retryable:
                 err.context.setdefault("item", k)
                 err.context.setdefault("where", info["where"])
-                if log is not None:
-                    log(f"stop at {k}: [{err.code}] {err.message} at {info['where']}")
+                say(f"stop at {k}: [{err.code}] {err.message} at {info['where']}")
                 if err is e:
                     raise
                 raise err from e
             else:
                 record(k, err.code, err.message, info, retryable=True)
                 streak += 1
-                if log is not None:
-                    log(f"system failure {streak}/{max_consecutive_system} at {k}: [{err.code}] {err.message}")
+                say(f"system failure {streak}/{max_consecutive_system} at {k}: [{err.code}] {err.message}")
                 if streak >= max_consecutive_system:
                     raise SystemError_(f"{streak} consecutive system failures; last: {info['type']}: {err.message}",
                                        code="SYSTEM_STREAK", last_item=k, where=info["where"]) from e
@@ -311,7 +365,8 @@ def step(name, log=print):
         yield
         log(f"DONE  {name} ({(time.perf_counter() - t) * 1000:.0f} ms)")
     except Exception as e:
-        log(f"FAIL  {name} ({(time.perf_counter() - t) * 1000:.0f} ms): {classify(e)} at {error_where(e)}")
+        from .privacy import redact
+        log(redact(f"FAIL  {name} ({(time.perf_counter() - t) * 1000:.0f} ms): {classify(e)} at {error_where(e)}"))
         raise
 
 
