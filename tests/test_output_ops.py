@@ -453,3 +453,21 @@ def test_attempt_stops_and_never_repeats():
         attempt(lambda: 1, tries=True)
     assert set(RETRY_PROFILES) == {"ui", "page_load", "file_lock", "read", "submit", "login"}
     assert RETRY_PROFILES["submit"]["tries"] == 1 and RETRY_PROFILES["login"]["tries"] == 1
+
+
+def test_shared_fixes_from_pattern_review(tmp_path):
+    p = tmp_path / "appr.xlsx"                                     # zero-padded text survives the Excel round trip
+    propose(p, [{"action_id": "T1", "action": "PAY", "acct": "00123", "amt": 5.0}])
+    wb = load_workbook(p); ws = wb["Approvals"]
+    hdr = {c.value: c.column for c in ws[1]}
+    ws.cell(2, hdr["decision"]).value, ws.cell(2, hdr["checker"]).value = "APPROVED", "chk01"
+    wb.save(p)
+    assert approved_actions(p) == (["T1"], [])
+    missing = tmp_path / "gone.csv"
+    assert is_locked(missing) is False and not missing.exists()        # checking never creates the file
+    cp = Checkpoint(tmp_path / "cp.json")
+    cp.mark_done("A"); cp.mark_done("B"); cp.discard("A"); cp.discard("never")
+    assert sorted(Checkpoint(tmp_path / "cp.json").done) == ["B"]
+    msg = build_email("a@x.test", "b@x.test", "s", text="t")
+    save_eml(msg, tmp_path / "d" / "m.eml")
+    assert [f.name for f in (tmp_path / "d").iterdir()] == ["m.eml"]  # no temp file left behind

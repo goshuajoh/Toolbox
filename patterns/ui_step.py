@@ -4,7 +4,7 @@ order: 10
 when: >-
   Any click, type or select on a desktop app (pywinauto), a Citrix screen (pyautogui) or a web portal
   (toolbank Browser) where the screen can lag, a pop-up can steal focus, or a control can move.
-tags: [computer-use, desktop, web, retry, fallback]
+tags: [screens, retry, failure]
 needs: [pywinauto, pyautogui]
 blocks: [RETRY_PROFILES, SystemError_, attempt, ctl_click, ctl_text, hotkey, screen_capture]
 decisions:

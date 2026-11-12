@@ -4,18 +4,18 @@ order: 70
 when: >-
   Two extracts of the same items (ledger and bank statement, front and back office) must agree on amount, currency
   and value date per reference, and a person works the differences from an Excel report.
-tags: [reconciliation, matching, tolerance, excel, report, normalise]
+tags: [reconcile, controls]
 needs: []
 blocks: [BusinessError, col_letter, highlight_cells, normalise_currency, normalise_key, recon_summary, reconcile, to_date, to_number, write_report]
 decisions:
   - "Normalise both sides the same way before matching: normalise_key padded to 10 characters (' ab-77' = 'AB77 ', '45' = '0045'; a longer ref is kept whole), to_number ('(75.00)' = -75), to_date (day-first text, ISO, Excel serials), normalise_currency ('S$' = 'SGD')."
   - "A ref column read as numbers is made whole (Int64) first: normalise_key turns 123.0 into '1230'. Read refs of 16+ digits as text (dtype=str): Excel keeps only 15 digits of a number."
   - "Amounts match within TOL_CENTS = 1 cent, set per recon: a 4-decimal source against a 2-decimal one (0.004 apart) matches, 0.02 apart is a break. 1 cent also hides a real 1-cent break, so the Summary counts the matches that used the tolerance. Use 0 for cash."
-  - "Currency and value date must be equal: a date one day off is a break, not a tolerance."
+  - "Currency and value date must be equal (the date without its time of day): a date one day off is a break, not a tolerance."
   - "Duplicate refs on one side (after normalising) raise BusinessError DUPLICATE_KEYS and nothing is matched: which of the two rows pairs with the other side would be a guess."
-  - "A blank or unreadable amount, currency or date raises BusinessError UNREADABLE with the source rows: reconcile counts blank against blank as equal, so two broken rows would match."
+  - "A blank or unreadable amount, currency or date raises BusinessError UNREADABLE with the source rows (a currency of spaces is blank): reconcile counts blank against blank as equal, so two broken rows would match."
   - "A blank ref does not stop the run: the row gets the key NOREF-L-<row> or NOREF-R-<row> and lands in Left only or Right only."
-  - "Breaks are a result, not an error: BREAK, LEFT_ONLY and RIGHT_ONLY rows go to the report, and the robot returns exit code 2 when there are any (the template's code for 'send the report to the owner')."
+  - "Breaks are a result, not an error: BREAK, LEFT_ONLY and RIGHT_ONLY rows go to the report, and exit_code returns 2 when there are any (the template's code for 'send the report to the owner'), 0 when every ref matched."
 governance:
   - "Every row keeps its source row number (row_l, row_r = index + 2: the Excel row when the header is on row 1), so a reviewer can find it in the input file."
   - "Summary lists all four statuses (zeros included) and each side's row count: matched + break + left only = rows left, and the same for the right."
@@ -44,12 +44,12 @@ FORMATS = {"amount_l": "#,##0.00", "amount_r": "#,##0.00", "amount_diff": "#,##0
 
 
 def normalise(df, side, ref, amount, ccy, value_date):
-    """One side -> key, amount, ccy, value_date, row; stops on unreadable values or duplicate refs."""
+    """One side -> key, amount, ccy, value_date, row; stops on blank or unreadable values or duplicate refs."""
     refs = df[ref].astype("Int64") if pd.api.types.is_numeric_dtype(df[ref]) else df[ref]   # 123.0 -> 123
     key, row = normalise_key(refs), pd.Series(df.index + 2, index=df.index)
     out = pd.DataFrame({"key": key.str.zfill(WIDTH).where(key.fillna("") != "", f"NOREF-{side}-" + row.astype(str)),
-                        "amount": to_number(df[amount]), "ccy": normalise_currency(df[ccy]),
-                        "value_date": to_date(df[value_date]), "row": row})
+                        "amount": to_number(df[amount]), "ccy": normalise_currency(df[ccy]).replace("", pd.NA),
+                        "value_date": to_date(df[value_date]).dt.normalize(), "row": row})
     bad = out[COMPARE].isna().any(axis=1)
     if bad.any():
         raise BusinessError(f"{side}: blank or unreadable amount, currency or date", code="UNREADABLE", side=side,
@@ -103,9 +103,15 @@ def run_recon(left, left_cols, right, right_cols, path, tol_cents=TOL_CENTS, log
     return recon
 
 
+def exit_code(recon):
+    """The template's exit code: 0 when every ref matched, 2 (send the report to the owner) when any did not."""
+    return 2 if (recon["status"] != "MATCHED").any() else 0
+
+
 def demo(tmp):
     """Case, space, zero-padding, currency-alias and 0.004 rounding differences match; real breaks are reported with
-    their cells yellow. A ref on two rows after normalising, or an unreadable amount, stops the run with no report."""
+    their cells yellow. A ref on two rows after normalising, an unreadable amount or a blank currency stops the run
+    with no report."""
     from openpyxl import load_workbook
     ledger = pd.DataFrame({"Ref": ["123", "ab-77", " 0045", "9001", "9002", "9003", ""],
                            "Amount": ["1,000.00", "250.50", "(75.00)", "500.00", "10.00", "20.00", "5.00"],
@@ -115,7 +121,9 @@ def demo(tmp):
                          "currency": ["USD", "SGD", "eur", "USD", "USD", "USD"],
                          "date": ["2026-03-06", "6/3/2026", "2026-03-06", "2026-03-06", "2026-03-09", "2026-03-06"]})
     cols_l, cols_r, lines = ("Ref", "Amount", "Ccy", "Value Date"), ("reference", "amt", "currency", "date"), []
-    st = run_recon(ledger, cols_l, bank, cols_r, tmp / "recon.xlsx", log=lines.append).set_index("key")["status"]
+    recon = run_recon(ledger, cols_l, bank, cols_r, tmp / "recon.xlsx", log=lines.append)
+    st = recon.set_index("key")["status"]
+    assert exit_code(recon) == 2 and exit_code(recon[recon["status"] == "MATCHED"]) == 0
     assert set(st[st == "MATCHED"].index) == {"0000000123", "000000AB77", "0000000045"}
     assert st["0000009001"] == st["0000009002"] == "BREAK" and st["0000009100"] == "RIGHT_ONLY"
     assert st["0000009003"] == st["NOREF-L-8"] == "LEFT_ONLY" and "9001" not in lines[0]
@@ -130,9 +138,9 @@ def demo(tmp):
     assert br["F2"].fill.fill_type is None and br["C3"].fill.fill_type is None
 
     duplicate = pd.concat([ledger, ledger[:1].assign(Ref="0123")], ignore_index=True)
-    unreadable = ledger.assign(Amount=ledger["Amount"].replace("500.00", "5OO.00"))
+    unreadable = ledger.replace({"Amount": {"500.00": "5OO.00"}, "Ccy": {"EUR": " "}})        # rows 5 and 4
     for bad, code, context in ((duplicate, "DUPLICATE_KEYS", {"refs": ["0000000123"]}),
-                               (unreadable, "UNREADABLE", {"rows": [5]})):
+                               (unreadable, "UNREADABLE", {"rows": [4, 5]})):
         try:
             run_recon(bad, cols_l, bank, cols_r, tmp / "stopped.xlsx", log=lines.append)
         except BusinessError as e:

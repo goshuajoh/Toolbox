@@ -273,6 +273,15 @@ class Checkpoint:
 
     def mark_done(self, key):
         self.done.add(str(key))
+        self._save()
+
+    def discard(self, key):
+        """Forget one key (e.g. a held submit the target now confirms), written the same safe way."""
+        if str(key) in self.done:
+            self.done.discard(str(key))
+            self._save()
+
+    def _save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(sorted(self.done)))

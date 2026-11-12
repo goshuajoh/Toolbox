@@ -4,22 +4,22 @@ order: 80
 when: >-
   Any robot that turns an input file into an output another team or system relies on (a payment file, an upload, a
   booking list): the run must show that no row was lost or changed on the way, and keep the proof.
-tags: [controls, control-totals, audit, evidence, hash, manifest]
+tags: [controls]
 needs: []
 blocks: [BusinessError, RobotError, add_audit_columns, assert_totals_match, control_totals, file_sha256, get_logger, read_csv_smart, to_csv_strict, to_number, zip_files]
 decisions:
-  - "The control is input = output + rejected, on the 4 figures of control_totals: rows and distinct refs exactly, sum and absolute sum to the cent (both rounded to 2 dp, tol 0.005). Float noise passes, one lost cent fails."
+  - "The control is input = output + rejected, on the 4 figures of control_totals: rows and distinct refs exactly, sum and absolute sum to the cent (both rounded to 2 dp, tol 0.005). Float noise passes, one lost cent fails. An amount that does not parse counts as a row but adds 0 to the sums, so process() must reject it (the demo does)."
   - "abs_sum next to sum: a debit and a credit both cut by 10 leave the sum equal. distinct_keys next to rows: a lost row plus a doubled one leave the count equal."
-  - "Output totals come from the file read back from disk, not the frame in memory: the control covers what the next system receives, the writer's rounding included."
+  - "Output and rejected totals come from the files read back from disk, not the frames in memory: the control covers what the next system receives, the writer's rounding included."
   - "A mismatch raises RobotError CONTROL_MISMATCH (exit 5, never retried). Not BusinessError: the input was accepted, so a lost row is the robot's fault, not the data's. Not SystemError_: a re-run would lose the same row."
   - "The output is written as <name>.pending and renamed only when the control passes. On a fail it stays .pending, so no downstream job picks it up, and it is kept as evidence."
   - "A released output is never overwritten: a re-run that finds it raises BusinessError ALREADY_RELEASED before any work (exit 2), and a person checks whether the target took the first file."
-  - "add_audit_columns runs on the input as read: row_hash is the hash of the input row before any change and travels with run_id, processed_at and source into the output, so each output row traces back to one input row."
+  - "add_audit_columns runs on the input as read: row_hash is the hash of the input row before any change. process() keeps it with run_id, processed_at and source on every output and rejected row, so each traces back to one input row."
   - "run_id = UTC time + 6 random hex characters (20261112T091500Z-a1b2c3), so two runs in the same second never share an id. It names the log, the manifest and the pack, and is on every output row."
 governance:
-  - "The manifest (JSON) holds run id, robot, version, the SHA-256 of the robot's code, user, host, start and end (UTC), each file's role, name, size and SHA-256, the totals and PASS or FAIL. It is written on a fail too."
+  - "The manifest (JSON) holds run id, robot, version, the SHA-256 of the robot's code, user, host, start and end (UTC), each file's role (input, output, rejected), name, size and SHA-256, the totals and PASS or FAIL. It is written on a fail too."
   - "The version says what should have run; robot_sha256 (the file this code is in) proves what did. Compare it with the hash of the approved release."
-  - "The evidence pack (manifest, output, log) holds no input file: the input's SHA-256 proves which file was used without another copy of customer data. Keep the pack under the data retention rule."
+  - "The evidence pack (manifest, output, rejected rows, log) holds no input file: the input's SHA-256 proves which file was used without a second copy of it. The output and rejected rows are customer data: keep the pack under the data retention rule, with the same access as the output."
   - "The error names the failed check (rows, sum, abs_sum or distinct_keys) and the lost refs. The totals stay in the manifest; amounts never reach the log."
   - "A FAIL goes to a person: they compare the .pending file with the input, the robot is fixed and run again. Nobody renames a .pending file by hand."
 """
@@ -66,21 +66,22 @@ def write_manifest(path, run_id, status, files, figures, started):
 
 def controlled_run(inp_path, process, out_path, run_folder, key="ref", amount="amount"):
     """Read, process, release the output only if input = output + rejected; manifest and evidence pack either way.
-    process(df) -> (output, rejected). Returns the pack path; raises RobotError CONTROL_MISMATCH on a fail."""
+    process(df) -> (output, rejected), input columns kept. Returns the pack; RobotError CONTROL_MISMATCH on a fail."""
     inp_path, out_path, run_folder = Path(inp_path), Path(out_path), Path(run_folder)
     if out_path.exists():
         raise BusinessError("output already released by an earlier run", code="ALREADY_RELEASED", file=out_path.name)
     run_id, started = new_run_id(), utc_now()
-    log_path = run_folder / f"{run_id}.log.jsonl"
-    log = get_logger(log_path, run_id=run_id, name=ROBOT, console=False)
-    inp = add_audit_columns(read_csv_smart(inp_path, dtype=str), run_id, source=inp_path.name)
+    log_path, rej_path = run_folder / f"{run_id}.log.jsonl", run_folder / f"{run_id}.rejected.csv"
+    log = get_logger(log_path, run_id=run_id, name=f"{ROBOT}.evidence", console=False)   # not the run's own logger
+    inp = add_audit_columns(read_csv_smart(inp_path, required=[key, amount], dtype=str), run_id, source=inp_path.name)
     out, rejected = process(inp)
     pending = out_path.with_name(out_path.name + ".pending")
     to_csv_strict(out, pending)
-    written = read_csv_smart(pending, dtype=str)          # check the file the next system gets, not the frame
+    to_csv_strict(rejected, rej_path)
+    written, rej = read_csv_smart(pending, dtype=str), read_csv_smart(rej_path, dtype=str)   # the files, not the frames
     figures = {"input": totals(inp, amount, key), "output": totals(written, amount, key),
-               "rejected": totals(rejected, amount, key),
-               "output_plus_rejected": totals(pd.concat([written, rejected]), amount, key)}
+               "rejected": totals(rej, amount, key)}
+    figures["output_plus_rejected"] = totals(pd.concat([written, rej]), amount, key)
     try:
         assert_totals_match(figures["input"], figures["output_plus_rejected"])
     except ValueError as e:
@@ -92,10 +93,10 @@ def controlled_run(inp_path, process, out_path, run_folder, key="ref", amount="a
     log.info("control", extra={"event": "control", "status": status, "rows": figures["input"]["rows"],
                                "count": figures["output"]["rows"]})
     manifest = write_manifest(run_folder / f"{run_id}.manifest.json", run_id, status,
-                              [("input", inp_path), ("output", released)], figures, started)
-    pack = zip_files([manifest, released, log_path], run_folder / f"{run_id}.evidence.zip")
-    if failed:
-        lost = sorted(set(inp[key]) - set(written[key]) - set(rejected[key]))[:20]
+                              [("input", inp_path), ("output", released), ("rejected", rej_path)], figures, started)
+    pack = zip_files([manifest, released, rej_path, log_path], run_folder / f"{run_id}.evidence.zip")
+    if failed:                                            # a lost row with a blank ref shows in the rows check only
+        lost = sorted(set(inp[key].dropna()) - set(written[key].dropna()) - set(rej[key].dropna()))[:20]
         raise RobotError("control totals do not match: output not released", code="CONTROL_MISMATCH",
                          check=failed, lost_refs=lost)
     return pack
@@ -111,17 +112,18 @@ def demo(tmp):
 
     def process(df):
         df = df.assign(amount=to_number(df["amount"]))
-        return df[df["amount"] > 0], df[df["amount"] <= 0]          # a payment must be positive
+        ok = df["amount"] > 0                                       # a payment must be positive
+        return df[ok], df[~ok]
 
     pack = controlled_run(src, process, tmp / "upload.csv", tmp)
     m = json.loads(next(tmp.glob("*.manifest.json")).read_text())
     assert m["status"] == "PASS" and m["totals"]["input"] == m["totals"]["output_plus_rejected"]
     assert m["totals"]["rejected"]["rows"] == 1 and m["totals"]["input"]["sum"] == 1322.29
-    assert {f["role"]: f["sha256"] for f in m["files"]} == {"input": file_sha256(src),
-                                                             "output": file_sha256(tmp / "upload.csv")}
-    run_id = m["run_id"]
+    run_id, files = m["run_id"], {f["role"]: f["sha256"] for f in m["files"]}
+    assert files == {"input": file_sha256(src), "output": file_sha256(tmp / "upload.csv"),
+                     "rejected": file_sha256(tmp / f"{run_id}.rejected.csv")}
     assert sorted(zipfile.ZipFile(pack).namelist()) == sorted(
-        [f"{run_id}.manifest.json", "upload.csv", f"{run_id}.log.jsonl"])
+        [f"{run_id}.manifest.json", "upload.csv", f"{run_id}.rejected.csv", f"{run_id}.log.jsonl"])
     upload = pd.read_csv(tmp / "upload.csv", dtype=str)
     assert upload["run_id"].eq(run_id).all() and upload["row_hash"].str.len().eq(16).all() and len(upload) == 3
     log_text = (tmp / f"{run_id}.log.jsonl").read_text()

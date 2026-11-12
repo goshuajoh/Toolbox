@@ -2,6 +2,7 @@
 draft (.eml that opens ready to review and Send), send through an SMTP relay.
 Live Outlook: outlook.py. Microsoft Graph: api.graph_send_mail."""
 import mimetypes
+import os
 import re
 import smtplib
 import ssl
@@ -144,7 +145,9 @@ def save_eml(msg, path, draft=True):
         msg["X-Unsent"] = "1"
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(msg.as_bytes(policy=msg.policy.clone(linesep="\r\n")))
+    tmp = p.with_name(f".{p.name}.tmp")                      # temp file + rename: never a half-written draft
+    tmp.write_bytes(msg.as_bytes(policy=msg.policy.clone(linesep="\r\n")))
+    os.replace(tmp, p)
     return p
 
 

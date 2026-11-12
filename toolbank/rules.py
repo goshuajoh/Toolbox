@@ -1,6 +1,7 @@
 """Config-driven conditions and flags. Business owners keep rules in an Excel sheet (code | column | op | value);
 the robot applies them without code changes. Also feature flags and truthy parsing."""
 import os
+import re
 import warnings
 
 import numpy as np
@@ -47,7 +48,8 @@ def _is_text(s):
 
 
 def _cast(series, value):
-    """Cast a rule value (usually text typed into Excel) to the column's type."""
+    """Cast a rule value (usually text typed into Excel) to the column's type. A value the column's type cannot
+    read (text for a number or date column) raises ValueError: a rule that silently never matches is worse."""
     if value is None or (isinstance(value, float) and np.isnan(value)):
         return None
     if pd.api.types.is_bool_dtype(series):
@@ -56,22 +58,33 @@ def _cast(series, value):
         try:
             return float(str(value).replace(",", ""))
         except ValueError:
-            return value
+            raise ValueError(f"rule value {value!r} is not a number, but the column holds numbers") from None
     if pd.api.types.is_datetime64_any_dtype(series):
-        return to_date(pd.Series([value])).iloc[0]
+        d = to_date(pd.Series([value])).iloc[0]
+        if pd.isna(d):
+            raise ValueError(f"rule value {value!r} is not a date, but the column holds dates")
+        return d
     return str(value).strip() if isinstance(value, str) else value
 
 
-def _list(value):
+def _list(value, numeric=False):
+    """A list rule value: a list, or text split on ';' if it has one, else on ','. For a number column, pieces that
+    look like thousands groups ('1,000, 2,000') raise ValueError: separate such values with ';'."""
     if isinstance(value, (list, tuple, set)):
         return list(value)
-    return [v.strip() for v in str(value).split(",")]
+    text = str(value)
+    parts = [v.strip() for v in text.split(";" if ";" in text else ",")]
+    if numeric and ";" not in text and re.search(r"\d,\d{3}(?!\d)", text):           # '1,000' inside the list
+        raise ValueError(f"{text!r} looks like numbers with thousands commas: separate the values with ';'")
+    return parts
 
 
 def condition(df, column, op, value=None, case=False):
     """Boolean mask for one condition, e.g. condition(df, 'ccy', 'in', 'USD,SGD'). Blanks (NA, '' or spaces)
     never match, also not 'not in' / '!=' / 'not contains' / 'is false'; only 'is null' matches them. Text
-    comparisons ignore case unless case=True. Ops: see OPS."""
+    comparisons ignore case unless case=True. Lists ('in', 'between') split on ',' or, if present, on ';' (use ';'
+    for numbers with thousands commas: '1,000; 2,000'). A value the column cannot read (text for a number or date
+    column) raises ValueError instead of never matching. Ops: see OPS."""
     if column not in df.columns:
         raise KeyError(f"rule column {column!r} not in data; columns are {list(df.columns)}")
     s = df[column]
@@ -87,13 +100,16 @@ def condition(df, column, op, value=None, case=False):
         t = s.map(truthy)
         m = t if op == "is true" else ~t & ~blank
     elif op in ("in", "not in"):
-        vals = [_cast(s, v) for v in _list(value)]
+        vals = [_cast(s, v) for v in _list(value, numeric=not text)]
         if text and not case:
             vals = [str(v).upper() for v in vals]
-        m = norm(s).isin(vals)
+        m = norm(s).isin(vals) & ~blank
         m = m if op == "in" else (~m & ~blank)
     elif op == "between":
-        lo, hi = [_cast(s, v) for v in _list(value)[:2]]
+        bounds = _list(value, numeric=not text)
+        if len(bounds) != 2:
+            raise ValueError(f"'between' needs two values, low and high, e.g. '100; 200'; got {value!r}")
+        lo, hi = [_cast(s, v) for v in bounds]
         m = s.between(lo, hi)
     elif op in ("contains", "not contains", "startswith", "endswith", "regex"):
         t = s.astype("string")
@@ -137,9 +153,9 @@ def _rules_frame(rules):
         raise ValueError(f"rules need columns code, column, op (+ value); missing {missing}")
     if "value" not in r.columns:
         r["value"] = None
-    r = r[r[["code", "column", "op"]].notna().any(axis=1)]      # skip fully blank lines
+    r = r[r[["code", "column", "op"]].notna().any(axis=1).astype(bool)]      # skip fully blank lines
     if "active" in r.columns:
-        r = r[r["active"].map(lambda v: True if pd.isna(v) else truthy(v))]
+        r = r[r["active"].map(lambda v: True if pd.isna(v) else truthy(v)).astype(bool)]
     partial = r[["code", "column", "op"]].isna().any(axis=1)
     if partial.any():                                           # never drop a half-filled active rule silently
         raise ValueError(f"rules rows {[int(i) + 2 for i in r.index[partial]]} miss code/column/op "

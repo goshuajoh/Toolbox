@@ -203,7 +203,8 @@ python make_index.py         # README index + docs/ from the docstrings, pattern
 ```
 
 A new pattern is one file in `patterns/` with a YAML docstring (title, order, when, tags, needs, blocks, decisions,
-governance) and a `demo(tmp)`; copy `patterns/ui_step.py` as the starting point. `tests/test_patterns.py` checks the
+governance) and a `demo(tmp)`; copy `patterns/ui_step.py` as the starting point. Tags come from the short list in
+`make_index.py` (`PATTERN_TAGS`). `tests/test_patterns.py` checks the
 format, that `blocks` lists exactly what the file imports from toolbank, and runs the demo.
 
 Every public function needs a one-paragraph docstring (a test checks it): it is the index entry, the website card and
@@ -229,6 +230,7 @@ without them.
 | `attempt(action, verify=None, *, tries=3, wait_s=2.0, backoff=1.0, verify_t…)` | One robot step done safely: action(), then wait until verify() is truthy (the screen / file / record shows it worked). On an error or a failed check: recover() (e.g. press Esc, close a pop-up, re-focus the window), wait, try again, up to `tries`; then each of `fallbacks` (another way to do the same thing: keyboard instead of mouse, API instead of screen) once; then on_give_up() (screenshot, close the app) and SystemError_ STEP_FAILED with every try in .context['history'] (process_all counts it towards its stop-after-N rule; the template exits 3). already_done() is checked before every try, also the first: if it is truthy the step is not repeated. Give it for anything that must not happen twice (submit, pay, send) or keep tries=1. BusinessError (the data is wrong) and a non-retryable RobotError (AUTH) stop at once. Returns action()'s result (None when already done). Profiles: attempt(click, verify, \*\*RETRY_PROFILES['ui']). |
 | `process_all(items, handler, max_consecutive_system=3, checkpoint=None, key=str…)` | Run handler(item) for each item and record what happened, so the robot can report and resume: BusinessError (data is wrong) -&gt; recorded with retryable False and skipped; SystemError_ / OSError (environment) -&gt; recorded with retryable True, and N in a row -&gt; abort with SYSTEM_STREAK naming the last error; any other RobotError or a plain bug (AttributeError, auth failure, bad SQL...) -&gt; stop at once, since every item would fail the same way (the error carries item= and where=). Only successes are written to the optional Checkpoint, so a re-run retries every failure and reports it again until it is fixed; with a checkpoint a blank key or a key repeated in the same run is recorded as MISSING_KEY / DUPLICATE_KEY, never silently skipped. log=print reports each failure as it happens. Returns (done_items, failures_df) with columns item, code, message, type, where, retryable: failures.retryable.any() -&gt; re-run later (exit 3); other failures -&gt; report to the owner (exit 2). |
 | `Checkpoint(…)` | Remember done keys in a JSON file so a re-run resumes. Key = business id, never row number. |
+| `  .discard()` | Forget one key (e.g. a held submit the target now confirms), written the same safe way. |
 | `act(fn, *args, dry_run=False, log=print, **kwargs)` | Call a side-effecting function unless dry_run; then only log what would happen (argument names, not values: they may hold data). |
 | `step(name, log=print)` | `with step('load'):` -&gt; START / DONE (ms) / FAIL lines (FAIL names the function and line that raised). |
 | `run_dir(robot, business_date=None, root='work')` | work/&lt;robot&gt;/&lt;YYYY-MM-DD&gt;/ — logs, checkpoint and outputs for one run. |
@@ -424,7 +426,7 @@ without them.
 |---|---|
 | `truthy(v)` | 'Y'/'Yes'/'TRUE'/'1'/'on'/'x' -&gt; True, 'N'/'No'/'0'/''/None -&gt; False. |
 | `feature_flag(name, cfg=None, default=False, env_prefix='FLAG_')` | On/off switch: env var FLAG_&lt;NAME&gt; beats cfg[name] beats default (e.g. FLAG_SEND_EMAIL=0 for a test run). |
-| `condition(df, column, op, value=None, case=False)` | Boolean mask for one condition, e.g. condition(df, 'ccy', 'in', 'USD,SGD'). Blanks (NA, '' or spaces) never match, also not 'not in' / '!=' / 'not contains' / 'is false'; only 'is null' matches them. Text comparisons ignore case unless case=True. Ops: see OPS. |
+| `condition(df, column, op, value=None, case=False)` | Boolean mask for one condition, e.g. condition(df, 'ccy', 'in', 'USD,SGD'). Blanks (NA, '' or spaces) never match, also not 'not in' / '!=' / 'not contains' / 'is false'; only 'is null' matches them. Text comparisons ignore case unless case=True. Lists ('in', 'between') split on ',' or, if present, on ';' (use ';' for numbers with thousands commas: '1,000; 2,000'). A value the column cannot read (text for a number or date column) raises ValueError instead of never matching. Ops: see OPS. |
 | `validate_rules(rules, df=None)` | Problems with a rules table ([] = OK): unknown operators, columns missing from df. |
 | `apply_rules(df, rules, prefix='flag_', flags_col='flags', case=False)` | Apply a rules table: columns code, column, op, value (+ optional active, severity, description). Rows with the same code are ANDed. Adds one bool column per code, 'flags' ('CODE1;CODE2') and 'flags_count'. |
 | `rules_from_excel(path, sheet=0)` | Load a rules sheet (code \| column \| op \| value \| active \| description) and check its operators. Type operators as words in Excel (eq, ne, gt, ge, lt, le, in, contains, is blank): '=' starts a formula. |
@@ -539,7 +541,7 @@ without them.
 |---|---|
 | `wait_for_file(pattern, timeout_s=600, poll_s=10, stable_s=10, min_mtime=None)` | Block until a file matching the glob exists, is newer than min_mtime (datetime), and has stopped growing. |
 | `newest_file(pattern)` | Most recently modified file matching a glob, or None. |
-| `is_locked(path)` | True if the file is open/locked by someone else (Windows Excel lock). |
+| `is_locked(path)` | True if the file is open/locked by someone else (Windows Excel lock). A missing file is not locked, and checking never creates it. |
 | `archive(path, archive_dir)` | Move a processed input to archive_dir/YYYYMMDD_name; no-op if already there. |
 | `file_sha256(path)` | SHA-256 of a file (evidence that the input/output was not changed). |
 | `safe_filename(text, max_len=80)` | Text usable as a Windows file name; a long name is shortened before its extension ('.pdf' is kept). |
@@ -670,7 +672,7 @@ without them.
 |---|---|
 | `Browser(…)` | `with Browser("shots") as b: b.goto(url); b.click("text=Export")`. Failures screenshot + raise SystemError_. record_har='run.har' saves all traffic (secrets stripped unless har_raw=True); block=('image','font','media') speeds up heavy pages. In Jupyter use b.run(lambda page: ...) for raw Playwright calls. |
 | `  .run()` | fn(page) on the browser's thread: raw Playwright calls, e.g. b.run(lambda p: p.get_by_role("button").count()). |
-| `  .screenshot()` | Full-page PNG into screenshots_dir; returns path (None if it failed). |
+| `  .screenshot()` | Full-page PNG into screenshots_dir, named &lt;time&gt;_&lt;n&gt;_&lt;label&gt;.png so a re-run never overwrites earlier evidence; returns path (None if it failed). |
 | `  .goto()` | Navigate (retried). wait_until: 'domcontentloaded' \| 'load' \| 'networkidle'. |
 | `  .wait()` | Wait for an element (retried once). state: visible \| attached \| hidden \| detached. |
 | `  .wait_text()` | Wait until some element shows this text. |

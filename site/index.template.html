@@ -332,8 +332,8 @@ run_every(fn, 900, run_for_s=8 * 3600)      # every 15 minutes during the day</p
     return s;
   }
   let patTag = '';
-  const TAGS = Array.from(new Set(PATS.flatMap(p => p.tags))).sort();
-  $('#pattern-tags').innerHTML = ['all'].concat(TAGS).map(t => `<button class="chip" data-tag="${t === 'all' ? '' : esc(t)}" aria-pressed="${t === 'all'}">${esc(t)}</button>`).join('');
+  const TAGS = Object.keys(DATA.pattern_tags || {}).filter(t => PATS.some(p => p.tags.includes(t)));
+  $('#pattern-tags').innerHTML = ['all'].concat(TAGS).map(t => `<button class="chip" data-tag="${t === 'all' ? '' : esc(t)}" aria-pressed="${t === 'all'}" title="${t === 'all' ? 'every pattern' : esc(DATA.pattern_tags[t])}">${esc(t)}</button>`).join('');
   function patCard(p) {
     const needs = p.needs.map(n => `<span class="badge need">pip install ${esc(n)}</span>`).join(' ');
     const blocks = p.blocks.map(b => byName[b] ? `<span class="tag" data-fn="${esc(b)}">${esc(b)}</span>` : `<code>${esc(b)}</code>`).join(' ');

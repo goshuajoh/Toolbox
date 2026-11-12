@@ -53,8 +53,7 @@ def propose(path, actions, protect_password=None):
 
 def read_decisions(path):
     """Checker read-back: DataFrame with an 'ok' column (APPROVED + checker id + fingerprint intact) and 'why'."""
-    d = pd.read_excel(path, sheet_name=_SHEET, dtype={"action_id": str, "decision": str, "checker": str,
-                                                      "fingerprint": str})
+    d = pd.read_excel(path, sheet_name=_SHEET, dtype=object)          # '00123' stays text, as proposed
     oks, whys = [], []
     for _, r in d.iterrows():
         proposed = {k[len("proposed_"):]: v for k, v in r.items() if str(k).startswith("proposed_")}

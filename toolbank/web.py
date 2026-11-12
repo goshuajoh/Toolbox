@@ -7,6 +7,7 @@ import functools
 import re
 import threading
 import time
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -155,11 +156,12 @@ class Browser:
         return fn(self.page)
 
     def screenshot(self, label):
-        """Full-page PNG into screenshots_dir; returns path (None if it failed)."""
+        """Full-page PNG into screenshots_dir, named <time>_<n>_<label>.png so a re-run never overwrites earlier
+        evidence; returns path (None if it failed)."""
         self.dir.mkdir(parents=True, exist_ok=True)
         self.n += 1
         safe = re.sub(r"[^A-Za-z0-9_-]", "_", label)[:60]
-        p = self.dir / f"{self.n:03d}_{safe}.png"
+        p = self.dir / f"{datetime.now():%Y%m%d-%H%M%S}_{self.n:03d}_{safe}.png"
         try:
             self.page.screenshot(path=str(p), full_page=True)
             return p

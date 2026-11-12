@@ -174,6 +174,15 @@ def catalog():
 
 PATTERN_KEYS = {"title": str, "order": int, "when": str, "tags": list, "blocks": list, "decisions": list,
                 "governance": list}
+# one small vocabulary, so the site's tag filter stays useful; add a tag here only when a new kind of block needs it
+PATTERN_TAGS = {"screens": "clicking, typing and reading desktop, web or Citrix screens",
+                "retry": "how many tries, waits and fallbacks", "failure": "stopping, exit codes, exceptions",
+                "submit": "anything that posts, pays or sends", "access": "logins, credentials, sessions",
+                "input": "accepting files", "items": "working through a list of items",
+                "reconcile": "comparing two sources", "controls": "control totals, evidence, audit",
+                "approval": "maker-checker", "rules": "rules owned by the business",
+                "calendar": "business days, holidays, cut-offs", "notify": "telling people, handing over",
+                "api": "data behind the screen"}
 
 
 def pattern_meta(path):
@@ -192,6 +201,9 @@ def pattern_meta(path):
         if not isinstance(meta.get(k), typ):
             raise ValueError(f"{path}: front matter needs {k}: <{typ.__name__}>")
     meta.setdefault("needs", [])
+    unknown = [t for t in meta["tags"] if t not in PATTERN_TAGS]
+    if unknown:
+        raise ValueError(f"{path}: unknown tags {unknown}; use {sorted(PATTERN_TAGS)}")
     imported = sorted({a.name for n in ast.walk(tree) if isinstance(n, ast.ImportFrom) and n.module == "toolbank"
                        for a in n.names})
     if sorted(meta["blocks"]) != imported:
@@ -264,7 +276,7 @@ def site_data(mods, readme_text):
     pats = patterns()
     return {"version": toolbank.__version__, "repo": REPO, "modules": mods, "vba": vba_modules(),
             "needs": needs_table(readme_text), "exit_codes": [{"code": c, "meaning": m} for c, m in EXIT_CODES],
-            "patterns": pats, "method_html": method_html(),
+            "patterns": pats, "pattern_tags": PATTERN_TAGS, "method_html": method_html(),
             "counts": {"modules": len(mods), "functions": n_fn, "methods": n_me, "patterns": len(pats)}}
 
 

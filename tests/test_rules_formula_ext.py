@@ -290,3 +290,22 @@ def test_blanks_never_match_negated_ops():
     assert condition(df, "ccy", "==", None).tolist() == [False, True, True, True, False]
     assert filter_rows(pd.DataFrame({"ccy": ["USD", "SGD"]}), "ccy", "==", "usd")[0]["ccy"].tolist() == ["USD"]
     assert summarize(pd.DataFrame({"g": ["a", "a"], "v": [1, 2]}), ["g"], n=["v", "count"])["n"].tolist() == [2]
+
+
+def test_rule_values_fail_loud(tmp_path):
+    empty = pd.DataFrame(columns=["code", "column", "op", "value", "active"])          # every rule switched off
+    assert apply_rules(pd.DataFrame({"a": [1]}), empty)["flags_count"].tolist() == [0]
+    assert validate_rules(empty, pd.DataFrame({"a": [1]})) == []
+    dates = pd.DataFrame({"d": pd.to_datetime(["2026-03-01", None])})
+    assert condition(dates, "d", "in", "2026-03-01").tolist() == [True, False]          # blank date never matches
+    with pytest.raises(ValueError, match="not a date"):
+        condition(dates, "d", "in", "2026-03-01, x")
+    nums = pd.DataFrame({"a": [1500.0, 200.0]})
+    with pytest.raises(ValueError, match="not a number"):
+        condition(nums, "a", ">", "abc")
+    with pytest.raises(ValueError, match="needs two values"):
+        condition(nums, "a", "between", "5")
+    with pytest.raises(ValueError, match="thousands commas"):
+        condition(nums, "a", "between", "1,000, 2,000")
+    assert condition(nums, "a", "between", "1,000; 2,000").tolist() == [True, False]
+    assert condition(nums, "a", "in", "100, 200, 300").tolist() == [False, True]

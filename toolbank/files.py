@@ -36,12 +36,16 @@ def newest_file(pattern):
 
 
 def is_locked(path):
-    """True if the file is open/locked by someone else (Windows Excel lock)."""
+    """True if the file is open/locked by someone else (Windows Excel lock). A missing file is not locked, and
+    checking never creates it."""
     try:
-        with open(path, "ab"):
-            return False
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND)
+    except FileNotFoundError:
+        return False
     except OSError:
         return True
+    os.close(fd)
+    return False
 
 
 def archive(path, archive_dir):
