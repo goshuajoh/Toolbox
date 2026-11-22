@@ -1,0 +1,88 @@
+SEMANTICS PROBE: what the converter's runtime produces. Compare with the Browse tools in Designer.
+Not yet opened in Designer: if the .yxmd does not load, paste the expressions below into a Formula tool by hand.
+
+Formula tool #2 (field, expression, our result, what a different answer means):
+  P01  "P" = "p"                                                                -> True                       documented: string = ignores case (STRING_EQ_IGNORES_CASE)
+  P02  "abc" < "ABD"                                                            -> True                       documented: < > ignore case (STRING_ORDER_IGNORES_CASE)
+  P03  "a" IN ("A","b")                                                         -> False                      IN_IGNORES_CASE
+  P04  IsNull([NS])                                                             -> True                       is an empty Text Input cell null? (if False, P05-P06 test an empty string instead)
+  P05  [NS] = ""                                                                -> False                      NULL_EQUALS_EMPTY_STRING
+  P06  [NS] + "abc"                                                             -> 'abc'                      documented: null + string = the string (NULL_CONCAT_AS_EMPTY)
+  P07  ToString(Null() + 1)                                                     -> [Null]                     documented: null + number = null
+  P08  1 = 1 OR 1 = 2 AND 1 = 2                                                 -> False                      documented: AND/OR left to right. True here means AND binds tighter: use --and-before-or
+  P09  ToString(1/3)                                                            -> '0.333333333333333'        NUMBER_TO_STRING_DIGITS
+  P10  ToString(1234567.891)                                                    -> '1234567.891'              NUMBER_TO_STRING_DIGITS
+  P11  ToString(100.0)                                                          -> '100'                      number to text drops a trailing .0
+  P12  ToString(0.1+0.2)                                                        -> '0.3'                      NUMBER_TO_STRING_DIGITS
+  P13  ToNumber("123abc")                                                       -> 123.0                      documented by example: leading number is used
+  P14  ToNumber("abc")                                                          -> 0.0                        documented: non-numeric text gives 0
+  P15  ToString(7 / 0)                                                          -> [Null]                     DIV_BY_ZERO_IS_NULL
+  P16  DateTimeDiff("2026-01-02 00:00:00","2026-01-01 00:00:01","days")         -> 0.0                        DATETIMEDIFF_DAYS_IGNORE_TIME (ours: fraction dropped)
+  P17  DateTimeDiff("2026-02-15 00:00:00","2026-01-15 00:00:01","months")       -> 1.0                        documented: months ignore the time of day
+  P18  ToString(ToDate(46343))                                                  -> '2026-11-17'               ToDate(number) is an Excel serial day
+  P19  REGEX_Replace("abc","B","x")                                             -> 'axc'                      REGEX_ICASE_DEFAULT
+  P20  REGEX_Replace(";;a;b","\G;","")                                          -> 'a;b'                      \G is emulated: only matches at the start / after the previous match
+  P21  Round(2.5, 1)                                                            -> 3.0                        Round: halves away from zero
+  P22  Round(-2.5, 1)                                                           -> -3.0                       Round: halves away from zero
+  P23  Length("\n")                                                             -> 2.0                        string literals have no escape sequences (2 = backslash + n)
+  P24  Contains("ABC","b")                                                      -> True                       documented: Contains ignores case by default
+  P25  FindString("ABC","b")                                                    -> -1.0                       FindString is case-sensitive (-1 = not found)
+  P26  Replace("aXa","x","")                                                    -> 'aXa'                      Replace is case-sensitive
+  P27  DateTimeAdd("2026-01-31", 1, "months")                                   -> '2026-02-28'               month end is clipped; a date stays a date
+  P28  DateTimeParse("17/11/2026","%d/%m/%Y")                                   -> '2026-11-17 00:00:00'      DateTimeParse returns a date-time
+  P29  ToString(1250000.5, 2, 1)                                                -> '1,250,000.50'             ToString with decimals and thousands separator
+  P30  Uppercase([NS])                                                          -> [Null]                     string functions on null give null
+
+Tool #13: Union by name of Double + String + Int64 in [V]: resulting type and text (Union type rule), order of the inputs
+  Output  fields: K [V_WString], V [V_WString]
+    'a' | '1.5'
+    'b' | 'x'
+    [Null] | '100'
+
+Tool #22: Join on [K]: does null match null (JOIN_NULLS_MATCH), is 'A' = 'a' (no), row order of L / J / R (JOIN_OUTPUT_SORTED)
+  Left  fields: K [V_WString], L [Int64]
+    'A' | 4
+    'b' | 1
+  Join  fields: K [V_WString], L [Int64], Right_K [V_WString], R [Int64]
+    [Null] | 3 | [Null] | 20
+    'a' | 2 | 'a' | 10
+  Right  fields: K [V_WString], R [Int64]
+    'c' | 30
+
+Tool #31: Summarize: order of the groups (SUMMARIZE_OUTPUT_SORTED), Sum of only nulls (SUM_OF_NO_VALUES), Concat with a null (CONCAT_KEEPS_EMPTY)
+  Output  fields: G [V_WString], Count [Int64], Sum_V [Double], NonNull [Int64], Concat_T [V_WString], Last_T [V_WString]
+    'B' | 1 | 0 | 0 | 'q' | 'q'
+    'a' | 1 | 0 | 0 | '' | [Null]
+    'b' | 2 | 6.0 | 2 | 'x;z' | 'z'
+
+Tool #42: Find Replace, any part of field, append [N]: which Source row wins for '1234' (ours: the first in Source order, N=1)
+  Output  fields: DEAL [V_WString], N [Int64]
+    '1234' | 1
+    '99' | 3
+    'x123' | 1
+
+Tool #51: Sort ascending: place of null (NULL_SORTS_FIRST) and of upper/lower case (ours: code-point order, B before a)
+  Output  fields: K [V_WString]
+    [Null]
+    'B'
+    'a'
+    'b'
+
+Tool #61: Unique on [K]: order of the output (UNIQUE_OUTPUT_SORTED) and case ('A' is not 'a')
+  Unique  fields: K [V_WString]
+    'b'
+    'a'
+    'A'
+  Duplicates  fields: K [V_WString]
+    'b'
+
+Tool #70: Record ID as String(6): leading zeros (documented)
+  Output  fields: RecordID [String], K [V_WString]
+    '000001' | 'b'
+    '000002' | 'a'
+    '000003' | 'b'
+    '000004' | 'A'
+
+Tool #81: DateTime tool, format dd/MM/yyyy: value and TYPE of [OUT] (DATETIME_TOOL_DATE_ONLY_GIVES_DATE; ours: Date)
+  Output  fields: E [V_WString], OUT [Date]
+    '17/11/2026' | '2026-11-17'
