@@ -1,10 +1,11 @@
-"""python -m vba2py SOURCE [SOURCE ...] [-o OUT_DIR] [--name NAME] [--width N]
+"""python -m vba2py SOURCE [SOURCE ...] [-o OUT_DIR] [--name NAME] [--no-code]
 
 SOURCE is VBA text (.bas / .cls / .txt, one or several modules) or a workbook with macros
 (.xlsm / .xlam / .xls / vbaProject.bin), which is read without Excel. Writes into OUT_DIR:
-    NAME_vba_spec.txt      what each Sub does, in order, with targets resolved
-    NAME_generated.py      Python on openpyxl, one function per Sub
-    xl_runtime.py          the library the generated code calls
+    NAME_logic.md          what each Sub reads, opens and reports, then its steps (plain text)
+    NAME_logic.html        the same as a page for a browser (no scripts, no network)
+    NAME_generated.py      Python on openpyxl, one function per Sub      (not with --no-code)
+    xl_runtime.py          the library the generated code calls          (not with --no-code)
     NAME_vba_source.txt    the VBA text, when it was read out of a workbook
 The sources are only read. Standard library only.
 """
@@ -14,7 +15,11 @@ import re
 import shutil
 import sys
 
-from . import analyse, ovba, transpile, vbaparse
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import logicdoc  # noqa: E402
+
+from . import analyse, ovba, transpile, vbaparse  # noqa: E402
 
 
 def read_sources(paths):
@@ -41,7 +46,7 @@ def main(argv=None):
     ap.add_argument("sources", nargs="+")
     ap.add_argument("-o", "--out", default=None)
     ap.add_argument("--name", default=None)
-    ap.add_argument("--width", type=int, default=150)
+    ap.add_argument("--no-code", action="store_true", help="write only the logic document")
     a = ap.parse_args(argv)
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(errors="replace")        # a Windows console may not have every character
@@ -58,16 +63,19 @@ def main(argv=None):
     os.makedirs(out_dir, exist_ok=True)
     label = ", ".join(os.path.basename(s) for s in a.sources)
     code, report = transpile.generate(modules, label)
-    spec = analyse.build(modules, report, label, a.width)
-    files = [(base + "_vba_spec.txt", spec, "utf-8-sig"), (base + "_generated.py", code, "utf-8")]
+    doc = analyse.build(modules, report, label)
+    files = [(base + "_logic.md", logicdoc.to_markdown(doc), "utf-8"),
+             (base + "_logic.html", logicdoc.to_html(doc, "VBA logic of " + label), "utf-8")]
+    if not a.no_code:
+        files.append((base + "_generated.py", "\n".join(code) + "\n", "utf-8"))
+        shutil.copyfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "xl_runtime.py"),
+                        os.path.join(out_dir, "xl_runtime.py"))
     if extracted:
-        files.append((base + "_vba_source.txt", extracted.split("\n"), "utf-8-sig"))
-    for name, lines, enc in files:
-        with open(os.path.join(out_dir, name), "w", encoding=enc) as fh:
-            fh.write("\n".join(lines) + "\n")
-        print("wrote %s: %d lines, %d characters" % (os.path.join(out_dir, name), len(lines), sum(len(x) + 1 for x in lines)))
-    shutil.copyfile(os.path.join(os.path.dirname(os.path.abspath(__file__)), "xl_runtime.py"), os.path.join(out_dir, "xl_runtime.py"))
-    print("\n".join(spec[1:3]))
+        files.append((base + "_vba_source.txt", extracted + "\n", "utf-8-sig"))
+    for name, text, enc in files:
+        with open(os.path.join(out_dir, name), "w", encoding=enc, newline="\n") as fh:
+            fh.write(text)
+        print("wrote %s: %d lines, %d characters" % (os.path.join(out_dir, name), text.count("\n"), len(text)))
     return 0
 
 

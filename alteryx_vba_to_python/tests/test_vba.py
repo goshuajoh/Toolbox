@@ -12,6 +12,7 @@ import openpyxl
 
 from helpers import HERE, ROOT
 import ole_writer
+import logicdoc
 import xl_runtime as xl
 from vba2py import analyse, ovba, transpile, vbaparse
 
@@ -30,7 +31,7 @@ def load(text, name="M"):
     spec = importlib.util.spec_from_file_location("gen_%d" % _n[0], path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod, modules, report, analyse.build(modules, report, "test")
+    return mod, modules, report, logicdoc.to_markdown(analyse.build(modules, report, "test")).splitlines()
 
 
 def col(n):
@@ -185,25 +186,32 @@ class Macros(unittest.TestCase):
     def test_specification(self):
         t = self.text
         for expected in (
-                "statements: 212, converted to Python: 208, not converted: 4",
-                "  FormatAll\n    FormatTradesA\n    FormatTradesB",
-                "clear    [ThisWorkbook]Format!F2:I2",
-                "read     [ThisWorkbook]Format!B2 → format_file",
-                "open     workbook <format_file>",
-                'cond.fmt [<format_file>]<format_sheet>!A2:AS5000: when =COUNTIF($A2,"*NO ACTION REQUIRED*")',
-                "… rule 1 fill Color = 8420607 (colour #FF7C80)",
-                'write    [ThisWorkbook]Format!F2 = "Fail - " & Err.Description   [status]',
-                "same steps as FormatTradesA, with: B2→D2, F2→H2",
-                "delete   [ThisWorkbook]TradesA!rows 3:20000",
-                "paste    all → [ThisWorkbook]TradesA!C3   (from [<source_file>]<source_sheet>!A2:AQ<intActiveRow>)",
-                'formula  [ThisWorkbook]Lifecycle!AT3 = "=RC[-10]&"" ""&RC[-4]"   (R1C1 notation)',
-                "paste    values → [ThisWorkbook]Lifecycle!AJ3   (from [ThisWorkbook]Lifecycle!AT3:AT10000)",
-                "to values [ThisWorkbook]<dataSheet>!I3:I<lastRow>",
-                "last filled cell going up from [ThisWorkbook]<dataSheet>!(bottom of column G)",
-                '!! set   olApp = CreateObject("Outlook.Application")',
-                "Module5 line 11: Set rngDate = Cells.Find("):
+                "**Python:** 208 of 212 statements converted; 4 not converted",
+                "- FormatAll\n  - FormatTradesA\n  - FormatTradesB",
+                "1. Clear the contents of Format!F2:I2",
+                "1. Read **format_file** from Format!B2",
+                "3. Open the workbook {format_file}",
+                "4. Fit the column widths of [{format_file}]{format_sheet}!A2:AS5000 to their contents",
+                "5. Add 4 conditional format rules:",
+                '[{format_file}]{format_sheet}!A2:AS5000: when `=COUNTIF($A2,"*NO ACTION REQUIRED*")` → fill #FFFF00 '
+                "(priority 4 at the end) — ‘Format Yellow for NO ACTION REQUIRED’",
+                "when `=$A2=\"HOLD\"` → fill Background 1 (white), 15% darker (priority 2 at the end)",
+                '- **Reports in:** Format!F2: "Successfully Formatted", or "Fail - " & the error message',
+                "#### If any step fails",
+                "Same steps as FormatTradesA, except: B2 → D2; F2 → H2.",
+                "2. Delete rows 3:20000 of TradesA",
+                "   - Copy [{source_file}]{source_sheet}!A2:AQ{intActiveRow} to TradesA!C3 (values, formulas and formats)",
+                '5. If [{source_file}]{source_sheet}!A2 <> "":',
+                '         =AJ3&" "&AP3   (the same in A1 notation, in AT3)',
+                "   - Copy Lifecycle!AT3:AT10000 to Lifecycle!AJ3 (values only)",
+                "4. Replace the formulas in {dataSheet}!I3:I{lastRow} by their results",
+                "       =RIGHT(XLOOKUP(G3,'{lookupSheet}'!E:E,'{lookupSheet}'!C:C,\"\"),7)",
+                "1. Set **lastRow** = the last filled row of column G",
+                "1. Start **Outlook.Application** as olApp — another program; not converted to Python",
+                "- Module5 line 11: `Set rngDate = Cells.Find("):
             self.assertTrue(expected in t, expected)
-        self.assertLess(len(self.spec), 200)
+        self.assertFalse("<" in t.replace("<>", "").replace("< 3", ""), "angle brackets would hide text on GitHub")
+        self.assertLess(len(self.spec), 260)
 
 
 class Language(unittest.TestCase):
@@ -352,9 +360,10 @@ class ReadWorkbook(unittest.TestCase):
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr + r.stdout)
         self.assertEqual(sorted(os.listdir(os.path.join(tmp, "out"))),
-                         ["Configuration_generated.py", "Configuration_vba_source.txt", "Configuration_vba_spec.txt", "xl_runtime.py"])
-        with open(os.path.join(tmp, "out", "Configuration_vba_spec.txt"), encoding="utf-8-sig") as fh:
-            self.assertTrue("same steps as FormatTradesA, with: B2→D2, F2→H2" in fh.read())
+                         ["Configuration_generated.py", "Configuration_logic.html", "Configuration_logic.md",
+                          "Configuration_vba_source.txt", "xl_runtime.py"])
+        with open(os.path.join(tmp, "out", "Configuration_logic.md"), encoding="utf-8") as fh:
+            self.assertTrue("Same steps as FormatTradesA, except: B2 → D2; F2 → H2." in fh.read())
 
     def test_bad_files_are_refused(self):
         tmp = tempfile.mkdtemp()

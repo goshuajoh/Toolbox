@@ -518,3 +518,180 @@ def to_function(node, name, args="r"):
     else:
         lines.append("    return %s" % to_python(node))
     return lines
+
+
+# ----------------------------------------------------------------------------- readable form
+# For people, not for Python: [Field] = "x", and/or in words, IF as a "when ... -> ..." list,
+# and a few patterns said the way a person would say them. Grouping is always made explicit,
+# because Alteryx reads "a OR b AND c" left to right.
+PROPER = {n.lower(): n for n in (
+    "IIF Switch IsNull IsEmpty IsNumber IsString IsInteger ToNumber ToString ToInteger CharToInt CharFromInt ABS CEIL "
+    "FLOOR Round POW SQRT EXP LOG LOG10 Mod Min Max Contains StartsWith EndsWith FindString Left Right Substring Length "
+    "LowerCase Uppercase TitleCase Trim TrimLeft TrimRight PadLeft PadRight Replace ReplaceChar ReplaceFirst ReverseString "
+    "GetWord CountWords StripQuotes REGEX_Replace REGEX_Match REGEX_CountMatches ToDate ToDateTime DateTimeDiff "
+    "DateTimeAdd DateTimeFormat DateTimeParse DateTimeTrim DateTimeNow DateTimeToday DateTimeYear DateTimeMonth "
+    "DateTimeDay DateTimeHour DateTimeMinutes DateTimeSeconds DateTimeFirstOfMonth DateTimeLastOfMonth FileGetFileName "
+    "FileGetExt FileGetDir FileExists").split()}
+_RSYM = {"eq": "=", "ne": "≠", "lt": "<", "le": "≤", "gt": ">", "ge": "≥", "add": "+", "sub": "-", "mul": "×",
+         "div": "÷", "mod": "mod"}
+_NEG = {"eq": "ne", "ne": "eq", "lt": "ge", "ge": "lt", "gt": "le", "le": "gt"}
+_LEVEL = {"or": 0, "and": 0, "not": 1, "in": 2, "cmp": 2, "arith_add": 3, "arith_sub": 3, "arith_mul": 4,
+          "arith_div": 4, "arith_mod": 4, "neg": 5}
+
+
+def _lit(node):
+    return node[0] in ("str", "num", "bool", "null") or (node[0] == "neg" and node[1][0] == "num")
+
+
+def _level(node):
+    if node[0] == "arith":
+        return _LEVEL["arith_" + node[1]]
+    if node[0] == "call" and node[1] in ("isempty", "isnull", "contains", "startswith", "endswith"):
+        return 2                                  # rendered as "[x] is empty", "[x] contains ..."
+    return _LEVEL.get(node[0], 9)
+
+
+def _wrap(node, above):
+    s = readable(node)
+    return "(%s)" % s if _level(node) <= above and not s.startswith("(") else s
+
+
+def _chain(node, kind):
+    """Flatten a run of the same and/or into its items."""
+    if node[0] == kind:
+        return _chain(node[1], kind) + _chain(node[2], kind)
+    return [node]
+
+
+def chain_parts(node):
+    """-> (word, [item texts]) for an and/or chain, with repeated tests on one field grouped:
+    [X] = "a" or [X] = "b"  -> [X] is one of "a", "b";  contains-any; is-none-of; between."""
+    kind = node[0]
+    items = _chain(node, kind)
+    out, used = [], set()
+    for i, it in enumerate(items):
+        if i in used:
+            continue
+        group = None
+        if kind == "or" and it[0] == "cmp" and it[1] == "eq" and _lit(it[3]):
+            group = [j for j, x in enumerate(items) if x[0] == "cmp" and x[1] == "eq" and _lit(x[3])
+                     and canon(x[2]) == canon(it[2])]
+            word = "is one of"
+        elif kind == "or" and it[0] == "call" and it[1] == "contains" and len(it[2]) == 2 and _lit(it[2][1]):
+            group = [j for j, x in enumerate(items) if x[0] == "call" and x[1] == "contains" and len(x[2]) == 2
+                     and _lit(x[2][1]) and canon(x[2][0]) == canon(it[2][0])]
+            word = "contains any of"
+        elif kind == "and" and it[0] == "cmp" and it[1] == "ne" and _lit(it[3]):
+            group = [j for j, x in enumerate(items) if x[0] == "cmp" and x[1] == "ne" and _lit(x[3])
+                     and canon(x[2]) == canon(it[2])]
+            word = "is none of"
+        if group and len(group) > 1:
+            used.update(group)
+            subject = it[2] if it[0] == "cmp" else it[2][0]
+            vals = [items[j][3] if it[0] == "cmp" else items[j][2][1] for j in group]
+            out.append("%s %s %s" % (_wrap(subject, 2), word, ", ".join(readable(v) for v in vals)))
+            continue
+        if kind == "and" and it[0] == "cmp" and it[1] in ("ge", "le"):
+            want = "le" if it[1] == "ge" else "ge"
+            mate = next((j for j, x in enumerate(items) if j > i and j not in used and x[0] == "cmp" and x[1] == want
+                         and canon(x[2]) == canon(it[2])), None)
+            if mate is not None:
+                used.add(mate)
+                lo, hi = (it[3], items[mate][3]) if it[1] == "ge" else (items[mate][3], it[3])
+                out.append("%s between %s and %s" % (_wrap(it[2], 2), _wrap(lo, 2), _wrap(hi, 2)))
+                continue
+        other = "and" if kind == "or" else "or"
+        out.append("(%s)" % readable(it) if it[0] == other else readable(it))
+    return kind, out
+
+
+def readable(node):
+    """One-line readable text of an expression."""
+    k = node[0]
+    if k == "num":
+        return node[1]
+    if k == "str":
+        return ('"%s"' if '"' not in node[1] else "'%s'") % node[1]
+    if k == "field":
+        return "[this column]" if node[1].lower() == "_currentfield_" else "[%s]" % node[1]
+    if k == "bool":
+        return "True" if node[1] else "False"
+    if k == "null":
+        return "Null"
+    if k in ("or", "and"):
+        word, parts = chain_parts(node)
+        return (" %s " % word).join(parts)
+    if k == "not":
+        x = node[1]
+        if x[0] == "call" and x[1] in ("isempty", "isnull"):
+            return "%s is not %s" % (_wrap(x[2][0], 2), "empty" if x[1] == "isempty" else "null")
+        if x[0] == "call" and x[1] == "contains" and len(x[2]) == 2:
+            return "%s does not contain %s" % (_wrap(x[2][0], 2), readable(x[2][1]))
+        if x[0] == "cmp":
+            return "%s %s %s" % (_wrap(x[2], 2), _RSYM[_NEG[x[1]]], _wrap(x[3], 2))
+        if x[0] == "in":
+            return readable(("in", x[1], x[2], not x[3]))
+        return "not (%s)" % readable(x)
+    if k == "neg":
+        return "-" + _wrap(node[1], 4)
+    if k == "cmp":
+        return "%s %s %s" % (_wrap(node[2], 2), _RSYM[node[1]], _wrap(node[3], 2))
+    if k == "arith":
+        lv = _level(node)
+        right = readable(node[3]) if _level(node[3]) > lv else "(%s)" % readable(node[3])
+        return "%s %s %s" % (_wrap(node[2], lv - 1), _RSYM[node[1]], right)
+    if k == "in":
+        return "%s %s %s" % (_wrap(node[1], 2), "is none of" if node[3] else "is one of",
+                             ", ".join(readable(x) for x in node[2]))
+    if k == "call":
+        name, args = node[1], node[2]
+        if name in ("isempty", "isnull"):
+            return "%s is %s" % (_wrap(args[0], 2), "empty" if name == "isempty" else "null")
+        if name in ("contains", "startswith", "endswith"):
+            word = {"contains": "contains", "startswith": "starts with", "endswith": "ends with"}[name]
+            exact = len(args) > 2 and args[2] == ("num", "0")
+            return "%s %s %s%s" % (_wrap(args[0], 2), word, readable(args[1]), " (matching case)" if exact else "")
+        if name == "iif":
+            return "(when %s → %s, otherwise %s)" % (readable(args[0]), readable(args[1]), readable(args[2]))
+        return "%s(%s)" % (PROPER.get(name, name), ", ".join(readable(a) for a in args))
+    if k == "if":
+        parts = ["when %s → %s" % (readable(c), readable(v)) for c, v in node[1]]
+        return "(%s; otherwise %s)" % ("; ".join(parts), readable(node[2]))
+    raise ExprError("unknown node " + k)
+
+
+def _cond_lines(node, width):
+    """A condition as one line, or as one line per and/or item when it is too long."""
+    one = readable(node)
+    if len(one) <= width or node[0] not in ("and", "or"):
+        return [one]
+    word, parts = chain_parts(node)
+    return [parts[0]] + ["%s %s" % (word, p) for p in parts[1:]]
+
+
+def decision(node, width=100):
+    """Lines that state an expression's value. A top-level IF becomes a list:
+        when [A] = "x" → 1
+        otherwise      → 2"""
+    if node[0] != "if":
+        return _cond_lines(node, width) if node[0] in ("and", "or") else [readable(node)]
+    if len(node[1]) == 1:                        # one test and a default: one line when it fits
+        one = "%s when %s, otherwise %s" % (readable(node[1][0][1]), readable(node[1][0][0]), readable(node[2]))
+        if len(one) <= width - 20:
+            return [one]
+    rows = [("when " + c, readable(v), _cond_lines(cond, width - 5)) for cond, v in node[1]
+            for c in [readable(cond)]]
+    rows.append(("otherwise", readable(node[2]), None))
+    flat = all(len(h) + len(v) + 3 <= width for h, v, _ in rows)
+    if flat:
+        pad = max(len(h) for h, _, _ in rows)
+        return ["%s → %s" % (h.ljust(pad), v) for h, v, _ in rows]
+    out = []
+    for head, value, lines in rows:
+        if lines and len(head) + len(value) + 3 > width:
+            out.append("when " + lines[0])
+            out += ["     " + x for x in lines[1:]]
+            out.append("     → " + value)
+        else:
+            out.append("%s → %s" % (head, value))
+    return out

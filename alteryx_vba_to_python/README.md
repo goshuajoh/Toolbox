@@ -1,21 +1,27 @@
 # Alteryx and VBA to Python
 
-Two command-line tools. Each reads its source without changing it and writes a logic specification and Python code.
-`REPORT.md` says how far each conversion can be trusted and what is still unproven. Read its sections 1 and 9 first.
+Two command-line tools for any Alteryx workflow and any Excel VBA module:
 
-Everything here was tested on synthetic workflows and macros only. Nothing has run on Windows or on a real file yet.
+- **`ayx2py`** reads a workflow (`.yxmd`, or the same XML saved as `.txt`).
+- **`vba2py`** reads VBA text (`.bas`, `.cls`, `.txt`), or the macros inside an `.xlsm` / `.xls` without opening Excel.
 
-## What is in the folder
+Each writes two things:
 
-| Path | What it is | Needed to run the tools |
-|---|---|---|
-| `ayx2py/` | Alteryx converter (7 files) | yes |
-| `vba2py/` | VBA analyser (7 files) | yes |
-| `probe/` | A small workflow that tests the Alteryx behaviours the converter assumes, and the answers it expects | yes, once |
-| `tests/`, `run_tests.py` | 64 tests on synthetic input | optional |
-| `REPORT.md` | Feasibility report | no |
+1. **A logic document** that says what the workflow or macro does, step by step, in plain words, with every rule written out. It comes as Markdown (readable as plain text) and as one HTML page for a browser. The HTML page has a diagram of the stages and links between them. It needs no network and runs no scripts.
+2. **Python code** that does the same work (pandas for Alteryx, openpyxl for VBA), with every step it could not convert marked and made to stop with an error.
 
-The two tool folders are 14 text files, about 270,000 characters. The tools themselves use the standard library only (Python 3.12). The code they generate needs pandas (Alteryx side) and openpyxl (VBA side, and Excel files on the Alteryx side).
+Neither tool depends on a particular workflow or macro. They work from the tool kinds and VBA statements they find. [examples/](examples/) shows both on a sales report and a month-end macro.
+
+`REPORT.md` says how far each conversion can be trusted. Everything here was tested on synthetic workflows and macros only. Nothing has run on Windows or on a real file yet.
+
+## Start with the examples
+
+| Input | Logic document |
+|---|---|
+| [examples/sales_report.yxmd](examples/sales_report.yxmd) (17 tools) | [sales_report_logic.md](examples/sales_report_logic.md), [.html](examples/sales_report_logic.html) |
+| [examples/month_end.bas](examples/month_end.bas) (5 Subs) | [month_end_logic.md](examples/month_end_logic.md), [.html](examples/month_end_logic.html) |
+
+To see the HTML page, download it and open it in a browser.
 
 ## Alteryx
 
@@ -23,36 +29,48 @@ The two tool folders are 14 text files, about 270,000 characters. The tools them
 python -m ayx2py workflow.yxmd out_alteryx
 ```
 
-The workflow may be a `.yxmd` or the same XML saved as `.txt`. Run the command from this folder. The output folder must not be the workflow's own folder.
+Run the command from this folder. The output folder must not be the workflow's own folder.
 
 | Output file | What it is |
 |---|---|
-| `workflow_spec.txt` | The logic specification. Top: tool counts, how many tools converted, what to check, inputs, outputs, forced run order, disabled containers. Then rules used more than once (`R1`, `R2`, …), repeated sub-chains (`B1`, …), and the flows by container in dependency order. Every rule is printed in full, once. |
-| `workflow_generated.py` | One Python function per distinct tool, with the tool ID and original expression as a comment, and `run()` which calls them in order. A tool that could not be converted is a function that raises. |
-| `ayx_runtime.py` | The library the generated code calls. All Alteryx behaviour lives here, as named switches in `SEM`. |
+| `workflow_logic.md` | The logic, stage by stage (see below). |
+| `workflow_logic.html` | The same, with a diagram of the stages. Every stage number is a link. |
+| `workflow_generated.py` | One Python function per distinct tool, each with its tool ID and original expression as a comment, and `run()`, which calls them in order. |
+| `ayx_runtime.py` | The library the generated code calls. The Alteryx behaviours the code has to assume are named switches in `SEM`. |
 
-Options: `--width N` (wrap the specification at N characters, default 150), `--name NAME`, `--spec-only`, `--and-before-or` (see probe item P08).
+Options:
 
-Size, measured on a synthetic 930-tool workflow with a production workflow's mix of tool kinds, one 47-tool scenario tree repeated four times, and every other rule unique:
+- `--no-code`: write only the logic document.
+- `--tool-listing`: also write `workflow_tools.txt`, every tool with every setting in flow order. This was the earlier, denser output; keep it for tracing a single tool.
+- `--name NAME`: prefix of the output files.
+- `--and-before-or`: see probe item P08.
+
+### How the logic document is organised
+
+- **Summary**, **Inputs**, **Outputs**: what the workflow reads, writes and runs.
+- **Stage map**: a table (and in HTML a diagram) of the stages, with where each takes its rows from and sends them to.
+- **Stages**: numbered steps.
+  - A stage is a run of tools in which rows flow straight from one tool to the next. A new stage starts where streams split (a filter with both outputs used, a stream that feeds several tools) or meet (a join, a union, a lookup), and at each container.
+  - Each tool becomes a sentence: *Keep the rows where [Status] ≠ "Cancelled"*; *Add **Category** from the first row of stage 5 whose [Product] equals this row's [Product]*.
+  - Formulas are written as rules: `when [Gross] ≥ 10000 → 0.1`, one line per condition, with `otherwise` last. Repeated tests are grouped (`[CFICODE] is one of "A", "B", "C"`; `[RISK] contains any of …`; `ABS([X]) between … and …`).
+  - Brackets are written where Alteryx applies them. Alteryx reads `a OR b AND c` as `(a OR b) AND c`, and the document shows it that way.
+- **Repeats**: a group of stages repeated with identical rules is described once. Each copy is one short section saying which rows it takes and where it sends them.
+- **Before relying on this**: tools that did not convert to Python, partial-match lookups, AND/OR mixed without brackets, Data Cleansing settings to confirm, and the Alteryx behaviours the Python assumes.
+- **Tool IDs**: `(#1405)` after a step is the tool's ID in Alteryx, for finding it on the canvas.
+
+### Size
+
+Measured on a synthetic 930-tool workflow with a production workflow's mix of tool kinds:
 
 | File | Lines | Characters |
 |---|---|---|
-| specification | 1,162 | 96,000 |
+| logic document (`.md`) | 3,625 | 163,000 |
+| tool listing (`--tool-listing`) | 1,162 | 96,000 |
 | generated code | 7,843 | 306,000 |
 
-Unique tools cost about 1.3 lines each; each repeated copy of a sub-chain costs one line. A real workflow has longer expressions, so expect 1,300 to 2,500 lines.
+The logic document is three times longer than the old listing because it uses sentences, one step per line and blank lines between blocks. It is meant to be read with the stage map as a table of contents, which the HTML page makes clickable.
 
-Reading the specification:
-
-```text
-#1395 Join <L←#2545.T, R←#2547.T  : keys: Left DEAL ID = Right DEAL ID  |  R1
-B1 #1405 Filter <#1403  : Contains([SYSB_RISKCLASS],"TYPEA") OR …
-[B1 copy 2 of 4] 47 tools, same rules and wiring as block B1; each tool ID = B1's +200; fed by #1599→#2221; feeds #2260→#2300
-```
-
-`<` lists the inputs. `.T` / `.F` are a filter's outputs, `.L` / `.J` / `.R` a join's, `.U` / `.D` a Unique's. Lines tagged `B1` are the first copy of a repeated sub-chain. `!! NOT CONVERTED` marks a stub.
-
-Running the generated code:
+### Running the generated code
 
 ```python
 import ayx_runtime as rt, workflow_generated as wf
@@ -73,8 +91,6 @@ result = ctx.outputs["2290"]           # what Output tool 2290 would have writte
 
 The `.yxmd` has not been opened in Designer yet. If it does not load, paste the expressions listed in the expected file into a Formula tool.
 
-`python probe/make_probe.py` re-creates both files; it needs the `tests/` folder and pandas.
-
 ## VBA
 
 ```bash
@@ -85,16 +101,27 @@ python -m vba2py Configuration.xlsm -o out_vba
 python -m vba2py Module1.bas Module3.bas -o out_vba
 ```
 
-A workbook is read without Excel. If that fails on a real file, export the modules from the VBA editor and pass the `.bas` files.
+A workbook's macros are read without Excel. If that fails on a real file, export the modules from the VBA editor (File > Export File) and pass the `.bas` files.
 
 | Output file | What it is |
 |---|---|
-| `Configuration_vba_spec.txt` | Call tree, workbooks opened, statements that could not be converted, then each Sub as a list of steps with targets resolved, for example `paste values → [ThisWorkbook]Lifecycle!AJ3 (from …AT3:AT10000)`. Subs that differ only in cell addresses are printed once. |
-| `Configuration_generated.py` | One Python function per Sub, taking `app`. Statement for statement the same as the VBA, with line numbers. |
-| `xl_runtime.py` | A stand-in for Excel's object model on openpyxl. Read its header for what it does not do (calculate arbitrary formulas, measure AutoFit, save like Excel). |
+| `Configuration_logic.md` | Summary, what calls what, the files and settings cells used, then each Sub. |
+| `Configuration_logic.html` | The same as a page; Sub names are links. |
+| `Configuration_generated.py` | One Python function per Sub, taking `app`; statement for statement the same as the VBA, with line numbers. |
+| `xl_runtime.py` | A stand-in for Excel's object model on openpyxl. Its header says what it does not do: calculate arbitrary formulas, measure AutoFit, save the way Excel does. |
 | `Configuration_vba_source.txt` | The VBA text, when it was read out of a workbook. |
 
-Size, measured on 355 lines of VBA (11 procedures): specification 174 lines, generated code 332 lines.
+Each Sub in the logic document starts with what it **reads** (cells used as settings), **opens**, **reports** (status cells, from the error handler), and the **Excel settings** it changes. Then come its **steps**, and **if any step fails**.
+
+Recorded-macro noise is folded away:
+
+- **Selecting and activating** are not steps: every step names its cells, for example `[{source_file}]{source_sheet}!A2:AQ{intActiveRow}`, where names in braces are values the macro worked out while running.
+- **Copy and paste** become one step: *Copy … to Lifecycle!AJ3 (values only)*.
+- **Conditional formatting**: the property lines behind each rule become one line with its condition, colour and final priority.
+- **R1C1 formulas** are also shown in A1 notation.
+- **Subs that differ only in a few cells** are described once: *Same steps as FormatTradesA, except: B2 → D2; F2 → H2*.
+
+Size: 355 lines of VBA (11 procedures) give a 233-line logic document and 332 lines of Python.
 
 Running the generated code, on copies of the workbooks:
 
@@ -106,10 +133,24 @@ macros.FormatAll(app)
 print(app.log)
 ```
 
+## What is in the folder
+
+| Path | What it is | Needed to run the tools |
+|---|---|---|
+| `ayx2py/` | Alteryx converter | yes |
+| `vba2py/` | VBA converter | yes |
+| `logicdoc.py` | Writes the logic documents (Markdown, HTML, diagram) | yes |
+| `examples/` | A sales-report workflow and a month-end macro, with their logic documents | no |
+| `probe/` | The workflow that checks the assumed Alteryx behaviours | once |
+| `tests/`, `run_tests.py` | 73 tests on synthetic input | optional |
+| `REPORT.md` | Feasibility report | no |
+
+The tools use the standard library only (written and tested on Python 3.12). The code they generate needs pandas (Alteryx side) and openpyxl (VBA side, and Excel files on the Alteryx side).
+
 ## Tests
 
 ```bash
 python run_tests.py
 ```
 
-64 tests, about 6 seconds. They need pandas and openpyxl, and no real data.
+73 tests, about 6 seconds. They need pandas and openpyxl, and no real data. `python examples/make_examples.py` and `python probe/make_probe.py` re-create the example and probe files; the tests check that they are current.

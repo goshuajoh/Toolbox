@@ -1,5 +1,6 @@
 """A reconciliation-shaped workflow end to end, the factoring of repeated sub-chains, and output size."""
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -71,22 +72,25 @@ class Size(unittest.TestCase):
             fh.write(wb.xml())
         with open(src, "rb") as fh:
             before = fh.read()
-        r = subprocess.run([sys.executable, "-m", "ayx2py", src, os.path.join(tmp, "out")], cwd=ROOT,
+        r = subprocess.run([sys.executable, "-m", "ayx2py", src, os.path.join(tmp, "out"), "--tool-listing"], cwd=ROOT,
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, 0, r.stderr)
         with open(src, "rb") as fh:
             self.assertEqual(before, fh.read())                     # the workflow is only read
-        with open(os.path.join(tmp, "out", "big_spec.txt"), encoding="utf-8-sig") as fh:
+        with open(os.path.join(tmp, "out", "big_logic.md"), encoding="utf-8") as fh:
             spec = fh.read().splitlines()
+        with open(os.path.join(tmp, "out", "big_tools.txt"), encoding="utf-8-sig") as fh:
+            listing = fh.read().splitlines()
         with open(os.path.join(tmp, "out", "big_generated.py"), encoding="utf-8") as fh:
             code = fh.read()
         compile(code, "big_generated.py", "exec")
         tools = len(wb.items)
         self.assertGreater(tools, 900)
-        self.assertLess(len(spec), 2 * tools)                       # under two lines per tool
-        self.assertTrue("copy 4 of 4" in "\n".join(spec))
-        print("\n[size] %d tools -> spec %d lines / %d chars; code %d lines / %d chars" % (
-            tools, len(spec), sum(len(x) + 1 for x in spec), code.count("\n"), len(code)))
+        self.assertLess(len(spec), 5 * tools)
+        self.assertEqual(sum(1 for x in spec if re.match(r"### Stages .* — repeat of stages", x)), 3)
+        self.assertTrue("copy 4 of 4" in "\n".join(listing))
+        print("\n[size] %d tools -> logic %d lines / %d chars; tool listing %d lines; code %d lines / %d chars" % (
+            tools, len(spec), sum(len(x) + 1 for x in spec), len(listing), code.count("\n"), len(code)))
 
 
 if __name__ == "__main__":
