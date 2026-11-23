@@ -1257,6 +1257,9 @@ class Sheet:
         self._ws.auto_filter.ref = None
         self._book._dirty = True
 
+    def Copy(self, Before=None, After=None):
+        raise NotConverted("copying a whole sheet (to a new workbook or within one) is not supported")
+
     def Paste(self, Destination=None):
         src = self._app._clipboard
         if src is None:

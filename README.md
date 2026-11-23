@@ -50,7 +50,7 @@ its own — most depend only on pandas plus `robust.py`.
 | Fabric OneLake and Delta tables: read, write, merge, history | `lake` |
 | Triggers: folder watch, every N minutes, cron, Windows Task Scheduler, webhook receiver, work queue, one-copy lock | `triggers` |
 | Alteryx-style workflow with row counts and timings per step | `flow` |
-| Turn an existing Alteryx workflow or Excel VBA macros into a rules listing and Python | `alteryx_vba_to_python/` (separate tools, see its README) |
+| Explain an existing Alteryx workflow or Excel VBA macros step by step, and turn them into Python | `alteryx_vba_to_python/` (separate tools, see its README) |
 | Parallel API calls, chunks, progress with ETA, smaller DataFrames | `perf` |
 | Errors, retry, checkpoints, dry run, logs, config, secrets, Teams messages | `robust`, `logs`, `config`, `notify` |
 | Business days, holidays, T+n, roll conventions, cut-offs, time zones | `dates` |
@@ -64,7 +64,7 @@ its own — most depend only on pandas plus `robust.py`.
 | `toolbank/` | the functions (one module per topic) |
 | `templates/robot_template.py` | robot skeleton: `--env --dry-run --business-date`, one-copy lock, exit codes |
 | `vba/` | `.bas` modules — Excel: Developer > Visual Basic > File > Import |
-| `alteryx_vba_to_python/` | two stand-alone converters, standard library only: `ayx2py` (Alteryx `.yxmd` → logic specification + pandas code) and `vba2py` (VBA text or `.xlsm`, read without Excel → specification + openpyxl code). Own README, feasibility report and tests |
+| `alteryx_vba_to_python/` | two stand-alone converters, standard library only, for any workflow or macro: `ayx2py` (Alteryx `.yxmd` → plain-language logic document with a stage diagram + pandas code) and `vba2py` (VBA text or `.xlsm`, read without Excel → logic document + openpyxl code). Own README, examples, feasibility report and tests |
 | `tests/` | `pytest` — run after copying to check your environment |
 
 Tested on Python 3.10–3.13 and pandas 2.1–3.0 (with and without pyarrow), browser parts with Chromium. Windows-only
