@@ -127,7 +127,7 @@ def check_compiles(wf):
             texts = [f[3]["text"] for f in t.ir.get("fields", []) if isinstance(f, tuple) and len(f) == 4 and
                      isinstance(f[3], dict)] + [x["text"] for x in (t.ir.get("expr"), t.ir.get("filter")) if isinstance(x, dict)]
             levels = max([expr.text_nesting(x) for x in texts] or [0])
-            t.problems.append("expression nested too deeply (%d levels)" % levels if levels else
+            t.problems.append("expression nested too deeply (%d levels)" % levels if levels > 100 else
                               "the generated Python does not compile: %s" % type(e).__name__)
 
 

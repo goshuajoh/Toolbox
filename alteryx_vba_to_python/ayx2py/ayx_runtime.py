@@ -308,6 +308,20 @@ def chain(op, *xs):
     return value
 
 
+def fold(value, *steps):
+    """value, "and", thunk, "or", thunk, "add", thunk ...: a long left-to-right chain as one flat call. AND/OR stop
+    early as Alteryx does (each thunk runs only when needed); arithmetic applies each operator in turn."""
+    for i in range(0, len(steps), 2):
+        op, nxt = steps[i], steps[i + 1]
+        if op == "and":
+            value = value and nxt()
+        elif op == "or":
+            value = value or nxt()
+        else:
+            value = {"add": add, "sub": sub, "mul": mul, "div": div, "mod": mod}[op](value, nxt())
+    return value
+
+
 def neg(a):
     return None if is_null(a) else -_num(a)
 

@@ -491,12 +491,17 @@ class Guide:
                 return ["%s = %s" % (label, lines[0])]
             return ["%s =" % label] + ["    " + x for x in lines]
 
+        pre = []                                 # lines a long or deep rule needs before its pandas expression
+
         def vec(e, fallback, col=None):
             try:
                 if e["ast"] is None:
                     raise sketch.NoSketch("unreadable")
-                return sketch.vec(e["ast"], col)
-            except sketch.NoSketch:
+                lines, text = sketch.vec_lines(e["ast"], col)
+                pre[:] = lines
+                return text
+            except (sketch.NoSketch, RecursionError, MemoryError):
+                pre[:] = []
                 return fallback
 
         if k == "Input":
@@ -584,7 +589,8 @@ class Guide:
                 mode = "" if have is None else (" (changed)" if name.lower() in have else " (new)")
                 write(name, typ, how)
                 c["writes"][-1] = c["writes"][-1][:2] + (how, mode)
-                c["py"].append('df["%s"] = %s' % (name, vec(e, "df.apply(%s_%d, axis=1)  # generated code; no one-line form" % (fx, n))))
+                text = vec(e, "df.apply(%s_%d, axis=1)  # generated code; no one-line form" % (fx, n))
+                c["py"] += pre + ['df["%s"] = %s' % (name, text)]
         elif k == "MultiFieldFormula":
             cols = list(ir["fields"])
             c["does"] = "Applies one rule to each of the columns %s%s." % (
@@ -598,7 +604,7 @@ class Guide:
                 write(target, ir["out_type"], how)
             v = vec(ir["expr"], None, "df[c]")
             target = '"%s" + c' % ir["addon"] if ir["copy"] and ir["prefix"] else "c + %r" % ir["addon"] if ir["copy"] else "c"
-            c["py"] = ["for c in %s:" % _cols(cols), "    df[%s] = %s" % (target, v)] if v else \
+            c["py"] = ["for c in %s:" % _cols(cols)] + ["    " + x for x in pre] + ["    df[%s] = %s" % (target, v)] if v else \
                 ["# no one-line pandas form for this rule; write it by hand (the generated function %s has the logic)" % fx]
         elif k == "Filter":
             if ir["mode"] == "simple":
@@ -609,18 +615,19 @@ class Guide:
                 lines = expr.decision(e["ast"], WIDTH) if e["ast"] is not None else [e["text"]]
                 cond_py = vec(e, None)
                 c["reads"] = expr.fields(e["ast"]) if e["ast"] is not None else []
+            cond_pre = list(pre)
             cond_py = cond_py or "df.apply(%s, axis=1)  # generated code" % (fx if ir["mode"] != "simple" else "test")
             c["rule"] = lines if len(lines) > 1 or len(lines[0]) > 60 else []
             test = "the test in Rule holds" if c["rule"] else lines[0]
             if used >= {"True", "False"}:
                 c["does"] = "Splits the rows: those where %s go to True, the others to False." % test
-                c["py"] = ["m = " + cond_py, "%s, %s = df[m], df[~m]" % (self.var(i, "True"), self.var(i, "False"))]
+                c["py"] = cond_pre + ["m = " + cond_py, "%s, %s = df[m], df[~m]" % (self.var(i, "True"), self.var(i, "False"))]
             elif used == {"False"}:
                 c["does"] = "Keeps only the rows where %s is not true (the False output)." % test.replace(" holds", "")
-                c["py"] = ["df = df[~(%s)]" % cond_py]
+                c["py"] = cond_pre + ["df = df[~(%s)]" % cond_py]
             else:
                 c["does"] = "Keeps only the rows where %s." % test
-                c["py"] = ["df = df[%s]" % cond_py]
+                c["py"] = cond_pre + ["df = df[%s]" % cond_py]
         elif k == "Join":
             right = other("R")
             rvar = self.var(right[0][0], right[0][1]) if right else "right"
@@ -802,7 +809,8 @@ class Guide:
             if cond:
                 c["rule"] = expr.decision(cond["ast"], WIDTH) if cond["ast"] is not None else [cond["text"]]
                 c["reads"] = expr.fields(cond["ast"]) if cond["ast"] is not None else []
-                c["py"] = ["if (%s).any(): raise RuntimeError(%s)" % (vec(cond, "df.apply(test, axis=1)"), repr(text))]
+                test_py = vec(cond, "df.apply(test, axis=1)")
+                c["py"] = pre + ["if (%s).any(): raise RuntimeError(%s)" % (test_py, repr(text))]
         elif k == "Output":
             path, sheet = _file(ir["file"])
             c["does"] = "Writes the rows to %s`%s`." % ("sheet **%s** of " % sheet if sheet else "", path)
