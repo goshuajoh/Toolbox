@@ -8,9 +8,9 @@ Two command-line tools for any Alteryx workflow and any Excel VBA module:
 Each writes two things:
 
 1. **A document that explains the logic**, written as plain Markdown (readable as text) and as one HTML page for Chrome or any other browser. The page needs no network and runs no scripts; its sections fold open and closed.
-   - For Alteryx it is a **migration guide**: containers, their branches, and one card per tool with fixed fields, for an engineer who has never opened Designer.
+   - For Alteryx it is a **migration guide** for an engineer who has never opened Designer: the containers and the files (sheet, cells) they read and write, then each branch as one table that reads like the canvas.
    - For VBA it is a step-by-step description of each Sub.
-2. **Python code** that does the same work (pandas for Alteryx, openpyxl for VBA). Every step it could not convert is marked and stops with an error when reached.
+2. **Python code** that does the same work (pandas for Alteryx, openpyxl for VBA). Every step it could not convert is marked and stops with an error when reached. For Alteryx there is also a **test notebook** that runs the code one container at a time on your own files and compares each output with the file the workflow wrote.
 
 Neither tool depends on a particular workflow or macro. They work from the tool kinds and VBA statements they find.
 
@@ -20,7 +20,7 @@ Neither tool depends on a particular workflow or macro. They work from the tool 
 
 | Input | Document |
 |---|---|
-| [examples/dataset_audit.yxmd](examples/dataset_audit.yxmd): 3 containers, one with a nested container; one input fans out into six annotated filter branches that meet in a Union | [dataset_audit_guide.md](examples/dataset_audit_guide.md), [.html](examples/dataset_audit_guide.html) |
+| [examples/dataset_audit.yxmd](examples/dataset_audit.yxmd): 3 containers, one with a nested container; one input fans out into six annotated filter branches that meet in a Union | [dataset_audit_guide.md](examples/dataset_audit_guide.md), [.html](examples/dataset_audit_guide.html); test notebook [dataset_audit_test.ipynb](examples/dataset_audit_test.ipynb) |
 | [examples/sales_report.yxmd](examples/sales_report.yxmd): 17 tools | [sales_report_guide.md](examples/sales_report_guide.md), [.html](examples/sales_report_guide.html) |
 | [examples/month_end.bas](examples/month_end.bas): 5 Subs | [month_end_logic.md](examples/month_end_logic.md), [.html](examples/month_end_logic.html) |
 
@@ -38,12 +38,13 @@ Run the command from this folder. The output folder must not be the workflow's o
 |---|---|
 | `workflow_guide.md` | The migration guide (see below). |
 | `workflow_guide.html` | The same page for a browser. Containers, nested containers and branches fold open and closed; every step, branch and container number is a link; each container has a diagram of its branches. |
-| `workflow_generated.py` | One Python function per distinct tool, each with its tool ID and original expression as a comment, and `run()`, which calls them in order. |
+| `workflow_generated.py` | One Python function per distinct tool, each with its tool ID and original expression as a comment; `STEPS`, every tool in run order with its container and step number; and `run()`, which runs them all or one container at a time. |
+| `workflow_test.ipynb` | A notebook that runs the generated code container by container on your files (see [Testing on your own files](#testing-on-your-own-files)). |
 | `ayx_runtime.py` | The library the generated code calls. The Alteryx behaviours it has to assume are named switches in `SEM`. |
 
 Options:
 
-- `--no-code`: write only the documents.
+- `--no-code`: write only the documents (no code, runtime or notebook).
 - `--brief`: also write `workflow_logic.md` and `.html`, a shorter stage-by-stage summary without cards.
 - `--tool-listing`: also write `workflow_tools.txt`, every tool with every setting in flow order, for tracing a single tool.
 - `--name NAME`: prefix of the output files.
@@ -55,20 +56,21 @@ Options:
 2. **Contents**: every container and branch, as links.
 3. **Containers**, one table row each:
    - whether it runs (disabled containers are listed, not described);
-   - the files it reads and writes, and the commands it runs;
+   - the files it reads and writes, with the sheet;
    - which other containers feed it and which it feeds, by a connection or through a file one container writes and another reads (a Directory tool counts when the file is in its folder and matches its pattern).
    - The HTML page adds a diagram.
 4. **One section per container**:
-   - **Facts**: reads, writes, fed by, feeds, nested containers, steps not converted.
-   - **Branches**: a table, and a diagram in HTML. A branch is a chain of tools with no split or merge, as Designer draws it. It is named after its first tool's annotation, its filter test, or what it does ("Join on [DEAL ID]", "passes: [Status] ≠ "Cancelled""). Branches are numbered in the order the rows flow (branch 3.4); a nested container's branches are grouped under "Inside …" at their place in the flow.
-   - **Steps**: one card per tool, numbered within the container (step 3.14), with:
-     - **In**: where the rows come from, with the output used (True / False of a filter; J matched, L left only, R right only of a join).
-     - **Does**: one sentence.
-     - **Rule**: the full expression, as `when … → …` lines.
-     - **Reads**: the columns used.
-     - **Writes**: the columns created or changed, with the type Alteryx recorded (and "new" or "changed" when the workflow recorded the incoming columns).
-     - **Out**: where the rows go; an output nothing uses says "these rows are dropped".
-     - **Python**: the pandas form of the step in one or a few lines, its conversion status, and the name of the exact function in the generated module.
+   - **Files**: every step that reads, writes or lists files, with the file, sheet, cell range and first line read.
+   - **Facts**: fed by, feeds, nested containers, steps not converted.
+   - **Branches**: a table, and a diagram in HTML. A branch is a chain of tools with no split or merge, as Designer draws it. It is named after its first tool's annotation, its filter test, or what it does ("Join on [DEAL ID]"). Branches are numbered in the order the rows flow (branch 3.4); a nested container's branches are grouped under "Inside …" at their place in the flow.
+   - **Each branch is one table**, a row per tool as it sits on the canvas:
+
+     | Step | Tool | What it does | New / changed columns | Next |
+     |---|---|---|---|---|
+     | 2.16 | Filter “Data Quality” | keeps the rows where [DQScore] < 0.8 | | T → 2.17; F dropped |
+     | 2.17 | Formula | sets **Issue** = "Low data quality: " + ToString([DQScore], 2) | **Issue** | 2.18 |
+
+     Under the table, one folded line per step holds the full rule, the same step in pandas, and whether the generated code converts it exactly (and the name of its function). In the HTML page a step number opens its line.
    - **Columns created or changed**: each column, its type, the steps that set it, how, and every later step (anywhere in the workflow) that reads a column of that name, to trace a variable end to end.
 5. **Repeats**: branches that repeat earlier ones with identical rules and wiring are one short section: which steps they mirror ("2.34–59 here is 2.8–33 there") and which rows they take instead.
 6. **Before relying on this**:
@@ -76,9 +78,9 @@ Options:
    - partial-match lookups;
    - AND/OR mixed without brackets;
    - Block Until Done ordering;
-   - the Alteryx behaviours the Python assumes, numbered A1, A2… and referred to from the cards.
+   - the Alteryx behaviours the Python assumes, numbered A1, A2…
 
-About the pandas lines: `df` is the table flowing through the branch; other tables are named after the step that made them (`s2_7`, or `s2_7_true` for a True output). They are written to be read and copied, not run as a whole. Where an expression has no honest one-line form (a `\G` regex, `FindString`, a multi-row reference), the card names the generated function instead. The tests check that the one-liners compute what the converter's runtime computes for the common expressions.
+About the pandas lines: `df` is the table flowing through the branch; other tables are named after the step that made them (`s2_7`, or `s2_7_true` for a True output). They are written to be read and copied, not run as a whole. Where an expression has no honest one-line form (a `\G` regex, `FindString`, a multi-row reference), the line names the generated function instead. The tests check that the one-liners compute what the converter's runtime computes for the common expressions.
 
 ### Size
 
@@ -86,13 +88,52 @@ Measured on a synthetic 930-tool workflow with a production workflow's mix of to
 
 | File | Lines | Characters |
 |---|---|---|
-| migration guide (`.md`) | 11,724 | 514,000 |
-| migration guide (`.html`) | 9,608 | 935,000 |
+| migration guide (`.md`) | 8,093 (was 11,724 with one card per tool) | 462,000 |
+| migration guide (`.html`) | 6,867 | 880,000 |
 | stage summary (`--brief`) | 3,625 | 163,000 |
 | tool listing (`--tool-listing`) | 1,162 | 96,000 |
 | generated code | 7,843 | 306,000 |
 
-The guide has 731 cards: every tool once; the three repeated copies of the 47-tool scenario tree are not printed again. On screen, use the HTML page: everything starts folded, the contents and the container table are links, and Chrome opens the folded sections when a link points inside them.
+The guide shows 731 steps: every tool once; the three repeated copies of the 47-tool scenario tree are not printed again. On screen, use the HTML page: everything starts folded, the contents and the container table are links, and Chrome opens the folded sections when a link points inside them.
+
+### Testing on your own files
+
+On Windows, with Python 3.12 and VS Code (with its Jupyter extension). Once:
+
+```bash
+python -m pip install pandas openpyxl ipykernel
+```
+
+Generate the code and the notebook into a new folder (here the workflow is `C:\work\flow\Workflow.yxmd`):
+
+```bash
+cd C:\path\to\Toolbox\alteryx_vba_to_python
+```
+
+```bash
+python -m ayx2py C:\work\flow\Workflow.yxmd C:\work\flow_py --name flow
+```
+
+```bash
+code C:\work\flow_py\flow_test.ipynb
+```
+
+In VS Code, pick the Python 3.12 kernel, then:
+
+1. **Settings** cell: `INPUTS` already lists every Input step with the path the workflow uses, and its step number and container. Change each path to a copy of that file (an Excel sheet is `book.xlsx|||Sheet1$`, a range `book.xlsx|||Sheet1$A1:F200`). `WRITE = False` keeps every output in memory. `CHAIN = True` lets an Input that reads a file an earlier Output wrote take that Output's rows.
+2. **Run All.** Each container has one cell, which prints one line per step:
+
+   ```
+     2.16    Filter                 #44     True 2, False 1 rows × 10 columns
+     2.18    RegEx                  #64     NOT CONVERTED: #64: RegEx is not converted: …
+     2.26    Union                  #90     skipped: needs step 2.18 (RegEx), which failed
+   ```
+
+   A step that fails is recorded and only the steps that need its rows are skipped. To get past a step that is not converted, give it a stand-in in `STUBS` (the settings cell lists each one, commented out) and re-run that container's cell.
+3. `look("2.16")` shows a step's columns (with their Alteryx types) and first rows; `look("2.16", output="False")` shows a filter's other output. Step numbers are the guide's; a tool ID works too.
+4. The last cell compares each Output step with the file the workflow wrote: `compare("2.28", r"C:\legacy\Dataset audit.xlsx", "Issues")`. It prints the row and column counts, columns only on one side, and the differing cells. Text is compared ignoring case (as Alteryx does), null and "" count as the same, and numbers may differ by a relative 1e-6. `key=["ID"]` lines rows up by key columns instead of by position.
+
+If the notebook cannot import `flow_generated`, set `CODE_DIR` in the settings to the output folder.
 
 ### Running the generated code
 
@@ -102,6 +143,7 @@ import ayx_runtime as rt, workflow_generated as wf
 ctx = rt.Context(workflow_dir=r"C:\path\to\workflow_folder", write=False)   # write=False: no file is written
 streams = wf.run(ctx)                  # streams["1395"]["Join"] is the J output of tool 1395
 result = ctx.outputs["2290"]           # what Output tool 2290 would have written
+s = wf.run(ctx, only=2, s=streams, keep_going=True, report=True)   # container 2 again, one line per step
 ```
 
 - `inputs={"1348": dataframe_or_path}` replaces what an input tool reads.
@@ -164,9 +206,9 @@ print(app.log)
 | `ayx2py/` | Alteryx converter | yes |
 | `vba2py/` | VBA converter | yes |
 | `logicdoc.py` | Writes the documents (Markdown, HTML with folding sections, diagrams) | yes |
-| `examples/` | Two workflows and a macro, with their documents | no |
+| `examples/` | Two workflows and a macro, with their documents, and a test notebook | no |
 | `probe/` | The workflow that checks the assumed Alteryx behaviours | once |
-| `tests/`, `run_tests.py` | 82 tests on synthetic input | optional |
+| `tests/`, `run_tests.py` | 91 tests on synthetic input | optional |
 | `REPORT.md` | Feasibility report | no |
 
 The tools use the standard library only (written and tested on Python 3.12). The code they generate needs pandas (Alteryx side) and openpyxl (VBA side, and Excel files on the Alteryx side).
@@ -177,4 +219,4 @@ The tools use the standard library only (written and tested on Python 3.12). The
 python run_tests.py
 ```
 
-82 tests, about 6 seconds. They need pandas and openpyxl, and no real data. `python examples/make_examples.py` and `python probe/make_probe.py` re-create the example and probe files; the tests check that they are current.
+91 tests, about 6 seconds. They need pandas and openpyxl, and no real data. `python examples/make_examples.py` and `python probe/make_probe.py` re-create the example and probe files; the tests check that they are current.

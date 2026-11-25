@@ -130,6 +130,7 @@ def generate(wf, module_doc=""):
            "    import <this module>, ayx_runtime as rt",
            "    ctx = rt.Context(workflow_dir=r'...', inputs={tool_id: DataFrame or path}, write=False)",
            "    streams = <this module>.run(ctx)      # streams[tool_id] = that tool's output; ctx.outputs = what Output tools got",
+           "    s = <this module>.run(ctx, only=2, s=s, keep_going=True, report=True)   # one container at a time",
            '"""', "import ayx_runtime as rt", "", ""]
     counts = {"functions": 0, "stubs": 0}
     for s, ids in by_sig.items():
@@ -154,19 +155,28 @@ def generate(wf, module_doc=""):
         counts["functions"] += 1
         out += pre + body + ["", ""]
 
-    out += ["def run(ctx=None):", '    """Run every tool in dependency order. Returns {tool_id: output}."""',
-            "    rt.use(ctx)", "    s = {}"]
+    from .guide import Guide, designer                              # numbering as the guide shows it
+    g = Guide(wf)
+    containers = {g.cnum[k]: g.cname(k) for k in g.tops if any(g.top_of[i] == k for i in g.order)}
+    links = file_links(wf, g)
+    out += ["# The containers, numbered as in the migration guide.",
+            "CONTAINERS = {%s}" % ", ".join("%d: %r" % kv for kv in containers.items()), "",
+            "# An Input that reads a file an earlier Output writes: {input tool: output tool}. Used by run(chain=True).",
+            "FILE_LINKS = {%s}" % ", ".join("%r: %r" % kv for kv in links.items()), "",
+            "# Every tool in run order: (tool id, container, step, tool, the tools it reads from, what it runs).",
+            "STEPS = ["]
     for i in ordered:
         t = tools[i]
         ins = wf.ins.get(i, [])
+        deps = []
 
         def src(e):
+            deps.append(e[0])
             kind = tools[e[0]].kind
             if kind in MULTI_OUT or kind in ("ParallelBlockUntilDone", "BlockUntilDone"):
                 return "s[%r][%r]" % (e[0], e[1])
             return "s[%r]" % e[0]
 
-        note = "# %s" % t.kind
         if t.kind in ("ParallelBlockUntilDone", "BlockUntilDone"):
             in_anchors = sorted({e[3] for e in ins}, key=_anchor_no)
             out_anchors = sorted({e[1] for e in wf.outs.get(i, ())}, key=_anchor_no)
@@ -177,13 +187,11 @@ def generate(wf, module_doc=""):
                                                            in_anchors[0] if len(in_anchors) == 1 else None)
                 pairs[oa] = next((src(e) for e in ins if e[3] == ia), None)
             if None in pairs.values():
-                line = "s[%r] = rt.stub(%r, 'Block Until Done: cannot tell which input feeds which output')" % (i, i)
+                call, deps = "rt.stub(%r, 'Block Until Done: cannot tell which input feeds which output')" % i, []
             else:
-                line = "s[%r] = {%s}" % (i, ", ".join("%r: %s" % kv for kv in pairs.items()))
-            note = "# %s: passes data through; later outputs run after earlier ones" % t.kind
+                call = "{%s}" % ", ".join("%r: %s" % kv for kv in pairs.items())
         elif t.status == "stub":
-            line = "s[%r] = %s(%r%s)" % (i, name_of[i], i, "".join(", " + src(e) for e in ins))
-            note = "# %s  NOT CONVERTED" % t.kind
+            call = "%s(%r%s)" % (name_of[i], i, "".join(", " + src(e) for e in ins))
         else:
             args, missing = [], ""
             if t.kind in TWO_IN:
@@ -208,11 +216,42 @@ def generate(wf, module_doc=""):
                 args = [src(e) for e in ins]
             if t.kind in SOURCES + ("DynamicInput", "Output", "Message"):
                 args.append(repr(i))
-            line = "s[%r] = rt.stub(%r, %r)" % (i, i, t.kind + ": " + missing) if missing else \
-                "s[%r] = %s(%s)" % (i, name_of[i], ", ".join(args))
-        out.append("    %-70s %s" % (line, note))
-    out += ["    return s", "", "",
-            'if __name__ == "__main__":', "    import sys",
+            if missing:
+                call, deps = "rt.stub(%r, %r)" % (i, t.kind + ": " + missing), []
+            else:
+                call = "%s(%s)" % (name_of[i], ", ".join(args))
+        out.append("    (%r, %d, %r, %r, %r, lambda s: %s)," % (
+            i, g.cnum[g.top_of[i]], g.sid.get(i, "?"), designer(t.kind),
+            tuple(dict.fromkeys(deps)), call))
+    out += ["]", "", "",
+            "def run(ctx=None, only=None, s=None, keep_going=False, report=False, chain=False):",
+            '    """Run the tools in dependency order. Returns {tool id: output}; ctx.outputs holds what Output tools got.',
+            "    only: a container's number or name: run its steps, plus any earlier step they need that s does not hold.",
+            "    s: the dictionary an earlier run returned, to go on from it.",
+            "    keep_going: a failing step goes to ctx.errors; only the steps that need it are skipped.",
+            "    report: print one line per step (rows and columns out, or the error).",
+            '    chain: an Input that reads a file an earlier Output wrote in this run gets that Output\'s rows."""',
+            "    return rt.run_steps(STEPS, ctx, only, s, keep_going, report, FILE_LINKS if chain else None, CONTAINERS)",
+            "", ""]
+    out += ['if __name__ == "__main__":', "    import sys",
             "    _ctx = rt.Context(workflow_dir=sys.argv[1] if len(sys.argv) > 1 else '.')",
             "    run(_ctx)", "    print('\\n'.join(_ctx.log))", ""]
     return out, counts
+
+
+def file_links(wf, g=None):
+    """{Input tool: Output tool} when an Input reads the file (and sheet) an earlier Output writes."""
+    from .guide import Guide, place, _same_file
+    g = g or Guide(wf)
+    outs = [i for i in g.order if wf.tools[i].kind == "Output"]
+    links = {}
+    for i in g.order:
+        t = wf.tools[i]
+        if t.kind != "Input":
+            continue
+        path, sheet, _, _ = place(t.ir["file"])
+        for o in outs:
+            opath, osheet, _, _ = place(wf.tools[o].ir["file"])
+            if wf.rank[o] < wf.rank[i] and _same_file(path, opath) and (sheet or "").lower() in ("", (osheet or "").lower()):
+                links[i] = o
+    return links

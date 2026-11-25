@@ -36,9 +36,11 @@ class DatasetAudit(unittest.TestCase):
 
     def test_containers_overview(self):
         md = self.md
-        self.assertTrue("| 1. Import and consolidate | yes | 4 | 1 | datasets_export.csv | Consolidated Datasets.xlsx | — "
-                        "| 2. Dataset audit |" in md)
+        self.assertTrue("| 1. Import and consolidate | yes | 4 | 1 | datasets_export.csv | Consolidated Datasets.xlsx · sheet "
+                        "**Datasets** | — | 2. Dataset audit |" in md)
         self.assertTrue("| 3. Old checks | no (disabled) | 0 | 0 |" in md)
+        self.assertTrue("| 1.4 | writes | `Output\\Consolidated Datasets.xlsx` | Datasets | all | replaces the sheet |" in md)
+        self.assertTrue("| 2.6 | reads each file named in [Source], like | `Output\\template.xlsx` | Datasets | all |  |" in md)
         self.assertTrue("- **Fed by:** 1. Import and consolidate (file `Output\\Consolidated Datasets.xlsx`)" in md)
         self.assertTrue("- **Containers inside:** Checks" in md)
         self.assertTrue("Disabled in the workflow: its 2 tools do not run" in md)
@@ -51,23 +53,32 @@ class DatasetAudit(unittest.TestCase):
         self.assertEqual(heads[9], ("2.9", "All issues"))
         self.assertTrue(self.md.index("### Inside Checks") < self.md.index("#### Branch 2.2 "))
 
-    def test_cards_have_the_fixed_fields(self):
-        cards = re.split(r"^##### ", self.md, flags=re.M)[1:]
-        self.assertEqual(len(cards), 4 + 28)
-        for c in cards:
-            for field in ("- **In:**", "- **Does:**", "- **Out:**", "- **Python:**"):
-                self.assertTrue(field in c, (field, c[:60]))
-        filt = next(c for c in cards if c.startswith("Step 2.16 "))
-        self.assertTrue(filt.startswith("Step 2.16 · Filter · #44 · “Data Quality”"))
-        self.assertTrue("- **Out:** True → 2.17; False: not used (these rows are dropped)" in filt)
-        self.assertTrue('`df = df[(df["DQScore"] < 0.8)]` — exact · generated function `t44`' in filt)
-        join = next(c for c in cards if c.startswith("Step 2.15 "))
-        self.assertTrue("- **In:** Left ← 2.14; Right ← 2.25" in join)
-        self.assertTrue('s2_15_join = m[m["_merge"] == "both"]' in join)
-        union = next(c for c in cards if c.startswith("Step 2.26 "))
-        self.assertTrue("pd.concat([s2_9, s2_12, s2_15_join, s2_18, s2_21, s2_24], ignore_index=True)" in union)
-        regex = next(c for c in cards if c.startswith("Step 2.18 "))
-        self.assertTrue("**not converted**: tool kind RegEx has no converter" in regex)
+    def test_one_table_per_branch_reads_like_the_canvas(self):
+        md = self.md
+        tables = re.findall(r"^\| Step \| Tool \| What it does \| New / changed columns \| Next \|\n\|.*\n((?:\|.*\n)+)", md, re.M)
+        steps = [re.fullmatch(r"\| (\S+) \| (.*?) \| (.*?) \| (.*?) \| (.*?) \|", line).groups()
+                 for t in tables for line in t.splitlines()]
+        self.assertEqual(len(steps), 4 + 28)                     # every step once
+        by = {r[0]: r[1:] for r in steps}
+        self.assertEqual(by["1.1"], ("Input Data", "reads **datasets_export.csv**", "9 columns", "1.2"))
+        self.assertEqual(by["2.16"], ("Filter “Data Quality”", "keeps the rows where [DQScore] < 0.8", "", "T → 2.17; F dropped"))
+        self.assertEqual(by["2.17"][2], "**Issue**")
+        self.assertEqual(by["2.15"], ("Join", "matches with 2.25 on [Owner]", "", "J → 2.26; L, R dropped"))
+        self.assertEqual(by["2.18"][0], "RegEx ⚠")
+        self.assertTrue(by["2.28"][1].startswith("writes **Dataset audit.xlsx** · sheet **Issues**"))
+        self.assertFalse("**Reads:**" in md or "- **Does:**" in md)
+        # rule and pandas sit in one folded line per step, under the table
+        self.assertTrue('- **2.16** Filter #44 · exact · `t44` · `df = df[(df["DQScore"] < 0.8)]`' in md)
+        fold = md[md.index("- **2.17** Formula #54"):md.index("- **2.18** ")]
+        self.assertTrue('Issue = "Low data quality: " + ToString([DQScore], 2)\n      # pandas:\n      df["Issue"] = ' in fold, fold)
+        self.assertTrue("- **2.18** RegEx #64 · **not converted**: tool kind RegEx has no converter" in md)
+        self.assertTrue("pd.concat([s2_9, s2_12, s2_15_join, s2_18, s2_21, s2_24], ignore_index=True)" in md)
+        self.assertTrue('s2_15_join = m[m["_merge"] == "both"]' in md)
+
+    def test_files_show_sheet_cells_and_first_line(self):
+        self.assertEqual(guide.place("Book.xlsx|||`Sheet 1$B3:F200`"), ("Book.xlsx", "Sheet 1", "B3:F200", None))
+        self.assertEqual(guide.place_text("In\\a.csv", {"ImportLine": "4", "HeaderRow": "False"}),
+                         "**a.csv** · from line 4 · no header row")
 
     def test_columns_table(self):
         self.assertTrue("| **Issue** | V_WString | 2.8, 2.11, 2.14, 2.17, 2.20, 2.23 |" in self.md)
@@ -81,13 +92,14 @@ class DatasetAudit(unittest.TestCase):
         for target in set(re.findall(r'href="#([^"]+)"', h)):
             self.assertTrue(target in ids, target)
         self.assertTrue('<details class="d2" id="c2">' in h and '<details class="d4" id="b2-5">' in h)
-        self.assertTrue('<div class="card" id="s2-17">' in h)
+        self.assertTrue('<tr id="s2-16"><td><a href="#r2-16">2.16</a></td>' in h)
+        self.assertTrue('<details class="fold"><summary><b>2.17</b> Formula #54' in h and '<pre class="rule" id="r2-17">' in h)
 
 
 class Large(unittest.TestCase):
     def test_every_tool_once_and_repeats_mapped(self):
         g, md, _ = build(synth_recon.big(938))
-        cards = re.findall(r"^##### Step (\S+) ", md, re.M)
+        cards = re.findall(r"^- \*\*(\d+\.\d+)\*\* ", md, re.M)
         self.assertEqual(len(cards), len(set(cards)))
         copies = [i for i in g.order if g.L.stage_of[i] in g.L.copy_of]
         self.assertEqual(len(cards) + len(copies), len(g.order))

@@ -5,12 +5,14 @@ Blocks:
     ("h", level, text, anchor)          heading
     ("p", text)                         paragraph
     ("steps", items, ordered)           list; item = {"text", "pre": [lines], "children": [items]}
-    ("table", header, rows)             table; cells are text
+    ("table", header, rows[, anchors])  table; cells are text; anchors: one id (or None) per row, HTML only
     ("pre", lines)                      preformatted lines
     ("diagram", nodes, edges)           drawn in HTML only; see flow_svg()
     ("details", level, summary, anchor, blocks, open)
                                         Markdown: a heading and its blocks; HTML: a collapsible section
     ("card", anchor, title, fields)     a step; fields = [(label, text, [preformatted lines])]
+    ("folds", items)                    small closed sections; item = {"anchor", "summary", "lines"}
+                                        Markdown: a list item and its lines as code; HTML: one <details> each
 Inline text may use **bold**, `code` and [[anchor|label]] links.
 """
 import html
@@ -56,6 +58,12 @@ def _md_blocks(blocks):
             out.append("| " + " | ".join(cell(h) for h in b[1]) + " |")
             out.append("|" + "|".join("---" for _ in b[1]) + "|")
             out += ["| " + " | ".join(cell(c) for c in row) + " |" for row in b[2]]
+            out.append("")
+        elif k == "folds":
+            for it in b[1]:
+                out.append("- " + _md_inline(it["summary"]))
+                if it.get("lines"):
+                    out += [""] + ["      " + line for line in it["lines"]] + [""]
             out.append("")
         elif k == "pre":
             out += ["    " + line for line in b[1]] + [""]
@@ -124,7 +132,9 @@ details.d2{margin-top:1.4em}
 .card dl{display:grid;grid-template-columns:7.5em 1fr;gap:3px 10px;margin:0;padding:8px 10px}
 .card dt{color:var(--muted);font-size:13px;padding-top:2px}.card dd{margin:0;min-width:0}
 .card pre.rule{margin:.2em 0}.card dd code{white-space:pre-wrap;word-break:break-word}
-:target{outline:2px solid var(--accent);outline-offset:2px}
+:target{outline:2px solid var(--accent);outline-offset:2px}tr:target{background:var(--box)}
+details.fold{margin:.15em 0}details.fold>summary{background:transparent;padding:2px 6px;font-size:14px}
+details.fold>pre{margin:.2em 0 .6em 1.2em}div.fold{padding:2px 6px 2px 22px;font-size:14px}td:first-child{white-space:nowrap}
 """
 
 
@@ -208,8 +218,18 @@ def _h_blocks(blocks):
             out += _h_steps(b[1], b[2])
         elif k == "table":
             out.append("<table><thead><tr>%s</tr></thead><tbody>" % "".join("<th>%s</th>" % _h_inline(str(h)) for h in b[1]))
-            out += ["<tr>%s</tr>" % "".join("<td>%s</td>" % _h_inline(str(c)) for c in row) for row in b[2]]
+            anchors = b[3] if len(b) > 3 else [None] * len(b[2])
+            out += ["<tr%s>%s</tr>" % (' id="%s"' % a if a else "", "".join("<td>%s</td>" % _h_inline(str(c)) for c in row))
+                    for row, a in zip(b[2], anchors)]
             out.append("</tbody></table>")
+        elif k == "folds":
+            for it in b[1]:
+                anchor = ' id="%s"' % it["anchor"] if it.get("anchor") else ""
+                if not it.get("lines"):
+                    out.append('<div class="fold"%s>%s</div>' % (anchor, _h_inline(it["summary"])))
+                    continue
+                out.append('<details class="fold"><summary>%s</summary><pre class="rule"%s>%s</pre></details>' % (
+                    _h_inline(it["summary"]), anchor, html.escape("\n".join(it["lines"]), quote=False)))  # a link opens it
         elif k == "pre":
             out.append("<pre>%s</pre>" % html.escape("\n".join(b[1]), quote=False))
         elif k == "diagram" and b[1]:

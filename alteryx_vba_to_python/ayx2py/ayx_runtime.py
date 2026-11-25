@@ -74,6 +74,7 @@ class Context:
         self.constants.update({k.lower(): v for k, v in (constants or {}).items()})
         self.now = now
         self.outputs, self.log = {}, []
+        self.errors = {}                 # run_steps(keep_going=True): {tool id: why it has no output}
 
     def path(self, p):
         p = str(p).replace("\\", os.sep)
@@ -1019,10 +1020,14 @@ def split_file_spec(spec):
         raise NotConverted("input option %s is not supported" % sheet)
     m = re.fullmatch(r"(.*)\$(?:[A-Za-z]+\d+:[A-Za-z]+\d+)?", sheet)
     if m:
-        if not sheet.endswith("$"):
-            raise NotConverted("sheet with a cell range (%s) is not supported" % sheet)
         sheet = m.group(1)
     return path.strip(), sheet.strip("'") or None
+
+
+def cell_range(spec):
+    """'book.xlsx|||Sheet1$B3:F200' -> 'B3:F200' (None when the whole sheet is read)."""
+    m = re.search(r"\$([A-Za-z]+\d+:[A-Za-z]+\d+)$", str(spec).partition("|||")[2].strip().strip("`'\""))
+    return m.group(1).upper() if m else None
 
 
 def _dedupe(names):
@@ -1071,7 +1076,13 @@ def read_file(spec, options=None, recorded_types=None, tool_id=None):
         wb = openpyxl.load_workbook(full, read_only=True, data_only=True)
         try:
             ws = wb[sheet] if sheet else wb.worksheets[0]
-            data = [list(r) for r in ws.iter_rows(values_only=True)]
+            cells = cell_range(spec)
+            if cells:
+                from openpyxl.utils import range_boundaries
+                c1, r1, c2, r2 = range_boundaries(cells)
+                data = [list(r) for r in ws.iter_rows(min_row=r1, max_row=r2, min_col=c1, max_col=c2, values_only=True)]
+            else:
+                data = [list(r) for r in ws.iter_rows(values_only=True)]
         finally:
             wb.close()
         data = data[max(int(opt.get("ImportLine", 1) or 1) - 1, 0):]
@@ -1725,3 +1736,246 @@ def message(df, tool_id, when, kind, text_fn, filter_fn=None):
         if kind.lower().startswith("error"):
             raise AlteryxError(text)
     return df
+
+
+# ============================================================================= step by step
+def _container_key(only, containers):
+    if only is None:
+        return None
+    if isinstance(only, int) or str(only).isdigit():
+        if int(only) in containers:
+            return int(only)
+    else:
+        for k, name in containers.items():
+            if name.lower() == str(only).lower():
+                return k
+    raise ValueError("no container %r; the containers are: %s" % (
+        only, "; ".join("%d. %s" % kv for kv in sorted(containers.items()))))
+
+
+def _shape(out):
+    if isinstance(out, dict):
+        parts = ["%s %d" % (re.sub(r"(?<=\D)(\d+)$", r" \1", a), len(v)) for a, v in out.items() if isinstance(v, pd.DataFrame)]
+        cols = next((len(v.columns) for v in out.values() if isinstance(v, pd.DataFrame)), 0)
+        return "%s rows × %d columns" % (", ".join(parts), cols)
+    if isinstance(out, pd.DataFrame):
+        return "%d row%s × %d columns" % (len(out), "" if len(out) == 1 else "s", len(out.columns))
+    return type(out).__name__
+
+
+def run_steps(steps, ctx=None, only=None, s=None, keep_going=False, report=False, links=None, containers=None):
+    """Run generated steps in order. steps: [(tool id, container no., step no., tool, source tool ids, call)].
+    only: a container's number or name: its steps, plus any step they need that s does not hold yet.
+    keep_going: a step that fails is recorded in ctx.errors, the steps that need it are skipped, the rest run.
+    links: {input tool id: output tool id}: the Input reads what that Output got in this run."""
+    ctx = use(ctx)
+    s = {} if s is None else s
+    containers = containers or {}
+    key = _container_key(only, containers)
+    by_id = {st[0]: st for st in steps}
+    need = {st[0] for st in steps if key is None or st[1] == key}
+    todo = list(need)
+    while todo:
+        for d in by_id[todo.pop()][4]:
+            if d not in need and d not in s:
+                need.add(d)
+                todo.append(d)
+    if report and key is not None:
+        print("Container %d. %s" % (key, containers.get(key, "")))
+    counts = {"ran": 0, "failed": 0, "skipped": 0}
+    for tid, c, step, tool, deps, call in steps:
+        if tid not in need:
+            continue
+        where = "" if key is None or c == key else "   (from container %d, needed here)" % c
+        line = "  %-7s %-22s #%-6s " % (step, tool[:22], tid)
+        missing = [d for d in deps if d not in s]
+        if missing:
+            m = by_id[missing[0]]
+            ctx.errors[tid] = "skipped: needs step %s (%s), which %s" % (
+                m[2], m[3], ("was skipped" if ctx.errors[m[0]].startswith("skipped") else "failed") if m[0] in ctx.errors
+                else "has not run")
+            s.pop(tid, None)
+            counts["skipped"] += 1
+            if report:
+                print(line + ctx.errors[tid] + where)
+            continue
+        linked = (links or {}).get(tid)
+        injected = linked is not None and linked in ctx.outputs and tid not in ctx.inputs
+        if injected:
+            ctx.inputs[tid] = ctx.outputs[linked]
+        try:
+            out = call(s)
+        except Exception as e:  # noqa: BLE001 - recorded, and raised again unless keep_going
+            if not keep_going:
+                raise
+            ctx.errors[tid] = ("NOT CONVERTED: " if isinstance(e, NotConverted) else type(e).__name__ + ": ") + str(e)
+            s.pop(tid, None)
+            counts["failed"] += 1
+            if report:
+                print(line + ctx.errors[tid] + where)
+            continue
+        finally:
+            if injected:
+                del ctx.inputs[tid]
+        s[tid] = out
+        ctx.errors.pop(tid, None)
+        counts["ran"] += 1
+        if report:
+            note = " (rows of step %s's output)" % by_id[linked][2] if injected else ""
+            if tool == "Output Data" and not ctx.write:
+                note += " (kept in memory, no file written)"
+            print(line + _shape(out) + note + where)
+    if report:
+        print("  -- %d ran, %d failed, %d skipped" % (counts["ran"], counts["failed"], counts["skipped"]))
+    return s
+
+
+def step_id(key, steps):
+    """'2.16' (step number), '44' or 44 (tool ID) -> tool ID."""
+    key = str(key)
+    ids = {st[0] for st in steps}
+    if key in ids:
+        return key
+    for st in steps:
+        if st[2] == key:
+            return st[0]
+    raise KeyError("no step or tool %s" % key)
+
+
+def _label(tid, steps):
+    st = next((x for x in steps if x[0] == tid), None)
+    return "step %s %s #%s" % (st[2], st[3], tid) if st else "#" + tid
+
+
+def step_output(s, key, steps, ctx=None, output=None):
+    """A step's output frame, or None (with the reason printed)."""
+    ctx = ctx or _CTX
+    tid = step_id(key, steps)
+    out = ctx.outputs.get(tid, s.get(tid))
+    if out is None:
+        print("%s has no output: %s" % (_label(tid, steps), ctx.errors.get(tid, "it has not run yet")))
+        return None
+    if isinstance(out, dict):
+        output = output or next(iter(out))
+        out = out[output]
+    return out
+
+
+def look(s, key, n=10, output=None, steps=(), ctx=None):
+    """Print a step's row and column counts and its columns with their Alteryx types; return its first n rows.
+    output: for a Filter "True" / "False", for a Join "Join" / "Left" / "Right"."""
+    ctx = ctx or _CTX
+    tid = step_id(key, steps)
+    out = s.get(tid)
+    if out is None:
+        print("%s has no output: %s" % (_label(tid, steps), ctx.errors.get(tid, "it has not run yet")))
+        return None
+    if isinstance(out, dict):
+        print("%s outputs: %s" % (_label(tid, steps), _shape(out)))
+        output = output or next(iter(out))
+        out = out[output]
+        print("showing output %s" % output)
+    types = types_of(out)
+    print("%s: %d rows × %d columns" % (_label(tid, steps), len(out), len(out.columns)))
+    print("columns: " + ", ".join("%s (%s)" % (c, types[c]) for c in out.columns))
+    return out.head(n)
+
+
+def problems(ctx=None, steps=()):
+    """Print every step that failed or was skipped in this context."""
+    ctx = ctx or _CTX
+    if not ctx.errors:
+        print("Every step that ran has an output.")
+    order = {st[0]: n for n, st in enumerate(steps)}
+    for tid in sorted(ctx.errors, key=lambda t: order.get(t, len(order))):
+        print("%s: %s" % (_label(tid, steps), ctx.errors[tid]))
+
+
+def _cmp_value(v):
+    """A value as compare() sees it: null and "" alike, text without case, numbers as floats, dates as ISO text."""
+    if v is None or v is pd.NaT or (isinstance(v, float) and math.isnan(v)):
+        return None
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (_dt.datetime, _dt.date)):
+        text = v.isoformat(sep=" ") if isinstance(v, _dt.datetime) else v.isoformat()
+        return text[:10] if text.endswith(" 00:00:00") else text
+    if isinstance(v, str):
+        t = v.strip()
+        if t == "":
+            return None
+        try:
+            return float(t.replace(",", "")) if re.fullmatch(r"[+-]?(\d[\d,]*)?\.?\d+([eE][+-]?\d+)?", t) else t.casefold()
+        except ValueError:
+            return t.casefold()
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return str(v).casefold()
+
+
+def _same(a, b, tol):
+    if isinstance(a, float) and isinstance(b, float):
+        return abs(a - b) <= tol * max(1.0, abs(a), abs(b))
+    return a == b
+
+
+def read_legacy(path, sheet=None):
+    """A legacy output file as a DataFrame (Excel: the named sheet, or the first)."""
+    path, named = split_file_spec(path)
+    sheet = sheet or named
+    ext = os.path.splitext(path)[1].lower()
+    if ext in (".xlsx", ".xlsm", ".xls"):
+        return pd.read_excel(path, sheet_name=sheet or 0, dtype=object)
+    return pd.read_csv(path, dtype=str, keep_default_na=False, encoding="utf-8-sig")
+
+
+def compare(ours, legacy, sheet=None, key=None, tol=1e-6, show=20):
+    """Compare a frame with the legacy output (a path or a DataFrame): row counts, columns, differing cells.
+    Text ignores case (as Alteryx does), null and "" count as the same, numbers may differ by tol (relative).
+    Rows are lined up by position, or after sorting both by the key columns. Returns the differing cells."""
+    if ours is None:
+        return None
+    if not isinstance(legacy, pd.DataFrame):
+        if not os.path.exists(split_file_spec(legacy)[0]):
+            print("legacy file not found: %s" % legacy)
+            return None
+        legacy = read_legacy(legacy, sheet)
+    print("ours: %d rows × %d columns;  legacy: %d rows × %d columns" % (len(ours), len(ours.columns), len(legacy),
+                                                                       len(legacy.columns)))
+    fold = lambda c: str(c).strip().casefold()
+    theirs_by = {fold(c): c for c in legacy.columns}
+    common = [c for c in ours.columns if fold(c) in theirs_by]
+    only_ours = [c for c in ours.columns if fold(c) not in theirs_by]
+    ours_f = {fold(c) for c in ours.columns}
+    only_theirs = [c for c in legacy.columns if fold(c) not in ours_f]
+    if only_ours:
+        print("columns only in ours: " + ", ".join(map(str, only_ours)))
+    if only_theirs:
+        print("columns only in legacy: " + ", ".join(map(str, only_theirs)))
+    if not only_ours and not only_theirs and [fold(c) for c in ours.columns] != [fold(c) for c in legacy.columns]:
+        print("same columns, in a different order")
+    a = pd.DataFrame({c: [_cmp_value(v) for v in ours[c].tolist()] for c in common}, columns=common)
+    b = pd.DataFrame({c: [_cmp_value(v) for v in legacy[theirs_by[fold(c)]].tolist()] for c in common}, columns=common)
+    if key:
+        keys = [key] if isinstance(key, str) else list(key)
+        sort = lambda df: df.iloc[sorted(range(len(df)), key=lambda i: tuple(str(df[k].iloc[i]) for k in keys))].reset_index(drop=True)
+        a, b = sort(a), sort(b)
+    if len(a) != len(b):
+        print("rows differ: %d in ours, %d in legacy; the first %d are compared" % (len(a), len(b), min(len(a), len(b))))
+    diffs = []
+    for c in common:
+        for i, (x, y) in enumerate(zip(a[c].tolist(), b[c].tolist())):
+            if not _same(x, y, tol):
+                diffs.append((i, c, x, y))
+    out = pd.DataFrame(diffs, columns=["row", "column", "ours", "legacy"])
+    if diffs:
+        per = out.groupby("column", sort=False).size()
+        print("differing cells: %d (%s)" % (len(diffs), ", ".join("[%s] %d" % kv for kv in per.items())))
+        for i, c, x, y in diffs[:show]:
+            print("  row %d [%s]: ours %r, legacy %r" % (i, c, x, y))
+    elif len(a) == len(b) and not only_ours and not only_theirs:
+        print("SAME: every row and column matches")
+    else:
+        print("the cells that both have match")
+    return out
