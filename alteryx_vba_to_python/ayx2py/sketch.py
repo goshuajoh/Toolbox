@@ -94,11 +94,11 @@ def vec(n, col=None):
                 raise NoSketch("search text taken from a column")
             exact = len(a) > 2 and a[2] == ("num", "0")
             if name == "contains":
-                return "%s.str.contains(%s, case=%s, regex=False)" % (_series(a[0], col), vec(a[1]), exact)
+                return "%s.str.contains(%s, case=%s, regex=False, na=False)" % (_series(a[0], col), vec(a[1]), exact)
             method = name.replace("with", "swith")
             s = _series(a[0], col)
-            return "%s.str.%s(%s)" % (s if exact else s + ".str.lower()", method,
-                                      vec(a[1]) if exact else repr(str(a[1][1]).lower()))
+            return "%s.str.%s(%s, na=False)" % (s if exact else s + ".str.lower()", method,
+                                               vec(a[1]) if exact else repr(str(a[1][1]).lower()))
         if name == "left" and a[1][0] == "num":
             return "%s.str[:%s]" % (_series(a[0], col), a[1][1])
         if name == "right" and a[1][0] == "num":
@@ -137,7 +137,7 @@ def vec(n, col=None):
                 s = "pd.to_datetime(%s, errors=\"coerce\")" % vec(inner, col)
             return s + (".dt.normalize()" if name == "todate" else "")
         if name == "datetimediff" and a[2][0] == "str" and a[2][1].lower().rstrip("s") == "day":
-            return "(pd.to_datetime(%s) - pd.to_datetime(%s)).dt.days" % (vec(a[0], col), vec(a[1], col))
+            return "(pd.to_datetime(%s, errors=\"coerce\") - pd.to_datetime(%s, errors=\"coerce\")).dt.days" % (vec(a[0], col), vec(a[1], col))
         if name == "abs":
             return "%s.abs()" % vec(a[0], col) if not _lit(a[0]) else "abs(%s)" % vec(a[0])
         if name == "round" and a[1][0] == "num":

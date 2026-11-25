@@ -39,8 +39,8 @@ class DatasetAudit(unittest.TestCase):
         self.assertTrue("| 1. Import and consolidate | yes | 4 | 1 | datasets_export.csv | Consolidated Datasets.xlsx · sheet "
                         "**Datasets** | — | 2. Dataset audit |" in md)
         self.assertTrue("| 3. Old checks | no (disabled) | 0 | 0 |" in md)
-        self.assertTrue("| 1.4 | writes | `Output\\Consolidated Datasets.xlsx` | Datasets | all | replaces the sheet |" in md)
-        self.assertTrue("| 2.6 | reads each file named in [Source], like | `Output\\template.xlsx` | Datasets | all |  |" in md)
+        self.assertTrue("| 1.4 | saves | `Output\\Consolidated Datasets.xlsx` | Datasets | all | replaces the sheet |" in md)
+        self.assertTrue("| 2.6 | opens each file listed in [Source], like | `Output\\template.xlsx` | Datasets | all |  |" in md)
         self.assertTrue("- **Fed by:** 1. Import and consolidate (file `Output\\Consolidated Datasets.xlsx`)" in md)
         self.assertTrue("- **Containers inside:** Checks" in md)
         self.assertTrue("Disabled in the workflow: its 2 tools do not run" in md)
@@ -49,8 +49,8 @@ class DatasetAudit(unittest.TestCase):
         heads = re.findall(r"^#### Branch (\S+) — ([^·]+) ·", self.md, re.M)
         self.assertEqual(heads[1:9], [("2.1", "Newest consolidated file"), ("2.2", "CreationMode"), ("2.3", "Scenario"),
                                       ("2.4", "Tags"), ("2.5", "Data Quality"), ("2.6", "Virtualizable"),
-                                      ("2.7", "Read/Write"), ("2.8", "Typed table")])
-        self.assertEqual(heads[9], ("2.9", "All issues"))
+                                      ("2.7", "Read/Write"), ("2.8", "All issues")])
+        self.assertFalse("Typed table" in self.md)                 # it is read inside the Join that uses it
         self.assertTrue(self.md.index("### Inside Checks") < self.md.index("#### Branch 2.2 "))
 
     def test_one_table_per_branch_reads_like_the_canvas(self):
@@ -58,14 +58,15 @@ class DatasetAudit(unittest.TestCase):
         tables = re.findall(r"^\| Step \| Tool \| What it does \| New / changed columns \| Next \|\n\|.*\n((?:\|.*\n)+)", md, re.M)
         steps = [re.fullmatch(r"\| (\S+) \| (.*?) \| (.*?) \| (.*?) \| (.*?) \|", line).groups()
                  for t in tables for line in t.splitlines()]
-        self.assertEqual(len(steps), 4 + 28)                     # every step once
+        self.assertEqual(len(steps), 4 + 27)                     # every step once; the typed table is read inside 2.15
         by = {r[0]: r[1:] for r in steps}
-        self.assertEqual(by["1.1"], ("Input Data", "reads **datasets_export.csv**", "9 columns", "1.2"))
-        self.assertEqual(by["2.16"], ("Filter “Data Quality”", "keeps the rows where [DQScore] < 0.8", "", "T → 2.17; F dropped"))
+        self.assertEqual(by["1.1"], ("Input Data", "opens `datasets_export.csv`", "9 columns", "1.2"))
+        self.assertEqual(by["2.16"], ("Filter “Data Quality”", "keeps only the rows where [DQScore] < 0.8", "", "T → 2.17; F dropped"))
         self.assertEqual(by["2.17"][2], "**Issue**")
-        self.assertEqual(by["2.15"], ("Join", "matches with 2.25 on [Owner]", "", "J → 2.26; L, R dropped"))
+        self.assertEqual(by["2.15"], ("Join", "matches its rows with a typed table ([Owner], [Team]; 2 rows) on [Owner]", "",
+                                      "J → 2.25; L, R dropped"))
         self.assertEqual(by["2.18"][0], "RegEx ⚠")
-        self.assertTrue(by["2.28"][1].startswith("writes **Dataset audit.xlsx** · sheet **Issues**"))
+        self.assertTrue(by["2.27"][1].startswith("saves the table to `Dataset audit.xlsx`, sheet `Issues`"))
         self.assertFalse("**Reads:**" in md or "- **Does:**" in md)
         # rule and pandas sit in one folded line per step, under the table
         self.assertTrue('- **2.16** Filter #44 · exact · `t44` · `df = df[(df["DQScore"] < 0.8)]`' in md)
@@ -102,7 +103,7 @@ class Large(unittest.TestCase):
         cards = re.findall(r"^- \*\*(\d+\.\d+)\*\* ", md, re.M)
         self.assertEqual(len(cards), len(set(cards)))
         copies = [i for i in g.order if g.L.stage_of[i] in g.L.copy_of]
-        self.assertEqual(len(cards) + len(copies), len(g.order))
+        self.assertEqual(len(cards) + len(copies), len(g.order) - len(g.fold_of))   # a folded read is not a step
         self.assertEqual(len(re.findall(r"^#### Branches .* — repeat of", md, re.M)), 3)
         self.assertEqual(md, build(synth_recon.big(938))[1])            # deterministic
 

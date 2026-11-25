@@ -222,15 +222,14 @@ def main(write=True):
         files[stem + "_guide.md"] = logicdoc.to_markdown(doc)
         files[stem + "_guide.html"] = logicdoc.to_html(doc, "Migration guide: %s.yxmd" % stem)
     path = os.path.join(tmp, "dataset_audit.yxmd")
-    files["dataset_audit_test.ipynb"] = notebook.build(workflow.Workflow(path), "dataset_audit_generated",
-                                                       r"C:\path\to\workflow_folder")
+    files["dataset_audit_steps.ipynb"] = notebook.build_steps(workflow.Workflow(path), r"C:\path\to\workflow_folder")
     modules = [vbaparse.parse_module(VBA, "MonthEnd")]
     _, report = transpile.generate(modules, "month_end.bas")
     vdoc = analyse.build(modules, report, "month_end.bas")
     files["month_end_logic.md"] = logicdoc.to_markdown(vdoc)
     files["month_end_logic.html"] = logicdoc.to_html(vdoc, "VBA logic of month_end.bas")
     if write:
-        for name in [n for n in files if "_logic." in n or "_guide." in n or "_test." in n]:
+        for name in [n for n in files if "_logic." in n or "_guide." in n or "_steps." in n]:
             with open(os.path.join(HERE, name), "w", encoding="utf-8", newline="\n") as fh:
                 fh.write(files[name])
     return files

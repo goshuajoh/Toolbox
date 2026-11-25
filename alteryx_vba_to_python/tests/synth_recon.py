@@ -150,7 +150,7 @@ def big(target=938, trees=4):
     left = {k: max(v - per_tree.get(k, 0) * trees, 0) for k, v in want.items()}
     cols = ["Deal Id", "Long/Short", "Ccy 1", "Ccy 2", "Branch", "Account", "Trade Date",
             "Expiration", "Premium", "PremiumType", "RISKCLASS", "PayAmount", "RecAmount"]
-    chain_no, prev_end = 0, None
+    chain_no, prev_end, prev_src = 0, None, None
     starts = left["Input"] + left["Directory"]
     while sum(left.values()) > 0 and len(wb.items) < target and (left["Input"] or left["Directory"]):
         chain_no += 1
@@ -179,6 +179,7 @@ def big(target=938, trees=4):
         if left["Directory"] > 0:
             left["Directory"] -= 1
             link(wb.directory(nid(), "Output", box=box))
+            first_src = None
             if take("Filter"):
                 link(wb.filter(nid(), 'Contains([FileName],"Consolidated %d") and !Contains([FileName],".bak")' % u, box=box))
                 cur = (cur[0], "True")
@@ -193,6 +194,7 @@ def big(target=938, trees=4):
         else:
             left["Input"] -= 1
             link(wb.input(nid(), "Source\\Extracts\\extract_%d.csv" % u, box=box, CodePage=28591, Delimeter=",", HeaderRow="True"))
+            first_src = cur
             if take("DynamicInput"):
                 if take("Formula"):
                     link(wb.formula(nid(), [("File %d" % u, "'Source\\Extracts\\FX_%d_'+replace([T],'-','')+'.csv'" % u)], box=box))
@@ -204,8 +206,8 @@ def big(target=938, trees=4):
             if take("TextBox"):
                 wb.text_box(nid(), "Section %s: prepares extract %d before matching" % (w, u), box=box)
             if take("Select"):
-                link(wb.select(nid(), [(cols[(u + r + i) % len(cols)], True, "%s_%s" % (cols[(u + r + i) % len(cols)].upper(), w))
-                                       for i in range(4)] + [(cols[(u + r + 5) % len(cols)], False), ("*Unknown", True)], box=box))
+                link(wb.select(nid(), [(cols[(u + r + i) % len(cols)], True) for i in range(4)] +
+                               [("Comment %s" % w, False), ("*Unknown", True)], box=box))       # later steps read what it keeps
             for i in range(3):
                 if take("Formula"):
                     c1, c2 = cols[(u + r + i) % len(cols)], cols[(u + r + i + 3) % len(cols)]
@@ -225,7 +227,7 @@ def big(target=938, trees=4):
                     wb.conn(keep[0], fr, sa=keep[1], da="Targets"); wb.conn(su, fr, da="Source")
                     cur = (fr, "Output")
             if prev_end and take("AppendFields"):
-                ap = wb.append_fields(nid(), [("Source_T", True, "T_%s" % w), ("*Unknown", True)], box=box)
+                ap = wb.append_fields(nid(), [("Source_T", True, "T_%s" % w), ("*Unknown", False)], box=box)
                 wb.conn(cur[0], ap, sa=cur[1], da="Targets"); wb.conn(prev_end[0], ap, sa=prev_end[1], da="Source")
                 cur = (ap, "Output")
             if take("MultiFieldFormula"):
@@ -244,9 +246,10 @@ def big(target=938, trees=4):
             if take("Unique"):
                 link(wb.unique(nid(), [cols[0], cols[(u + r) % len(cols)]], box=box))
                 cur = (cur[0], "Unique")
-            if prev_end and take("Join"):
-                j = wb.join(nid(), [cols[0]], [cols[0]], [("Right_" + cols[1], True, "P%s_%s" % (w, cols[1])), ("*Unknown", True)], box=box)
-                wb.conn(cur[0], j, sa=cur[1], da="Left"); wb.conn(prev_end[0], j, sa=prev_end[1], da="Right")
+            if prev_src and take("Join"):
+                j = wb.join(nid(), [cols[0]], [cols[0]], [("Right_" + cols[0], False), ("Right_" + cols[1], True, "P%s_%s" % (w, cols[1])),
+                                                         ("*Unknown", True)], box=box)
+                wb.conn(cur[0], j, sa=cur[1], da="Left"); wb.conn(prev_src[0], j, sa=prev_src[1], da="Right")   # a lookup into another extract
                 cur = (j, "Join")
             if take("RecordID"):
                 link(wb.record_id(nid(), "RecordID", 1, "String", 6, box=box))
@@ -272,6 +275,7 @@ def big(target=938, trees=4):
             o = wb.output(nid(), "Output\\prep_%d.csv" % u, box=box)
             wb.conn(cur[0], o, sa=cur[1])
         prev_end = cur
+        prev_src = first_src
     return wb
 
 

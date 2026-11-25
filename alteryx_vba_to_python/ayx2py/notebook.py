@@ -1,5 +1,11 @@
-"""A Jupyter notebook that runs the generated module one container at a time, on the user's files.
+"""Two Jupyter notebooks, written as nbformat 4 JSON with the standard library only.
 
+build_steps: the default. A plain pandas template to rebuild the workflow by hand, branch by branch: settings
+(the workflow's folder and one variable per file it reads), the guide's two helpers, a Load cell that reads every
+file once, then one skeleton cell per branch that lists its steps as comments, ready for the pandas lines pasted
+from the migration guide, and a last cell that saves the outputs and compares one with the legacy file.
+
+build_runner (--runner-notebook): runs the generated module one container at a time, on the user's files.
 Cells: settings (the file every Input step reads, pre-filled with the workflow's own paths), setup,
 one cell per container (one line per step: rows and columns out, or why it failed; a failing step
 skips only the steps that need it), the steps that failed, look() at any step, and compare() of
@@ -7,9 +13,10 @@ each Output step with the file the legacy workflow wrote. Standard library only 
 """
 import json
 import os
+import re
 
 from .codegen import file_links
-from .guide import Guide, designer, place
+from .guide import HELPERS, MULTI, Guide, _bkey, designer, file_text, path_parts, place
 
 
 def _code(lines):
@@ -30,7 +37,178 @@ def _comment_line(code, comment, width=58):
     return "%-*s  # %s" % (width, code, comment)
 
 
-def build(wf, module, workflow_dir):
+def _notebook(cells):
+    nb = {"cells": cells, "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+                                       "language_info": {"name": "python"}},
+          "nbformat": 4, "nbformat_minor": 5}
+    for n, c in enumerate(nb["cells"]):
+        c["id"] = "c%02d" % n
+    return json.dumps(nb, indent=1, ensure_ascii=False) + "\n"
+
+
+def _plain(text):
+    """Guide text for a notebook: links become their label."""
+    return re.sub(r"\[\[[\w-]+\|([^\]]+)\]\]", r"\1", text)
+
+
+def _cell(text):
+    return _plain(text).replace("|", "\\|")
+
+
+def build_steps(wf, workflow_dir, guide=None):
+    """-> the plain pandas template (JSON text). workflow_dir: the folder the workflow's relative paths start from."""
+    g = guide or Guide(wf)
+    L, t = g.L, wf.tools
+    cells = [_md(["# Rebuild %s in pandas, step by step" % os.path.basename(wf.source), "",
+                  "1. **Settings**: set `FOLDER` to the workflow's folder, and change any file path to your own copy.",
+                  "2. Run **Helpers** and **Load**: every file the workflow opens is read once, into a `src_…` table.",
+                  "3. Then go branch by branch, as in the migration guide. Each code cell starts from the table the "
+                  "branch receives and lists its steps as comments. Under each comment, paste that step's pandas "
+                  "lines from the guide (the folded line under the branch's table), run the cell, and compare "
+                  "`df.head()` with what Alteryx shows for that tool.",
+                  "4. The last cell saves the outputs and compares one with the file the Alteryx workflow saved.",
+                  "",
+                  "Step numbers (2.16) and table names (`s2_16`, `src_…`) are the guide's, so a pasted line finds its "
+                  "inputs."])]
+
+    def users(i):
+        if i in g.fold_of:
+            return "%s (inside)" % g.sid[g.folded[g.fold_of[i]][0]]
+        return g.sid[i]
+
+    settings = ["# Settings: the workflow's folder and the files it opens. Change a path to your own copy.",
+                "import os", "",
+                "FOLDER = %s   # the workflow's relative paths start here" % _raw(workflow_dir),
+                'OUT = os.path.join(FOLDER, "python_out")   # where the last cell saves the outputs', ""]
+    for var, path, tools in g.paths.values():
+        settings.append("%s = %s   # %s; opened at step %s" % (var, path_parts(path), path,
+                                                             ", ".join(dict.fromkeys(users(i) for i in tools))))
+    if not g.paths:
+        settings.append("# this workflow opens no file directly")
+    cells += [_code(settings),
+              _md(["## Helpers", "", "Alteryx compares text ignoring case, and treats null and the empty string as "
+                   "different; the guide's pandas lines use these two helpers."]),
+              _code(list(HELPERS))]
+
+    load = []
+    for read in g.reads.values():
+        first = read["tools"][0]
+        what = "a typed table" if t[first].kind == "TextInput" else \
+            _plain(file_text(t[first].ir["file"], t[first].ir["options"])).replace("`", "")
+        load += ["# step %s: %s" % (", ".join(dict.fromkeys(users(i) for i in read["tools"])), what)]
+        load += g.load_lines(first)
+    load += [""] + ['print("%s", %s.shape)' % (r["var"], r["var"]) for r in g.reads.values()]
+    cells += [_md(["## Load", "", "Every file the workflow opens, read once. In Alteryx each is its own Input tool; the "
+                   "guide shows a file that only feeds a Join, Find Replace or Union inside that step."]),
+              _code(load if g.reads else ["# this workflow opens no file directly"])]
+
+    # branches, in an order where every table a cell starts from is made by an earlier cell
+    stages = sorted(g.bid, key=lambda s: (g.cnum[g.top_of[L.stages[s][0]]], _bkey(g.bid[s])))
+
+    def needs(s):
+        ids = set(L.stages[s])
+        return {L.stage_of[e[0]] for i in L.stages[s] for e in wf.ins.get(i, []) if e[0] not in ids and e[0] not in g.fold_of}
+
+    made, pending, ordered = set(), list(stages), []
+    while pending:
+        nxt = next((s for s in pending if needs(s) <= made), pending[0])
+        pending.remove(nxt)
+        ordered.append(nxt)
+        made.add(nxt)
+
+    shown_key, seen_keys, shown_group = None, set(), set()
+    for s in ordered:
+        ids = L.stages[s]
+        key = g.top_of[ids[0]]
+        if key != shown_key:
+            files = []
+            for i in g.order:
+                if g.top_of[i] == key and t[i].kind in ("Input", "Output", "DynamicInput"):
+                    verb = {"Input": "opens", "Output": "saves", "DynamicInput": "opens each file like"}[t[i].kind]
+                    files.append("- step %s %s %s" % (users(i), verb, file_text(t[i].ir["file"], t[i].ir["options"])))
+            again = key in seen_keys
+            cells.append(_md(["## %d. %s%s" % (g.cnum[key], g.cname(key), " (continued)" if again else "")] +
+                             ([""] + files if files and not again else [])))
+            shown_key = key
+            seen_keys.add(key)
+        copy = L.copy_of.get(s)
+        if copy and copy not in shown_group:
+            shown_group.add(copy)
+            group = [x for x in stages if L.copy_of.get(x) == copy]
+            tools = [i for x in group for i in L.stages[x]]
+            span = "%s–%s" % (g.sid[min(tools, key=lambda i: g.pos[i])], g.sid[max(tools, key=lambda i: g.pos[i])].split(".")[1])
+            cells.append(_md(["### Branches %s–%s: a repeat of %s" % (g.bid[group[0]], g.bid[group[-1]].split(".")[1],
+                                                                    g.span_text([g.twin_stage(x) for x in group], True)),
+                              "", "The same steps and rules as there, on other tables. Paste from the guide's folded line "
+                              "\"Steps %s in pandas\" under this repeat." % span]))
+        elif not copy:
+            rows = ["| Step | Tool | What it does |", "|---|---|---|"]
+            for i in ids:
+                rows.append("| %s | %s | %s |" % (g.sid[i], _cell(designer(t[i].kind) + (" “%s”" % t[i].note if t[i].note else "")),
+                                                   _cell(g.short(i))))
+            cells.append(_md(["### Branch %s — %s" % (g.bid[s], _plain(g.label(s))), ""] + rows))
+        cells.append(_code(skeleton(g, s)))
+
+    outs = [i for i in g.order if t[i].kind == "Output"]
+    last = ["# Save what each Output step saves (uncomment to write the files into OUT):",
+            "# os.makedirs(OUT, exist_ok=True)"]
+    for i in outs:
+        path, sheet, _, _ = place(t[i].ir["file"])
+        name = os.path.basename(path.replace("\\", "/"))
+        last.append("# %s.%s" % (g.var(i), 'to_excel(os.path.join(OUT, "%s"), sheet_name="%s", index=False)' % (name, sheet or "Sheet1")
+                                  if name.lower().endswith((".xlsx", ".xlsm", ".xls")) else
+                                  'to_csv(os.path.join(OUT, "%s"), index=False)' % name))
+    if outs:
+        i = outs[-1]
+        path, sheet, _, _ = place(t[i].ir["file"])
+        v = g.var(i)
+        excel = path.lower().endswith((".xlsx", ".xlsm", ".xls"))
+        last += ["", "# Compare step %s's rows with the file the Alteryx workflow saved (point this at a copy of it):" % g.sid[i],
+                 "legacy_file = %s" % path_parts(path),
+                 "if os.path.exists(legacy_file):",
+                 "    legacy = %s" % ('pd.read_excel(legacy_file, sheet_name="%s")' % (sheet or "Sheet1") if excel else
+                                      "pd.read_csv(legacy_file, dtype=str)"),
+                 '    print("rows:", len(%s), "here,", len(legacy), "in the legacy file; columns only here:", '
+                 'sorted(set(%s.columns) - set(legacy.columns)), "only there:", sorted(set(legacy.columns) - set(%s.columns)))'
+                 % (v, v, v),
+                 "    common = [c for c in %s.columns if c in legacy.columns]" % v,
+                 '    print(%s[common].reset_index(drop=True).compare(legacy[common]) if len(%s) == len(legacy) else '
+                 '"the row counts differ")' % (v, v)]
+    cells += [_md(["## Save and compare"]), _code(last if outs else ["# this workflow saves no file"])]
+    return _notebook(cells)
+
+
+def skeleton(g, s):
+    """The code cell for one branch: the table it starts from, one comment per step to paste under, its output."""
+    L, wf, t = g.L, g.wf, g.t
+    ids = L.stages[s]
+    f = ids[0]
+    lines = ["# Branch %s — %s" % (g.bid[s], _plain(g.label(s)))]
+    ins = wf.ins.get(f, [])
+    start = None
+    if t[f].kind in ("Input", "TextInput"):
+        start = g.src_of.get(f)
+    elif t[f].kind not in ("Union", "Directory") and ins:
+        pick = {"Join": "L", "FindReplace": "T", "AppendFields": "T"}.get(t[f].kind)
+        e = next((e for e in ins if pick and e[3][:1].upper() == pick), None) or g.L.primary(f) or ins[0]
+        start = g.var(e[0], e[1])
+    if start:
+        lines.append("df = %s" % start)
+    for i in ids:
+        note = "already loaded as %s" % g.src_of[i] if i in g.src_of else "paste the pandas lines from the guide"
+        lines += ["# %s %s — %s   (%s)" % (g.sid[i], designer(t[i].kind) + (" “%s”" % t[i].note if t[i].note else ""),
+                                          _plain(g.short(i)).replace("**", ""), note), ""]
+    last = ids[-1]
+    used = sorted({e[1] for e in wf.outs.get(last, [])})
+    if t[last].kind in MULTI:
+        names = [g.var(last, a) for a in used] or ["df"]
+        lines += ["# step %s's lines make %s" % (g.sid[last], ", ".join(names)), "%s.head()" % names[0]]
+    else:
+        lines += ["%s = df" % g.var(last), "df.head()"]
+    return lines
+
+
+def build_runner(wf, module, workflow_dir):
     """-> notebook JSON text. module: name of the generated module; workflow_dir: where the workflow's relative paths start."""
     g = Guide(wf)
     t = wf.tools
@@ -147,9 +325,4 @@ def build(wf, module, workflow_dir):
                   g.sid[i].replace(".", "_"), g.sid[i], _raw(place(t[i].ir["file"])[0]),
                   ", %r" % place(t[i].ir["file"])[1] if place(t[i].ir["file"])[1] else ""), where(i), 70)
                      for i in outs] or ["# this workflow has no Output step"])]
-    nb = {"cells": cells, "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
-                                       "language_info": {"name": "python"}},
-          "nbformat": 4, "nbformat_minor": 5}
-    for n, c in enumerate(nb["cells"]):
-        c["id"] = "c%02d" % n
-    return json.dumps(nb, indent=1, ensure_ascii=False) + "\n"
+    return _notebook(cells)

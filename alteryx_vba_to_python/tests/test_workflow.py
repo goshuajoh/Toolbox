@@ -89,7 +89,7 @@ class Size(unittest.TestCase):
         self.assertLess(len(spec), 10 * tools)
         cards = sum(1 for x in spec if re.match(r"- \*\*\d+\.\d+\*\* ", x))
         self.assertGreater(cards, 700)                              # every tool once; repeated copies are not printed
-        self.assertTrue(os.path.exists(os.path.join(tmp, "out", "big_test.ipynb")))
+        self.assertTrue(os.path.exists(os.path.join(tmp, "out", "big_steps.ipynb")))
         self.assertEqual(sum(1 for x in spec if re.match(r"#### Branches .* — repeat of branch", x)), 3)
         self.assertTrue("copy 4 of 4" in "\n".join(listing))
         print("\n[size] %d tools -> guide %d lines / %d chars, %d steps; tool listing %d lines; code %d lines / %d chars" % (

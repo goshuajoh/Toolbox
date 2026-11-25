@@ -77,7 +77,7 @@ def generate(folder):
     with open(os.devnull, "w") as quiet:
         old, sys.stdout = sys.stdout, quiet
         try:
-            cli.main([path, out])
+            cli.main([path, out, "--runner-notebook"])
         finally:
             sys.stdout = old
     return out
@@ -124,17 +124,17 @@ class Notebook(unittest.TestCase):
         self.assertTrue(re.search(r"^  2\.7 +Filter +#41 +True 2, False 1 rows × 10 columns$", log, re.M), log)
         # the step that is not converted fails, the steps that need it are skipped, the others still run
         self.assertTrue(re.search(r"^  2\.18 +RegEx +#64 +NOT CONVERTED: #64: RegEx is not converted", log, re.M), log)
-        self.assertTrue(re.search(r"^  2\.26 +Union +#90 +skipped: needs step 2\.18 \(RegEx\), which failed$", log, re.M), log)
+        self.assertTrue(re.search(r"^  2\.25 +Union +#90 +skipped: needs step 2\.18 \(RegEx\), which failed$", log, re.M), log)
         self.assertTrue(re.search(r"^  2\.24 +Select +#66 +2 rows × 10 columns$", log, re.M), log)
         self.assertTrue("  -- 24 ran, 1 failed, 3 skipped" in log, log)
-        self.assertTrue("step 2.28 Output Data #92: skipped: needs step 2.27 (Formula), which was skipped" in log, log)
+        self.assertTrue("step 2.27 Output Data #92: skipped: needs step 2.26 (Formula), which was skipped" in log, log)
 
     def test_look_and_compare(self):
         log = self.log
         self.assertTrue("step 1.3 Formula #3: 3 rows × 10 columns" in log, log)
         self.assertTrue("columns: Name (V_String), Owner (V_String)" in log, log)
         self.assertTrue("ours: 3 rows × 10 columns;  legacy: 3 rows × 10 columns\nSAME: every row and column matches" in log, log)
-        self.assertTrue("step 2.28 Output Data #92 has no output" in log, log)
+        self.assertTrue("step 2.27 Output Data #92 has no output" in log, log)
 
     def test_with_a_stand_in_for_the_regex_step(self):
         audit = pd.DataFrame({"Name": ["sales_v1", "ops_v3", "sales_v1", "risk_v2"],
@@ -148,7 +148,7 @@ class Notebook(unittest.TestCase):
         self.assertEqual(code, 0, log)
         self.assertTrue("  -- 28 ran, 0 failed, 0 skipped" in log, log)
         self.assertTrue("Every step that ran has an output." in log, log)
-        self.assertTrue(re.search(r"^  2\.28 +Output Data +#92 +\d+ rows × \d+ columns \(kept in memory", log, re.M), log)
+        self.assertTrue(re.search(r"^  2\.27 +Output Data +#92 +\d+ rows × \d+ columns \(kept in memory", log, re.M), log)
         self.assertTrue("rows differ:" in log and "differing cells:" in log, log)
 
 
@@ -211,7 +211,7 @@ class Size(unittest.TestCase):
         self.assertEqual(sorted({st[1] for st in mod.STEPS}), sorted(mod.CONTAINERS))
         path = os.path.join(d, "wf.yxmd")
         from ayx2py import notebook, workflow
-        nb = json.loads(notebook.build(workflow.Workflow(path), "big_generated", d))
+        nb = json.loads(notebook.build_runner(workflow.Workflow(path), "big_generated", d))
         runs = [c for c in nb["cells"] if "wf.run(ctx, only=" in "".join(c["source"])]
         self.assertEqual(len(runs), len(mod.CONTAINERS))
 
