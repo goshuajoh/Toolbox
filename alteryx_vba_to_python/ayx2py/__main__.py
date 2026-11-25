@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -79,8 +80,41 @@ def main(argv=None):
         with open(os.path.join(out_dir, name), "w", encoding=enc, newline="\n") as fh:
             fh.write(text)
         print("wrote %s: %d lines, %d characters" % (os.path.join(out_dir, name), text.count("\n"), len(text)))
+    deep = codegen.deep_tools(wf)
+    if deep:
+        print("%d tool%s not converted because a rule nests too deeply (see the guide's last section): %s" % (
+            len(deep), "" if len(deep) == 1 else "s", ", ".join("#%s (%s)" % (i, re.sub(r".*\((\d+ levels)\).*", r"\1", p))
+                                                         for i, p in deep)))
     return 0
 
 
+STACK = 256 * 1024 * 1024       # a rule nested hundreds of levels deep needs more than a thread's usual 1-8 MB
+
+
+def run(argv=None):
+    """main() on a thread with a large stack and a high recursion limit, so a deeply nested rule is read (or, past
+    that, reported for its tool) instead of stopping the whole run."""
+    sys.setrecursionlimit(max(sys.getrecursionlimit(), expr.DEEP_LIMIT))
+    result = {}
+
+    def target():
+        try:
+            result["rc"] = main(argv)
+        except BaseException as e:  # noqa: BLE001 - raised again on the calling thread
+            result["error"] = e
+
+    try:
+        threading.stack_size(STACK)
+    except (ValueError, RuntimeError):
+        pass
+    worker = threading.Thread(target=target, name="ayx2py")
+    worker.start()
+    worker.join()
+    threading.stack_size(0)
+    if "error" in result:
+        raise result["error"]
+    return result["rc"]
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(run())

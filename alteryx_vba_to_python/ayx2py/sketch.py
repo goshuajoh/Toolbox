@@ -37,6 +37,39 @@ def _regex_repl(r):
     return "".join(out)
 
 
+LONG = 8        # an and/or or arithmetic chain longer than this becomes one call over a list: a flat line
+
+
+def _bool_chain(n, col):
+    """a | b | c ... ; [X] = "a" OR [X] = "b" OR ... as one isin (Alteryx: text ignoring case, null matches nothing);
+    [X] != "a" AND [X] != "b" ... as ~isin."""
+    k, items = n[0], list(n[1:])
+    want = "eq" if k == "or" else "ne"
+    groups, rest = {}, []
+    for x in items:
+        if x[0] == "cmp" and x[1] == want and _lit(x[3]) and x[3][0] in ("str", "num") and not _lit(x[2]):
+            groups.setdefault((expr.canon(x[2]), x[3][0]), []).append(x)
+        else:
+            rest.append(x)
+    parts = []
+    for (_, kind), xs in groups.items():
+        if len(xs) < 3:
+            rest += xs
+            continue
+        subject = vec(xs[0][2], col)
+        vals = list(dict.fromkeys(x[3][1].casefold() if kind == "str" else x[3][1] for x in xs))
+        test = ("%s.str.casefold().isin([%s])" % (subject, ", ".join(repr(v) for v in vals)) if kind == "str" else
+                "%s.isin([%s])" % (subject, ", ".join(vals)))
+        parts.append(test if k == "or" else "~" + test)
+    keep = {id(x) for x in rest}
+    parts += [vec(x, col) for x in items if id(x) in keep]
+    if len(parts) == 1:
+        return parts[0]
+    if len(parts) > LONG:
+        return "functools.reduce(operator.%s, [%s])" % ("or_" if k == "or" else "and_", ", ".join(parts))
+    return "(%s)" % (" %s " % ("&" if k == "and" else "|")).join(parts)
+
+
 def vec(n, col=None):
     """Vectorised pandas text of an expression over a DataFrame named df."""
     k = n[0]
@@ -57,7 +90,7 @@ def vec(n, col=None):
             raise NoSketch("workflow constant")
         return 'df["%s"]' % n[1]
     if k in ("and", "or"):
-        return "(%s %s %s)" % (vec(n[1], col), "&" if k == "and" else "|", vec(n[2], col))
+        return _bool_chain(n, col)
     if k == "not":
         return "~(%s)" % vec(n[1], col)
     if k == "neg":
@@ -71,7 +104,11 @@ def vec(n, col=None):
         return "(%s %s %s)" % (a, {"lt": "<", "le": "<=", "gt": ">", "ge": ">="}[n[1]], b)
     if k == "arith":
         op = {"add": "+", "sub": "-", "mul": "*", "div": "/", "mod": "%"}[n[1]]
-        return "(%s %s %s)" % (vec(n[2], col), op, vec(n[3], col))
+        items = [vec(x, col) for x in n[2:]]
+        if len(items) > LONG:
+            return "functools.reduce(operator.%s, [%s])" % ({"add": "add", "sub": "sub", "mul": "mul", "div": "truediv",
+                                                              "mod": "mod"}[n[1]], ", ".join(items))
+        return "(%s)" % (" %s " % op).join(items)
     if k == "in":
         if not all(_lit(x) for x in n[2]):
             raise NoSketch("IN with non-literal values")

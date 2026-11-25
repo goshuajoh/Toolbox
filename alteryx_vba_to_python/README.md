@@ -84,6 +84,19 @@ Options:
 
 About the pandas lines: `df` is the table flowing through the branch; other tables are named after the step that made them (`s2_7`, or `s2_7_true` for a True output); `src_…` is a file as the notebook's Load cell reads it, and `FOLDER` the workflow's folder. They are written to be pasted into the notebook, where every name they use exists. Where an expression has no honest pandas form (a `\G` regex, `FindString`, a multi-row reference), the line is a comment naming the generated function instead. The tests check that the one-liners compute what the converter's runtime computes for the common expressions, and that the notebook runs top to bottom with every line pasted in.
 
+### Long and deeply nested rules
+
+Rules with thousands of terms are read and written flat:
+- **AND/OR chains:** a filter that ORs 5,000 `[Cpty] = "C…"` tests is one test.
+  - In the guide it reads "[Cpty] is one of …".
+  - In pandas it is `df["Cpty"].str.casefold().isin([...])`.
+  - In the generated module it is one `or` chain.
+- **Long sums:** a sum of 1,500 columns is one `rt.chain("add", ...)` call, and `functools.reduce(operator.add, [...])` in pandas.
+- **Nested IF:** `IF … ELSE IF … ENDIF ENDIF` nested 300 deep becomes one IF with ELSEIFs.
+- **Nested functions and brackets:** these are kept, but parts deeper than 40 brackets move into variables of their own in the generated code, so Python accepts it.
+
+The command runs on a thread with a 256 MB stack, so rules nested about 2,000 levels deep are still read. A rule nested deeper than that leaves only its own step not converted, with the reason ("expression nested too deeply (3000 levels)"), and the run goes on. The command's last line lists such steps.
+
 ### Size
 
 Measured on a synthetic 930-tool workflow with a production workflow's mix of tool kinds:
@@ -228,7 +241,7 @@ print(app.log)
 | `logicdoc.py` | Writes the documents (Markdown, HTML with folding sections, diagrams) | yes |
 | `examples/` | Two workflows and a macro, with their documents, and a pandas notebook template | no |
 | `probe/` | The workflow that checks the assumed Alteryx behaviours | once |
-| `tests/`, `run_tests.py` | 93 tests on synthetic input | optional |
+| `tests/`, `run_tests.py` | 98 tests on synthetic input | optional |
 | `REPORT.md` | Feasibility report | no |
 
 The tools use the standard library only (written and tested on Python 3.12). The code they generate needs pandas (Alteryx side) and openpyxl (VBA side, and Excel files on the Alteryx side).
@@ -239,4 +252,4 @@ The tools use the standard library only (written and tested on Python 3.12). The
 python run_tests.py
 ```
 
-93 tests, about 6 seconds. They need pandas and openpyxl, and no real data. `python examples/make_examples.py` and `python probe/make_probe.py` re-create the example and probe files; the tests check that they are current.
+98 tests, about 6 seconds. They need pandas and openpyxl, and no real data. `python examples/make_examples.py` and `python probe/make_probe.py` re-create the example and probe files; the tests check that they are current.

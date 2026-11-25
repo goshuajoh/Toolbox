@@ -298,6 +298,16 @@ def mod(a, b):
     return _arith(a, b, lambda x, y: int(math.fmod(int(x), int(y))))
 
 
+def chain(op, *xs):
+    """a + b + c + ... as one call: the same operator applied left to right, so a rule with thousands of terms
+    is not thousands of nested calls."""
+    fn = {"add": add, "sub": sub, "mul": mul, "div": div, "mod": mod}[op]
+    value = xs[0]
+    for x in xs[1:]:
+        value = fn(value, x)
+    return value
+
+
 def neg(a):
     return None if is_null(a) else -_num(a)
 

@@ -12,6 +12,7 @@ Standard library only.
 Anything the translator does not know raises ExprError; the caller turns the tool into a stub.
 """
 import re
+import sys
 
 KEYWORDS = {"IF", "THEN", "ELSEIF", "ELSE", "ENDIF", "AND", "OR", "NOT", "IN", "TRUE", "FALSE", "NULL"}
 
@@ -133,6 +134,24 @@ def tokenize(text):
 AND_BINDS_TIGHTER = False
 
 
+def _join(kind, node, item):
+    """a OR b OR c is one ("or", a, b, c) node, so long chains do not nest once per term."""
+    if node[0] == kind:
+        node.append(item) if isinstance(node, list) else None
+        return node if isinstance(node, list) else [kind, *node[1:], item]
+    return [kind, node, item]
+
+
+def _join_arith(op, node, item):
+    """a + b + c is one ("arith", "add", a, b, c) node, evaluated left to right."""
+    if node[0] == "arith" and node[1] == op:
+        if isinstance(node, list):
+            node.append(item)
+            return node
+        return ["arith", op, *node[2:], item]
+    return ["arith", op, node, item]
+
+
 class _Parser:
     def __init__(self, text):
         self.toks, self.i = tokenize(text), 0
@@ -177,7 +196,7 @@ class _Parser:
             node = self.and_()
             while self.kw("OR") or self.op("||"):
                 self.take()
-                node = ("or", node, self.and_())
+                node = _join("or", node, self.and_())
             return node
         node = self.eq()
         while True:
@@ -188,13 +207,13 @@ class _Parser:
             else:
                 return node
             self.take()
-            node = (kind, node, self.eq())
+            node = _join(kind, node, self.eq())
 
     def and_(self):
         node = self.eq()
         while self.kw("AND") or self.op("&&"):
             self.take()
-            node = ("and", node, self.eq())
+            node = _join("and", node, self.eq())
         return node
 
     def eq(self):
@@ -233,14 +252,14 @@ class _Parser:
         node = self.mul()
         while self.op("+", "-"):
             o = self.take()[1]
-            node = ("arith", ARITH[o], node, self.mul())
+            node = _join_arith(ARITH[o], node, self.mul())
         return node
 
     def mul(self):
         node = self.unary()
         while self.op("*", "/", "%"):
             o = self.take()[1]
-            node = ("arith", ARITH[o], node, self.unary())
+            node = _join_arith(ARITH[o], node, self.unary())
         return node
 
     def unary(self):
@@ -325,19 +344,46 @@ class _Parser:
         return ("if", tuple(branches), other)
 
 
+def _is_node(x):
+    return isinstance(x, (tuple, list)) and x and isinstance(x[0], str) and x[0] in _KINDS
+
+
 def _strip(node):
-    """Remove the ("paren", x) markers left by the parser."""
-    if node[0] == "paren":
-        return _strip(node[1])
-    return tuple(_strip(x) if isinstance(x, tuple) and x and isinstance(x[0], str) and x[0] in _KINDS
-                 else tuple(_strip_any(y) for y in x) if isinstance(x, tuple) else x for x in node)
+    """Remove the ("paren", x) markers left by the parser, make every node a tuple, and flatten what nesting adds
+    nothing to: a run of the same AND/OR, a left-nested run of the same arithmetic, and IF ... ELSE IF ... ENDIF ENDIF
+    (an ELSE that is itself an IF), which becomes one IF with ELSEIFs."""
+    while node[0] == "paren":
+        node = node[1]
+    k = node[0]
+    if k in ("or", "and"):
+        items = []
+        for x in node[1:]:
+            x = _strip(x)
+            items += list(x[1:]) if x[0] == k else [x]
+        return (k, *items)
+    if k == "arith":
+        items = [_strip(x) for x in node[2:]]
+        first = items[0]
+        if first[0] == "arith" and first[1] == node[1]:          # (a + b) + c  is  a + b + c
+            items = list(first[2:]) + items[1:]
+        return ("arith", node[1], *items)
+    if k == "if":
+        branches, other = [], node
+        while other[0] in ("if", "paren"):                          # ELSE IF ... ENDIF ENDIF -> ELSEIF
+            if other[0] == "paren":
+                other = other[1]
+                continue
+            branches += [(_strip(c), _strip(v)) for c, v in other[1]]
+            other = other[2]
+        return ("if", tuple(branches), _strip(other))
+    return tuple([_strip(x) if _is_node(x) else _strip_any(x) for x in node])
 
 
 def _strip_any(x):
-    if isinstance(x, tuple) and x and isinstance(x[0], str) and x[0] in _KINDS:
+    if _is_node(x):
         return _strip(x)
-    if isinstance(x, tuple):
-        return tuple(_strip_any(y) for y in x)
+    if isinstance(x, (tuple, list)):
+        return tuple([_strip_any(y) for y in x])
     return x
 
 
@@ -351,8 +397,40 @@ def _raw(text):
     return _Parser(text).parse()
 
 
+DEEP_LIMIT = 20000          # Python frames allowed while reading a deeply nested rule (see __main__ for the stack)
+
+
 def parse(text):
+    if sys.getrecursionlimit() < DEEP_LIMIT:
+        sys.setrecursionlimit(DEEP_LIMIT)
     return _strip(_raw(text))
+
+
+def text_nesting(text):
+    """Deepest nesting of brackets and IF ... ENDIF in a rule's text (strings and [fields] skipped)."""
+    best = level = 0
+    for k, v, _ in tokenize(text):
+        up = v.upper() if k == "ID" else ""
+        if (k == "OP" and v == "(") or up == "IF":
+            level += 1
+            best = max(best, level)
+        elif (k == "OP" and v == ")") or up == "ENDIF":
+            level -= 1
+    return best
+
+
+def too_deep(text):
+    return "expression nested too deeply (%d levels)" % text_nesting(text)
+
+
+def depth(node):
+    """How deeply the rule nests (an and/or or arithmetic chain counts once, however long)."""
+    best, todo = 0, [(node, 1)]
+    while todo:
+        n, d = todo.pop()
+        best = max(best, d)
+        todo.extend((c, d + 1) for c in _children(n))
+    return best
 
 
 def precedence_notes(text):
@@ -361,8 +439,8 @@ def precedence_notes(text):
     notes = []
 
     def visit(n):
-        if not (isinstance(n, tuple) and n and isinstance(n[0], str) and n[0] in _KINDS):
-            for x in n if isinstance(n, tuple) else ():
+        if not _is_node(n):
+            for x in n if isinstance(n, (tuple, list)) else ():
                 visit(x)
             return
         if n[0] in ("and", "or") and n[1][0] in ("and", "or") and n[1][0] != n[0]:
@@ -399,9 +477,12 @@ def _children(node):
 
 
 def walk(node):
-    yield node
-    for c in _children(node):
-        yield from walk(c)
+    """Every node, parents before children, without recursion (expressions can be thousands of terms long)."""
+    todo = [node]
+    while todo:
+        n = todo.pop()
+        yield n
+        todo.extend(reversed(_children(n)))
 
 
 def fields(node):
@@ -436,13 +517,13 @@ def canon(node):
     if k == "null":
         return "Null()"
     if k in ("or", "and"):
-        return "(%s %s %s)" % (canon(node[1]), k.upper(), canon(node[2]))
+        return "(%s)" % (" %s " % k.upper()).join(canon(x) for x in node[1:])
     if k == "not":
         return "!%s" % canon(node[1])
     if k == "neg":
         return "-%s" % canon(node[1])
     if k in ("cmp", "arith"):
-        return "(%s %s %s)" % (canon(node[2]), _SYM[node[1]], canon(node[3]))
+        return "(%s)" % (" %s " % _SYM[node[1]]).join(canon(x) for x in node[2:])
     if k == "in":
         return "(%s %sIN (%s))" % (canon(node[1]), "NOT " if node[3] else "", ", ".join(map(canon, node[2])))
     if k == "call":
@@ -458,12 +539,37 @@ def canon(node):
 CURRENT = {"_currentfield_": "cur", "_currentfieldname_": "cur_name", "_currentfieldtype_": "cur_type"}
 
 
-def _truth(node):
-    s = to_python(node)
+def _truth(node, hoist=None):
+    s = to_python(node, hoist)
     return s if is_bool(node) else "rt.truth(%s)" % s
 
 
-def to_python(node):
+HOIST_AT = 40               # nesting (in brackets) beyond which a part of a rule becomes a variable of its own
+
+
+def _nesting(text):
+    best = level = 0
+    for ch in text:
+        if ch in "([{":
+            level += 1
+            best = max(best, level)
+        elif ch in ")]}":
+            level -= 1
+    return best
+
+
+def to_python(node, hoist=None):
+    """Python text of an expression. hoist: a list to receive "name = value" lines for parts nested too deeply
+    to stay inline (Python refuses more than 200 nested brackets); only parts that are always evaluated move."""
+    text = _to_python(node, hoist)
+    if hoist is not None and node[0] in ("call", "cmp", "arith", "neg", "in") and _nesting(text) > HOIST_AT:
+        name = "_v%d" % (len(hoist) + 1)
+        hoist.append("%s = %s" % (name, text))
+        return name
+    return text
+
+
+def _to_python(node, hoist=None):
     k = node[0]
     if k == "num":
         v = node[1]
@@ -481,24 +587,24 @@ def to_python(node):
         if re.match(r"(?i)(engine|user|question)\.", name):
             return "rt.constant(%r)" % name
         return "r[%r]" % name
-    if k == "or":
-        return "(%s or %s)" % (_truth(node[1]), _truth(node[2]))
-    if k == "and":
-        return "(%s and %s)" % (_truth(node[1]), _truth(node[2]))
+    if k in ("or", "and"):                                 # Python's or/and is one flat node however long
+        return "(%s)" % (" %s " % k).join(_truth(x, hoist if n == 0 else None) for n, x in enumerate(node[1:]))
     if k == "not":
-        return "(not %s)" % _truth(node[1])
+        return "(not %s)" % _truth(node[1], hoist)
     if k == "neg":
-        return "rt.neg(%s)" % to_python(node[1])
+        return "rt.neg(%s)" % to_python(node[1], hoist)
+    if k == "arith" and len(node) > 4:                     # a + b + c ...: one call, not one per term
+        return "rt.chain(%r, %s)" % (node[1], ", ".join(to_python(x, hoist) for x in node[2:]))
     if k in ("cmp", "arith"):
-        return "rt.%s(%s, %s)" % (node[1], to_python(node[2]), to_python(node[3]))
+        return "rt.%s(%s, %s)" % (node[1], to_python(node[2], hoist), to_python(node[3], hoist))
     if k == "in":
-        s = "rt.in_(%s, (%s,))" % (to_python(node[1]), ", ".join(map(to_python, node[2])))
+        s = "rt.in_(%s, (%s,))" % (to_python(node[1], hoist), ", ".join(to_python(x, hoist) for x in node[2]))
         return "(not %s)" % s if node[3] else s
     if k == "call":
         name, args = node[1], node[2]
         if name == "iif":                                  # lazy, like IF
-            return "(%s if %s else %s)" % (to_python(args[1]), _truth(args[0]), to_python(args[2]))
-        return "rt.%s(%s)" % (FUNCS[name][0], ", ".join(map(to_python, args)))
+            return "(%s if %s else %s)" % (to_python(args[1]), _truth(args[0], hoist), to_python(args[2]))
+        return "rt.%s(%s)" % (FUNCS[name][0], ", ".join(to_python(x, hoist) for x in args))
     if k == "if":
         s = to_python(node[2])
         for cond, val in reversed(node[1]):
@@ -510,13 +616,26 @@ def to_python(node):
 def to_function(node, name, args="r"):
     """Lines of a Python function returning the expression's value."""
     lines = ["def %s(%s):" % (name, args)]
+
+    def put(indent, fn, n):
+        hoist = []
+        text = fn(n, hoist)
+        lines.extend(indent + h for h in hoist)
+        return text
+
     if node[0] == "if":
+        flat = all(_nesting(_truth(c)) <= HOIST_AT and _nesting(to_python(v)) <= HOIST_AT for c, v in node[1])
         for n, (cond, val) in enumerate(node[1]):
-            lines.append("    %s %s:" % ("if" if n == 0 else "elif", _truth(cond)))
-            lines.append("        return %s" % to_python(val))
-        lines.append("    return %s" % to_python(node[2]))
+            if flat:
+                lines.append("    %s %s:" % ("if" if n == 0 else "elif", _truth(cond)))
+                lines.append("        return %s" % to_python(val))
+            else:                       # each test after the variables it needs; a return ends each branch
+                test = put("    ", _truth, cond)
+                lines.append("    if %s:" % test)
+                lines.append("        return %s" % put("        ", to_python, val))
+        lines.append("    return %s" % put("    ", to_python, node[2]))
     else:
-        lines.append("    return %s" % to_python(node))
+        lines.append("    return %s" % put("    ", to_python, node))
     return lines
 
 
@@ -558,9 +677,14 @@ def _wrap(node, above):
 
 def _chain(node, kind):
     """Flatten a run of the same and/or into its items."""
-    if node[0] == kind:
-        return _chain(node[1], kind) + _chain(node[2], kind)
-    return [node]
+    out, todo = [], [node]
+    while todo:
+        n = todo.pop()
+        if n[0] == kind:
+            todo.extend(reversed(n[1:]))
+        else:
+            out.append(n)
+    return out
 
 
 def chain_parts(node):
@@ -638,8 +762,8 @@ def readable(node):
         return "%s %s %s" % (_wrap(node[2], 2), _RSYM[node[1]], _wrap(node[3], 2))
     if k == "arith":
         lv = _level(node)
-        right = readable(node[3]) if _level(node[3]) > lv else "(%s)" % readable(node[3])
-        return "%s %s %s" % (_wrap(node[2], lv - 1), _RSYM[node[1]], right)
+        rest = [readable(x) if _level(x) > lv else "(%s)" % readable(x) for x in node[3:]]
+        return (" %s " % _RSYM[node[1]]).join([_wrap(node[2], lv - 1)] + rest)
     if k == "in":
         return "%s %s %s" % (_wrap(node[1], 2), "is none of" if node[3] else "is one of",
                              ", ".join(readable(x) for x in node[2]))

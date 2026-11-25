@@ -24,7 +24,7 @@ Why the two answers differ:
 | `vba2py` | VBA text, or `.xlsm` / `.xls` / `vbaProject.bin` read without Excel | logic document per Sub (Markdown and HTML); Python on openpyxl; `xl_runtime.py`; the extracted VBA text | standard library only |
 | generated code | | | pandas (Alteryx side), openpyxl (VBA side, and Excel files on the Alteryx side) |
 
-Both tools only read their sources. 93 tests pass (`python run_tests.py`). Neither depends on a particular workflow or macro: `examples/` runs them on a sales report and a month-end macro, and a test runs the sales report's generated Python against a hand-computed result.
+Both tools only read their sources. 98 tests pass (`python run_tests.py`). Neither depends on a particular workflow or macro: `examples/` runs them on a sales report and a month-end macro, and a test runs the sales report's generated Python against a hand-computed result.
 
 Design decisions that matter when judging the result:
 

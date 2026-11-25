@@ -44,7 +44,7 @@ DESIGNER = {"Input": "Input Data", "Output": "Output Data", "DynamicInput": "Dyn
 OUT_MODE = {"Overwrite": "replaces the sheet", "RemoveFile": "replaces the whole file", "Append": "adds rows",
             "Create": "new sheet; stops if it exists"}
 HELPERS = [
-    "import glob, os, subprocess",
+    "import functools, glob, operator, os, subprocess",
     "import numpy as np",
     "import pandas as pd",
     "",
@@ -222,7 +222,7 @@ class Guide:
         self.tops = live_tops + list(dict.fromkeys(off))
         self.cnum = {k: n for n, k in enumerate(self.tops, 1)}
         self.number()
-        self.cards = {i: self.card(i) for i in self.order}
+        self.cards = {i: self.safe_card(i) for i in self.order}
         kinds = sorted({self.t[i].kind for i in self.order if self.t[i].status == "caveat" and STATUS.get(self.t[i].kind, ("", ""))[1]})
         self.assume = {k: n for n, k in enumerate(kinds, 1)}
 
@@ -459,6 +459,17 @@ class Guide:
                     args.append("skiprows=%d" % (line - 1))
             return ["%s = pd.read_excel(%s%s)%s" % (v, pv, "".join(", " + a for a in args), typed)]
         return ["%s = pd.DataFrame()  # pandas cannot read %s directly: export it to CSV or Excel and read that" % (v, path)]
+
+    def safe_card(self, i):
+        try:
+            return self.card(i)
+        except (RecursionError, MemoryError):
+            t = self.t[i]
+            if not any("nested too deeply" in p for p in t.problems):
+                t.problems.append("expression nested too deeply to describe")
+            return {"does": "Runs **%s**; its rule is nested too deeply to describe here." % t.kind,
+                    "rule": [], "reads": [], "writes": [], "py": ["# rule nested too deeply: write this step by hand"],
+                    "notes": []}
 
     # ---- one card
     def card(self, i):
