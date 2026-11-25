@@ -1,10 +1,11 @@
 """Migration guide: a workflow explained for an engineer who has never opened Designer.
 
-Top level: the containers, what each reads and writes, and which containers feed which (by a
-connection or through a file one writes and another reads). Inside a container: its branches, as
-Designer draws them, each labelled by its first tool's annotation or its filter test. Inside a
-branch: one card per tool with fixed fields (In, Does, Rule, Reads, Writes, Out, Python). Per
-container: a table of the columns it creates or changes and where each is used later. Repeated
+Top level: the containers, the files (with sheet and cells) each reads and writes, and which
+containers feed which (by a connection or through a file one writes and another reads). Inside a
+container: its branches, as Designer draws them, each labelled by its first tool's annotation or its
+filter test. Inside a branch: one table that reads like the canvas (step, tool, what it does,
+columns it creates or changes, next step), then each step's full rule and pandas form folded away.
+Per container: a table of the columns it creates or changes and where each is used later. Repeated
 sub-chains are described once. Deterministic; standard library only.
 """
 import fnmatch
@@ -30,6 +31,18 @@ AGG_WORDS = {"Count": "number of rows", "CountNonNull": "number of non-null [%s]
 DT_TOKENS = [("yyyy", "%Y"), ("yy", "%y"), ("Month", "%B"), ("MMMM", "%B"), ("Mon", "%b"), ("MMM", "%b"), ("MM", "%m"),
              ("M", "%m"), ("day", "%A"), ("dy", "%a"), ("dd", "%d"), ("d", "%d"), ("HH", "%H"), ("H", "%H"),
              ("hh", "%H"), ("mm", "%M"), ("ss", "%S")]
+DESIGNER = {"Input": "Input Data", "Output": "Output Data", "DynamicInput": "Dynamic Input", "Directory": "Directory",
+            "TextInput": "Text Input", "Select": "Select", "Formula": "Formula", "MultiFieldFormula": "Multi-Field Formula",
+            "MultiRowFormula": "Multi-Row Formula", "Filter": "Filter", "Join": "Join", "JoinMultiple": "Join Multiple",
+            "AppendFields": "Append Fields", "Union": "Union", "Summarize": "Summarize", "Sort": "Sort", "Unique": "Unique",
+            "Sample": "Sample", "RecordID": "Record ID", "Transpose": "Transpose", "CrossTab": "Cross Tab",
+            "FindReplace": "Find Replace", "DateTime": "DateTime", "Cleanse": "Data Cleansing", "Message": "Message",
+            "BlockUntilDone": "Block Until Done", "ParallelBlockUntilDone": "Parallel Block Until Done",
+            "RunCommand": "Run Command", "TextToColumns": "Text To Columns", "RegEx": "RegEx",
+            "GenerateRows": "Generate Rows", "Tile": "Tile", "DynamicRename": "Dynamic Rename",
+            "DynamicReplace": "Dynamic Replace", "XMLParse": "XML Parse", "JSONParse": "JSON Parse", "Imputation": "Imputation"}
+OUT_MODE = {"Overwrite": "replaces the sheet", "RemoveFile": "replaces the whole file", "Append": "adds rows",
+            "Create": "new sheet; stops if it exists"}
 HELPERS = [
     "import glob, subprocess",
     "import numpy as np",
@@ -46,6 +59,50 @@ HELPERS = [
     "    null = lambda x: x.isna() if isinstance(x, pd.Series) else x is None",
     "    return (fold(a) == fold(b)) | (null(a) & null(b))",
 ]
+
+
+def designer(kind):
+    """The tool's name on Designer's palette."""
+    if kind.startswith("Macro:"):
+        return "Macro " + kind[6:]
+    return DESIGNER.get(kind, re.sub(r"(?<=[a-z])(?=[A-Z])", " ", kind))
+
+
+def place(spec, options=None):
+    """'Book.xlsx|||`Sheet1$A1:D20`' -> (path, sheet, cells, first line read or None)."""
+    path, _, rest = str(spec).partition("|||")
+    rest = rest.strip().strip("`'\"")
+    m = re.fullmatch(r"(.*?)\$([A-Za-z]+\d+:[A-Za-z]+\d+)?", rest)
+    sheet, cells = (m.group(1).strip("'"), m.group(2) or "") if m else (rest, "")
+    line = str((options or {}).get("ImportLine", "") or "")
+    return path.strip(), sheet, cells, int(line) if line.isdigit() and int(line) > 1 else None
+
+
+def place_text(spec, options=None, bold=True):
+    """File name, sheet, cells and first line, for a table cell."""
+    path, sheet, cells, line = place(spec, options)
+    name = os.path.basename(path.replace("\\", "/")) or path
+    parts = [("**%s**" if bold else "`%s`") % (name if bold else path)]
+    if sheet:
+        parts.append("sheet **%s**" % sheet if not sheet.startswith("<") else "sheets " + sheet)
+    if cells:
+        parts.append("cells %s" % cells.upper())
+    if line:
+        parts.append("from line %d" % line)
+    opts = options or {}
+    if opts.get("HeaderRow") == "False" or opts.get("FirstRowData") == "True":
+        parts.append("no header row")
+    return " · ".join(parts)
+
+
+def _short(text, n=70):
+    return text if len(text) <= n else text[:n - 1].rstrip() + "…"
+
+
+def _list(names, n=6, bold=False):
+    names = list(dict.fromkeys(names))
+    fmt = "**%s**" if bold else "[%s]"
+    return ", ".join(fmt % x for x in names[:n]) + (" +%d more" % (len(names) - n) if len(names) > n else "")
 
 
 def _norm(path):
@@ -607,25 +664,21 @@ class Guide:
                    ("h", 2, "How to read this", "howto"),
                    ("steps", [{"text": t} for t in [
                        "**Containers** are the boxes Designer draws around groups of tools. They are numbered 1, 2, 3… "
-                       "in the order they run.",
+                       "in the order they run. Each starts with the files it reads and writes: file, sheet and cells.",
                        "**Branches**: inside a container, the rows flow along branches. A branch is a chain of tools with "
                        "no split or merge in it; it is named after its first tool's note or its filter test. Branch 3.4 "
                        "is the 4th branch of container 3.",
-                       "**Steps**: each tool is one step, numbered within its container (step 3.14). The `#1373` after "
-                       "it is the tool's ID in Designer.",
-                       "**Card fields:**",
-                       ]] + [{"text": "**In** — where the rows come from. A filter has outputs True and False; a join has "
-                                      "J (matched), L (left rows with no match) and R (right rows with no match)."},
-                             {"text": "**Does** — the step in one sentence."},
-                             {"text": "**Rule** — the full expression. `when … → …` lines are read top down; the first "
-                                      "true condition gives the value."},
-                             {"text": "**Reads** / **Writes** — the columns the step uses and the columns it creates or "
-                                      "changes (with the type Alteryx gives them)."},
-                             {"text": "**Out** — where the rows go next. An output that nothing uses drops its rows."},
-                             {"text": "**Python** — the same step in pandas. `df` is the table flowing through the branch; "
-                                      "other tables are named after the step that made them (`s2_7` is step 2.7's "
-                                      "output, `s2_7_true` its True output). Then the conversion status, and the name "
-                                      "of the exact function in the generated module."}], False),
+                       "**Steps**: each branch is one table, a row per tool as it sits on the canvas: step number (3.14 "
+                       "is step 14 of container 3), the tool's name in Designer and its note, what it does, the columns "
+                       "it adds or changes, and the next step. A filter's outputs are T (true) and F (false); a join's "
+                       "are J (matched), L (left rows with no match) and R (right rows with no match). An output that "
+                       "nothing uses is dropped.",
+                       "**Under each table**, one folded line per step holds its full rule (`when … → …` lines are read "
+                       "top down; the first true condition gives the value) and the same step in pandas: `df` is the "
+                       "table flowing through the branch, `s2_7` is step 2.7's output and `s2_7_true` its True output. "
+                       "It also says whether the generated code converts the step exactly and names its function. "
+                       "⚠ marks a step that is not converted.",
+                       ]], False),
                    ("p", "The pandas lines use two helpers, because Alteryx compares text ignoring case and treats null "
                          "and the empty string separately:"),
                    ("pre", HELPERS),
@@ -645,7 +698,8 @@ class Guide:
             n_tools = sum(1 for i in self.order if self.top_of[i] == key)
             fed = list(dict.fromkeys(self.cref(a) for a, b, _ in links if b == key))
             feeds = list(dict.fromkeys(self.cref(b) for a, b, _ in links if a == key))
-            base = lambda xs: ", ".join(dict.fromkeys(os.path.basename(_file(x)[0].replace("\\", "/")) for x in xs)) or "—"
+            base = lambda xs: ", ".join(dict.fromkeys(place_text(x, bold=False).replace("`" + place(x)[0] + "`", os.path.basename(
+                place(x)[0].replace("\\", "/"))) for x in xs)) or "—"
             rows.append([self.cref(key), "no (disabled)" if disabled else "yes", n_tools,
                          len({self.bid[s] for s in self.bid if self.top_of[L.stages[s][0]] == key}),
                          ", ".join([base([r for r in reads if not r.startswith(("files named", "folder "))])] * any(
@@ -697,10 +751,19 @@ class Guide:
                     n, ", ".join("%s %d" % kv for kv in kinds.most_common())))], False)
         reads, writes, runs, _ = self.files(key)
         reads, writes = list(dict.fromkeys(reads)), list(dict.fromkeys(writes))
-        inner = []
-        show = lambda r: r if r.startswith(("files named", "folder ")) else "`%s`" % r
-        facts = [{"text": "**Reads:** " + ("; ".join(show(r) for r in reads) or "—")},
-                 {"text": "**Writes:** " + ("; ".join("`%s`" % w for w in writes) or "—")}]
+        inner, facts = [], []
+        frows = []
+        for i in tools:
+            t = self.t[i]
+            if t.kind in ("Input", "Output", "DynamicInput"):
+                path, sheet, cells, line = place(t.ir["file"], t.ir["options"])
+                what = "reads each file named in [%s], like" % t.ir["field"] if t.kind == "DynamicInput" else \
+                    "reads" if t.kind == "Input" else "writes"
+                extra = [x for x in (("from line %d" % line) if line else "",
+                                     OUT_MODE.get(t.ir["options"].get("OutputOption", ""), "") if t.kind == "Output" else "") if x]
+                frows.append([self.ref(i), what, "`%s`" % path, sheet or "—", cells.upper() or "all", "; ".join(extra)])
+            elif t.kind == "Directory":
+                frows.append([self.ref(i), "lists", "`%s`" % t.ir["dir"], "—", "—", "files named `%s`" % t.ir["spec"]])
         if runs:
             facts.append({"text": "**Runs:** " + "; ".join("`%s`" % r for r in runs)})
         def grouped(pairs):
@@ -721,6 +784,8 @@ class Guide:
         off = [p for p, dis in self.wf.containers if dis and p[:1] == [key] and len(p) > 1]
         if off:
             facts.append({"text": "**Disabled inside (not run):** " + "; ".join(" > ".join(p[1:]) for p in off)})
+        if frows:
+            inner += [("p", "**Files:**"), ("table", ["Step", "", "File", "Sheet", "Cells", "Notes"], frows)]
         inner.append(("steps", facts, False))
 
         # branch map
@@ -840,37 +905,186 @@ class Guide:
                                                "%s–%s" % (self.sid[first], self.sid[last].split(".")[1]))
         body = [("p", "**In:** %s.  **Out:** %s." % (", ".join(dict.fromkeys(ins)) or "— (starts here)",
                                                      ", ".join(dict.fromkeys(outs)) or "— (ends here)"))]
-        body += [self.card_block(i) for i in ids]
+        body += self.step_table(ids)
         return ("details", 4, head, "b" + self.bid[s].replace(".", "-"), body, False)
 
-    def card_block(self, i):
-        t, c = self.t[i], self.cards[i]
-        title = "Step %s · %s · #%s%s" % (self.sid[i], t.kind.replace("Macro:", "Macro "), i,
-                                          " · “%s”" % t.note if t.note else "")
-        fields = [("In", self.ins_text(i), []), ("Does", c["does"] + ("  " + " ".join(c["notes"]) if c["notes"] else ""), [])]
-        if c["rule"]:
-            fields.append(("Rule", "", c["rule"]))
-        if c["reads"]:
-            fields.append(("Reads", ", ".join("[%s]" % x for x in c["reads"]), []))
-        if c["writes"]:
-            fields.append(("Writes", ", ".join("**%s**%s%s" % (n, " (%s)" % typ if typ else "", w[3] if len(w) > 3 else "")
-                                               for w in c["writes"] for n, typ in [w[:2]]), []))
-        fields.append(("Out", self.outs_text(i), []))
+    def cond_text(self, t, n=70):
+        ir = t.ir
+        if ir["mode"] == "simple":
+            return "[%s] %s %s" % (ir["field"], ir["operator"], ir["operand"])
+        e = ir["expr"]
+        return _short(expr.readable(e["ast"]) if e["ast"] is not None else e["text"], n)
+
+    def other(self, i, letter):
+        """References to the steps feeding input L/R/S of a two-input tool."""
+        return ", ".join(self.src(e) for e in self.wf.ins.get(i, []) if e[3][:1].upper() == letter) or "nothing connected"
+
+    def short(self, i):
+        """What the step does, in one plain line, the way a canvas reads."""
+        t, ir, k = self.t[i], self.t[i].ir, self.t[i].kind
+        used = set(self.outs(i))
+        if k == "Input":
+            return "reads " + place_text(ir["file"], ir["options"])
+        if k == "Output":
+            mode = OUT_MODE.get(ir["options"].get("OutputOption", ""), "")
+            return "writes " + place_text(ir["file"], ir["options"]) + (" (%s)" % mode if mode else "")
+        if k == "DynamicInput":
+            return "reads every file named in [%s] (like %s) and stacks them" % (ir["field"], place_text(ir["file"], ir["options"]))
+        if k == "Directory":
+            return "lists the files in `%s` named `%s`" % (ir["dir"], ir["spec"])
+        if k == "TextInput":
+            return "typed table: %d rows of %s" % (len(ir["rows"]), _list(ir["columns"], 4))
+        if k == "Select":
+            real = [f for f in ir["fields"] if f[0] != "*Unknown"]
+            ren = [(f, r) for f, sel, r, _, _ in real if sel and r and r != f]
+            drop = [f for f, sel, *_ in real if not sel]
+            retype = [(r or f, typ) for f, sel, r, typ, _ in real if sel and typ]
+            keep = [r or f for f, sel, r, _, _ in real if sel]
+            parts = []
+            if not ir["unknown"]:
+                parts.append("keeps only %s" % _list(keep, 5))
+            if ren:
+                parts.append("renames " + ", ".join("[%s] → [%s]" % p for p in ren[:3]) + (" +%d more" % (len(ren) - 3) if len(ren) > 3 else ""))
+            if drop and ir["unknown"]:
+                parts.append("drops " + _list(drop, 4))
+            if retype:
+                parts.append("sets the type of " + _list([n for n, _ in retype], 3))
+            return "; ".join(parts) or "passes the columns through unchanged"
+        if k == "Formula":
+            have, parts = self.input_columns(i), []
+            for name, _, _, e in ir["fields"]:
+                verb = "sets" if have is None else ("changes" if name.lower() in have else "adds")
+                n = 60 if len(ir["fields"]) == 1 else 45
+                one = expr.decision(e["ast"], WIDTH) if e["ast"] is not None else [e["text"]]
+                parts.append("%s **%s** = %s" % (verb, name, one[0]) if len(one) == 1 and len(one[0]) <= n else
+                             "%s **%s** (see rule)" % (verb, name))
+            return "; ".join(parts[:3]) + (" … (%d columns)" % len(parts) if len(parts) > 3 else "")
+        if k == "MultiFieldFormula":
+            return "applies one rule to each of %s" % _list(ir["fields"], 4)
+        if k == "Filter":
+            cond = self.cond_text(t)
+            if used >= {"True", "False"}:
+                return "splits the rows: %s → True, the rest → False" % cond
+            if used == {"False"}:
+                return "keeps the rows where this is not true: %s" % cond
+            return "keeps the rows where %s" % cond
+        if k == "Join":
+            keys = ", ".join("[%s]" % a if a == b else "[%s] = [%s]" % (a, b) for a, b in zip(ir["left"], ir["right"]))
+            return "matches with %s on %s" % (self.other(i, "R"), keys)
+        if k == "AppendFields":
+            return "adds the columns of %s to every row" % self.other(i, "S")
+        if k == "Union":
+            return "stacks the rows of %s (columns matched %s)" % (", ".join(self.src(e) for e in self.wf.ins.get(i, [])) or "—",
+                                                               "by name" if ir["mode"] == "ByName" else "by position")
+        if k == "Summarize":
+            group = [f for f, a, _, _ in ir["fields"] if a == "GroupBy"]
+            aggs = [r or "%s_%s" % (a, f) for f, a, r, _ in ir["fields"] if a != "GroupBy"]
+            return ("groups by %s; calculates %s" % (_list(group, 4), _list(aggs, 4, True)) if group else
+                    "one row of totals: %s" % _list(aggs, 4, True))
+        if k == "Sort":
+            return "sorts by " + ", ".join("[%s] %s" % (f, "↑" if a else "↓") for f, a in ir["fields"])
+        if k == "Unique":
+            return "keeps the first row for each %s" % _list(ir["fields"], 4)
+        if k == "Sample":
+            n, g = ir["n"], ir["group"]
+            what = {"First": "keeps the first %s rows", "Last": "keeps the last %s rows", "Skip": "skips the first %s rows",
+                    "Sample": "keeps 1 row in every %s"}.get(ir["mode"], ir["mode"] + " %s") % n
+            return what + (" of each %s" % _list(g, 3) if g else "")
+        if k == "RecordID":
+            return "numbers the rows into **%s**, from %s" % (ir["name"], ir["start"])
+        if k == "Transpose":
+            return "turns %s into rows of Name / Value; keeps %s" % (_list(ir["data"], 3), _list(ir["keys"], 3) or "nothing else")
+        if k == "FindReplace":
+            how = {"FindWhole": "equal to", "FindBegin": "at the start of", "FindAny": "anywhere in"}.get(ir["mode"], ir["mode"])
+            if ir["replace_mode"] == "Append":
+                return "looks up [%s] in %s (its [%s] %s [%s]) and adds %s" % (
+                    ir["find"], self.other(i, "S"), ir["search"], how, ir["find"], _list(ir["append"], 4, True))
+            return "replaces text in [%s] found in %s's [%s] with its [%s]" % (ir["find"], self.other(i, "S"), ir["search"],
+                                                                             ir["replace"])
+        if k == "DateTime":
+            return "**%s** = [%s] %s `%s`" % (ir["out"], ir["field"], "as text" if ir["to_string"] else "read as a date", ir["format"])
+        if k == "Cleanse":
+            opts = [CLEANSE_WORDS[o] for o, v in ir["options"].items() if v and o in CLEANSE_WORDS]
+            return "cleans %s: %s" % (_list(ir["fields"], 4), "; ".join(opts) or "no option ticked")
+        if k == "Message":
+            stop = ir["type"].lower().startswith("error")
+            return ("stops the run" if stop else "logs a message") + (" when a row passes the test" if ir["filter"] else "")
+        if k in BLOCKERS:
+            return "waits for all rows; what follows output 2 runs after output 1 is done"
+        if k == "RunCommand":
+            return "runs `%s`" % _short(" ".join(x for x in (t.cfg.findtext("Command", ""), t.cfg.findtext("CommandArguments", "")) if x), 60)
+        if k == "TextToColumns":
+            cfg = t.cfg
+            delim = cfg.find("Delimeters")
+            delim = delim.get("value") if delim is not None else cfg.findtext("Delimeters", "")
+            n = cfg.find("NumFields")
+            n = n.get("value") if n is not None else ""
+            return "splits [%s] at `%s`%s" % (cfg.findtext("Field", "?"), delim, " into %s columns" % n if n else "")
+        if k == "RegEx":
+            rx = t.cfg.find("RegExExpression")
+            return "regular expression `%s` on [%s] (%s)" % (_short(rx.get("value") if rx is not None else "?", 40),
+                                                            t.cfg.findtext("Field", "?"), t.cfg.findtext("Method", "?"))
+        return "settings in the step's details"
+
+    def new_cols(self, i):
+        w = [x[0] for x in self.cards[i]["writes"]]
+        if self.t[i].kind in SOURCES + ("DynamicInput",):
+            return "%d columns" % len(w) if w else ""
+        return _list(w, 5, True) if w else ""
+
+    def next_text(self, i):
+        t, groups = self.t[i], self.outs(i)
+        if t.kind in ("Filter", "Join", "Unique"):
+            names = {"Filter": ("True", "False"), "Join": ("Join", "Left", "Right"), "Unique": ("Unique", "Duplicates")}[t.kind]
+            short = {"True": "T", "False": "F", "Join": "J", "Left": "L", "Right": "R", "Unique": "U", "Duplicates": "D"}
+            used = ["%s → %s" % (short[a], ", ".join(self.ref(d) for d in groups[a])) for a in names if groups.get(a)]
+            dropped = [short[a] for a in names if not groups.get(a)]
+            return "; ".join(used + (["%s dropped" % ", ".join(dropped)] if dropped else []))
+        if len(groups) > 1:
+            return "; ".join("%s → %s" % (re.sub(r"\D+", "", a) or a, ", ".join(self.ref(d) for d in v))
+                             for a, v in sorted(groups.items()))
+        dst = [d for v in groups.values() for d in v]
+        if dst:
+            return ", ".join(self.ref(d) for d in dst)
+        return "—" if t.kind in ("Output", "RunCommand", "Message") else "ends (rows dropped)"
+
+    def status(self, i):
+        t = self.t[i]
         if t.status == "stub":
-            status = "**not converted**: " + "; ".join(t.reasons())
-        elif t.status == "caveat":
-            refs = ["[[a%d|A%d]]" % (self.assume[t.kind], self.assume[t.kind])] if t.kind in self.assume else []
-            status = "converted" + (", assuming " + refs[0] if refs else "") + \
-                ("; note: " + "; ".join(t.caveats) if t.caveats else "")
-        else:
-            status = "exact"
-        status += "" if t.kind in BLOCKERS else " · generated function `%s`" % self.fn[i]
+            return "NOT CONVERTED: " + "; ".join(t.reasons())
+        if t.status == "caveat":
+            text = "converted" + (", assuming A%d" % self.assume[t.kind] if t.kind in self.assume else "")
+            return text + ("; note: " + "; ".join(t.caveats) if t.caveats else "")
+        return "exact"
+
+    def fold(self, i):
+        """One folded line per step: status in the summary; the rule, then the pandas lines, below it."""
+        t, c = self.t[i], self.cards[i]
+        lines = list(c["rule"])
+        if t.kind in SOURCES + ("DynamicInput",) and c["writes"]:
+            lines += ["# columns: " + x for x in _wrap(", ".join("%s (%s)" % (n, typ) if typ else n
+                                                                  for n, typ, *_ in c["writes"]), 100)]
+        lines += ["# note: " + x for x in _wrap(" ".join(c["notes"]), 100)] if c["notes"] else []
         py = c["py"]
-        if len(py) == 1 and len(py[0]) <= 110 and "`" not in py[0]:
-            fields.append(("Python", "`%s` — %s" % (py[0], status), []))
-        else:
-            fields.append(("Python", status, py))
-        return ("card", "s" + self.sid[i].replace(".", "-"), title, fields)
+        status = self.status(i) + ("" if t.kind in BLOCKERS else " · `%s`" % self.fn[i])
+        summary = "**%s** %s #%s · %s" % (self.sid[i], designer(t.kind), i,
+                                         "**not converted**" + status[len("NOT CONVERTED"):] if t.status == "stub" else status)
+        if not lines and len(py) == 1 and len(py[0]) <= 100 and "`" not in py[0]:
+            return {"anchor": "r" + self.sid[i].replace(".", "-"), "summary": summary + " · `%s`" % py[0], "lines": []}
+        if lines and py:
+            lines.append("# pandas:")
+        return {"anchor": "r" + self.sid[i].replace(".", "-"), "summary": summary, "lines": lines + py}
+
+    def step_table(self, ids):
+        rows, anchors = [], []
+        for i in ids:
+            t = self.t[i]
+            tool = designer(t.kind) + (" “%s”" % _short(t.note, 40) if t.note else "")
+            rows.append(["[[r%s|%s]]" % (self.sid[i].replace(".", "-"), self.sid[i]), tool + (" ⚠" if t.status == "stub" else ""),
+                         self.short(i), self.new_cols(i), self.next_text(i)])
+            anchors.append("s" + self.sid[i].replace(".", "-"))
+        return [("table", ["Step", "Tool", "What it does", "New / changed columns", "Next"], rows, anchors),
+                ("folds", [self.fold(i) for i in ids])]
 
     def repeat(self, group):
         L = self.L
@@ -941,8 +1155,9 @@ class Guide:
             why = defaultdict(list)
             for t in stubs:
                 why[(t.kind, "; ".join(t.reasons()))].append(t)
-            items.append({"text": "**Not converted to Python** (%d steps): the generated code stops there with an error "
-                                  "until the step is written by hand." % len(stubs),
+            items.append({"text": "**Not converted to Python** (%d step%s): the generated code stops there with an error "
+                                  "until the step is written by hand, or until the test notebook gives it a stand-in."
+                                  % (len(stubs), "" if len(stubs) == 1 else "s"),
                           "children": [{"text": "%s, %d step%s (%s): %s" % (kind, len(ts), "" if len(ts) == 1 else "s",
                                                                            ", ".join(self.ref(t.id) for t in ts), reason)}
                                        for (kind, reason), ts in why.items()]})
@@ -957,7 +1172,7 @@ class Guide:
                                   ": Alteryx reads them left to right, so `a OR b AND c` means `(a OR b) AND c`. The rules "
                                   "show the brackets Alteryx applies; check that this was intended."})
         if self.assume:
-            items.append({"text": "**Alteryx behaviours the Python assumes** (cards refer to them as A1, A2…; settle them "
+            items.append({"text": "**Alteryx behaviours the Python assumes** (steps refer to them as A1, A2…; settle them "
                                   "once with the probe workflow):",
                           "children": [{"text": "**A%d** — %s: %s" % (n, k, STATUS[k][1]), "anchor": "a%d" % n}
                                        for k, n in self.assume.items()]})
@@ -968,6 +1183,11 @@ class Guide:
         if self.wf.cyclic:
             items.append({"text": "**Tools in a loop** (order unknown): " + " ".join("#" + i for i in self.wf.cyclic)})
         return [("h", 2, "Before relying on this", "check"), ("steps", items or [{"text": "Nothing to flag."}], False)]
+
+
+def _wrap(text, width):
+    import textwrap
+    return textwrap.wrap(text, width, break_on_hyphens=False, break_long_words=False) or [""]
 
 
 def _bkey(bid):

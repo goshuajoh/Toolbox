@@ -56,7 +56,7 @@ class ReconShaped(unittest.TestCase):
         self.assertFalse("def t103(" in code)                     # same rule as #203: one function
         self.assertTrue("#203 Formula   [Recon T+1]   also: #210 #218 #103 #110 #118" in code)
         self.assertTrue("# If [SIDE]=[SYSB_SIDE] then '' ELSE 'Discrepancy in Side' ENDIF" in code)
-        self.assertTrue("s['103'] = t203(" in code)
+        self.assertTrue("lambda s: t203(s['" in re.search(r"\('103', .*", code).group(0))
 
     def test_output_is_deterministic(self):
         again = convert(synth_recon.small())
@@ -86,12 +86,13 @@ class Size(unittest.TestCase):
         compile(code, "big_generated.py", "exec")
         tools = len(wb.items)
         self.assertGreater(tools, 900)
-        self.assertLess(len(spec), 15 * tools)
-        cards = sum(1 for x in spec if x.startswith("##### Step "))
+        self.assertLess(len(spec), 10 * tools)
+        cards = sum(1 for x in spec if re.match(r"- \*\*\d+\.\d+\*\* ", x))
         self.assertGreater(cards, 700)                              # every tool once; repeated copies are not printed
+        self.assertTrue(os.path.exists(os.path.join(tmp, "out", "big_test.ipynb")))
         self.assertEqual(sum(1 for x in spec if re.match(r"#### Branches .* — repeat of branch", x)), 3)
         self.assertTrue("copy 4 of 4" in "\n".join(listing))
-        print("\n[size] %d tools -> guide %d lines / %d chars, %d cards; tool listing %d lines; code %d lines / %d chars" % (
+        print("\n[size] %d tools -> guide %d lines / %d chars, %d steps; tool listing %d lines; code %d lines / %d chars" % (
             tools, len(spec), sum(len(x) + 1 for x in spec), cards, len(listing), code.count("\n"), len(code)))
 
 
