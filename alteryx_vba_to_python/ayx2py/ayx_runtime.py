@@ -298,6 +298,30 @@ def mod(a, b):
     return _arith(a, b, lambda x, y: int(math.fmod(int(x), int(y))))
 
 
+def chain(op, *xs):
+    """a + b + c + ... as one call: the same operator applied left to right, so a rule with thousands of terms
+    is not thousands of nested calls."""
+    fn = {"add": add, "sub": sub, "mul": mul, "div": div, "mod": mod}[op]
+    value = xs[0]
+    for x in xs[1:]:
+        value = fn(value, x)
+    return value
+
+
+def fold(value, *steps):
+    """value, "and", thunk, "or", thunk, "add", thunk ...: a long left-to-right chain as one flat call. AND/OR stop
+    early as Alteryx does (each thunk runs only when needed); arithmetic applies each operator in turn."""
+    for i in range(0, len(steps), 2):
+        op, nxt = steps[i], steps[i + 1]
+        if op == "and":
+            value = value and nxt()
+        elif op == "or":
+            value = value or nxt()
+        else:
+            value = {"add": add, "sub": sub, "mul": mul, "div": div, "mod": mod}[op](value, nxt())
+    return value
+
+
 def neg(a):
     return None if is_null(a) else -_num(a)
 

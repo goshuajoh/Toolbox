@@ -84,6 +84,18 @@ Options:
 
 About the pandas lines: `df` is the table flowing through the branch; other tables are named after the step that made them (`s2_7`, or `s2_7_true` for a True output); `src_…` is a file as the notebook's Load cell reads it, and `FOLDER` the workflow's folder. They are written to be pasted into the notebook, where every name they use exists. Where an expression has no honest pandas form (a `\G` regex, `FindString`, a multi-row reference), the line is a comment naming the generated function instead. The tests check that the one-liners compute what the converter's runtime computes for the common expressions, and that the notebook runs top to bottom with every line pasted in.
 
+### Long and deeply nested rules
+
+There is no length or depth limit. The converter does not recurse on Python's call stack (each recursive step is a generator driven by a loop), so a rule with 20,000 terms or 10,000 nesting levels needs neither a deeper stack nor a higher recursion limit. What it writes is flat too:
+
+- **AND/OR of one kind:** one test. A filter that ORs 5,000 `[Cpty] = "C…"` tests reads "[Cpty] is one of …" in the guide and is `df["Cpty"].str.casefold().isin([...])` in pandas.
+- **AND and OR mixed, or + and - mixed:** Alteryx reads these left to right: `a OR b AND c` is `(a OR b) AND c`. The guide lists such a rule top down, one term per line, each line joined to everything above it. The Python computes it a statement at a time (`v = a`, then `v = v or b`, then `v = v and c`), and stops early as Alteryx does. The pandas lines do the same with a mask (`t1 = …`, `t1 = t1 | …`, `t1 = t1 & …`).
+- **Nested IF, functions and brackets:**
+  - `IF … ELSE IF … ENDIF ENDIF` becomes one IF with ELSEIFs.
+  - Parts nested deeper than 50 levels move into small helper functions (Python) or variables (pandas), so Python never sees deep nesting.
+
+If the Python for a step still cannot be made, only that step's Python line says "not converted". Its row, what it does, its columns and its whole rule stay in the guide. The command line's larger stack and recursion limit remain only as a safety net.
+
 ### Size
 
 Measured on a synthetic 930-tool workflow with a production workflow's mix of tool kinds:
@@ -228,7 +240,7 @@ print(app.log)
 | `logicdoc.py` | Writes the documents (Markdown, HTML with folding sections, diagrams) | yes |
 | `examples/` | Two workflows and a macro, with their documents, and a pandas notebook template | no |
 | `probe/` | The workflow that checks the assumed Alteryx behaviours | once |
-| `tests/`, `run_tests.py` | 93 tests on synthetic input | optional |
+| `tests/`, `run_tests.py` | 99 tests on synthetic input | optional |
 | `REPORT.md` | Feasibility report | no |
 
 The tools use the standard library only (written and tested on Python 3.12). The code they generate needs pandas (Alteryx side) and openpyxl (VBA side, and Excel files on the Alteryx side).
@@ -239,4 +251,4 @@ The tools use the standard library only (written and tested on Python 3.12). The
 python run_tests.py
 ```
 
-93 tests, about 6 seconds. They need pandas and openpyxl, and no real data. `python examples/make_examples.py` and `python probe/make_probe.py` re-create the example and probe files; the tests check that they are current.
+99 tests, about 6 seconds. They need pandas and openpyxl, and no real data. `python examples/make_examples.py` and `python probe/make_probe.py` re-create the example and probe files; the tests check that they are current.

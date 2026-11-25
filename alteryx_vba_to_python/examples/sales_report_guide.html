@@ -48,7 +48,7 @@ details.fold>pre{margin:.2em 0 .6em 1.2em}div.fold{padding:2px 6px 2px 22px;font
 </li>
 </ul>
 <p>The pandas lines use two helpers, because Alteryx compares text ignoring case and treats null and the empty string separately:</p>
-<pre>import glob, os, subprocess
+<pre>import functools, glob, operator, os, subprocess
 import numpy as np
 import pandas as pd
 

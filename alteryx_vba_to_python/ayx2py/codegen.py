@@ -110,9 +110,36 @@ def tool_code(t, name):
     return pre, ["def %s(%s):" % (name, sig)] + body
 
 
+def check_compiles(wf):
+    """Generate and compile each converted tool's function once. A tool whose rule is nested too deeply for Python
+    (or for this converter) becomes not converted, with the reason, and the rest of the workflow carries on."""
+    if getattr(wf, "compile_checked", False):
+        return
+    wf.compile_checked = True
+    for i in wf.ordered():
+        t = wf.tools[i]
+        if t.status == "stub" or t.kind in ("ParallelBlockUntilDone", "BlockUntilDone"):
+            continue
+        try:
+            pre, body = tool_code(t, "t_check")
+            compile("\n".join(["import ayx_runtime as rt"] + pre + body), "<tool %s>" % i, "exec")
+        except (RecursionError, MemoryError, SyntaxError, ValueError) as e:
+            texts = [f[3]["text"] for f in t.ir.get("fields", []) if isinstance(f, tuple) and len(f) == 4 and
+                     isinstance(f[3], dict)] + [x["text"] for x in (t.ir.get("expr"), t.ir.get("filter")) if isinstance(x, dict)]
+            levels = max([expr.text_nesting(x) for x in texts] or [0])
+            t.problems.append("expression nested too deeply (%d levels)" % levels if levels > 100 else
+                              "the generated Python does not compile: %s" % type(e).__name__)
+
+
+def deep_tools(wf):
+    """Tools left unconverted because a rule nests too deeply: [(tool id, reason)]."""
+    return [(i, p) for i in wf.ordered() for p in wf.tools[i].problems if "nested too deeply" in p]
+
+
 def function_names(wf):
     """-> ({tool id: name of its function in the generated module}, {signature: [tool ids]}).
     Tools with identical settings share one function, named after the first of them."""
+    check_compiles(wf)
     by_sig, name_of = {}, {}
     for i in wf.ordered():
         s = signature(wf.tools[i]) + ("|" + "|".join(wf.tools[i].problems) if wf.tools[i].problems else "")

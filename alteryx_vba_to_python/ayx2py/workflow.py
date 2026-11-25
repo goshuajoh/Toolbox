@@ -264,18 +264,20 @@ def _expr(tool, text, label):
     text = text or ""
     try:
         ast = expr.parse(text)
+        for f in expr.functions(ast):
+            if f in expr.VOLATILE:
+                tool.caveats.append("%s uses %s(): the result depends on the run date" % (label, f))
+        for n in expr.precedence_notes(text):
+            tool.caveats.append("%s: %s" % (label, n))
+        for node in expr.walk(ast):
+            if node[0] == "call" and node[1].startswith("regex_") and node[2][1][0] != "str":
+                tool.caveats.append("%s: regular expression is built at run time; its syntax is not checked here" % label)
+        return {"text": flat(text), "ast": ast, "canon": expr.canon(ast)}
     except expr.ExprError as e:
         tool.problems.append("%s: %s" % (label, e))
-        return {"text": flat(text), "ast": None, "canon": flat(text)}
-    for f in expr.functions(ast):
-        if f in expr.VOLATILE:
-            tool.caveats.append("%s uses %s(): the result depends on the run date" % (label, f))
-    for n in expr.precedence_notes(text):
-        tool.caveats.append("%s: %s" % (label, n))
-    for node in expr.walk(ast):
-        if node[0] == "call" and node[1].startswith("regex_") and node[2][1][0] != "str":
-            tool.caveats.append("%s: regular expression is built at run time; its syntax is not checked here" % label)
-    return {"text": flat(text), "ast": ast, "canon": expr.canon(ast)}
+    except (RecursionError, MemoryError):
+        tool.problems.append("%s: %s" % (label, expr.too_deep(text)))
+    return {"text": flat(text), "ast": None, "canon": flat(text)}
 
 
 def _file(cfg):
