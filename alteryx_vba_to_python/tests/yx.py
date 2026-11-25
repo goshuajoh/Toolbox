@@ -16,7 +16,8 @@ GUI = {"Input": "AlteryxBasePluginsGui.DbFileInput.DbFileInput", "Output": "Alte
        "Directory": "AlteryxBasePluginsGui.Directory.Directory",
        "DynamicInput": "AlteryxBasePluginsGui.DynamicInput.DynamicInput",
        "Browse": "AlteryxBasePluginsGui.BrowseV2.BrowseV2", "TextBox": "AlteryxGuiToolkit.TextBox.TextBox",
-       "MultiRowFormula": "AlteryxBasePluginsGui.MultiRowFormula.MultiRowFormula"}
+       "MultiRowFormula": "AlteryxBasePluginsGui.MultiRowFormula.MultiRowFormula",
+       "RegEx": "AlteryxBasePluginsGui.RegEx.RegEx"}
 
 
 def _sel(fields):
@@ -40,6 +41,8 @@ class WB:
         self.boxes[tuple(path)] = (tid, disabled)
 
     def node(self, tid, kind, cfg, box=(), meta=None, macro=None, note=""):
+        note = note or getattr(self, "notes", {}).get(tid, "")
+        meta = meta or getattr(self, "metas", {}).get(tid)
         gui = '<GuiSettings Plugin=%s><Position x="54" y="54" /></GuiSettings>' % q(GUI[kind]) if not macro else \
             '<GuiSettings><Position x="54" y="54" /></GuiSettings>'
         m = ""
