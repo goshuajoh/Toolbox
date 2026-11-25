@@ -6,7 +6,7 @@ Written 21 Nov 2026. Everything measured below was measured on **synthetic** wor
 
 | | Outcome 1: generate Python directly | Outcome 2: extract the logic for a person or a model | Recommendation |
 |---|---|---|---|
-| **Alteryx** | Works for every data tool in the reference workflow's mix. On a 930-tool synthetic workflow with the reference workflow's tool counts, 857 of the 872 tools that run became Python and 15 (all Run Command) became stubs that raise. | Works. The same 930 tools give a 3,625-line logic document: stages of plain-language steps, every rule in full, repeats described once. | **Use both, with the generated code as the baseline.** Generate the code, settle the open Alteryx behaviours with the probe (section 5), then prove parity against a real run. Use the logic document to review, and to write cleaner code later if wanted. |
+| **Alteryx** | Works for every data tool in the reference workflow's mix. On a 930-tool synthetic workflow with the reference workflow's tool counts, 857 of the 872 tools that run became Python and 15 (all Run Command) became stubs that raise. | Works. The same 930 tools give a migration guide: containers, branches and one card per tool (In, Does, Rule, Reads, Writes, Out, a pandas one-liner), a columns table per container, repeats described once. | **Use both, with the generated code as the baseline.** Generate the code, settle the open Alteryx behaviours with the probe (section 5), then prove parity against a real run. Use the migration guide to review, and to write cleaner code later if wanted. |
 | **VBA** | Works for the mechanical idioms: 208 of 212 statements in macros written in the style of real recorded macros. The result imitates Excel statement by statement, on a library that is not Excel. | Works. 355 lines of VBA give a 233-line logic document with every Select/Activate chain resolved to a workbook, sheet and range. | **Outcome 2.** Implement from the logic document. Keep the generated code as a cross-check to run on copies of the workbooks, not as the code to maintain. |
 
 Why the two answers differ:
@@ -20,11 +20,11 @@ Why the two answers differ:
 
 | Tool | Reads | Writes | Needs |
 |---|---|---|---|
-| `ayx2py` | `.yxmd`, or the same XML saved as `.txt` | logic document (Markdown and HTML with a stage diagram); Python module with one function per tool; `ayx_runtime.py`; optional tool listing | standard library only |
+| `ayx2py` | `.yxmd`, or the same XML saved as `.txt` | migration guide (Markdown, and HTML with folding sections and diagrams); Python module with one function per tool; `ayx_runtime.py`; optional stage summary and tool listing | standard library only |
 | `vba2py` | VBA text, or `.xlsm` / `.xls` / `vbaProject.bin` read without Excel | logic document per Sub (Markdown and HTML); Python on openpyxl; `xl_runtime.py`; the extracted VBA text | standard library only |
 | generated code | | | pandas (Alteryx side), openpyxl (VBA side, and Excel files on the Alteryx side) |
 
-Both tools only read their sources. 73 tests pass (`python run_tests.py`). Neither depends on a particular workflow or macro: `examples/` runs them on a sales report and a month-end macro, and a test runs the sales report's generated Python against a hand-computed result.
+Both tools only read their sources. 82 tests pass (`python run_tests.py`). Neither depends on a particular workflow or macro: `examples/` runs them on a sales report and a month-end macro, and a test runs the sales report's generated Python against a hand-computed result.
 
 Design decisions that matter when judging the result:
 
@@ -45,15 +45,15 @@ Counts are those of the reference workflow, a 938-tool production workflow. "Exa
 | Filter (83) | exact | Custom and basic mode. In basic mode the operand is read as the field's type. A null result goes to False. |
 | Select (75) | exact for rename, drop, reorder, `*Unknown` | Type changes follow assumed rules for bad numbers and rounding (section 5). |
 | Summarize (64) | caveat | Group By, Sum, Count, Count Non Null, Count Null, Count Distinct, Min, Max, First, Last, Avg, Median, Concat. Other actions become stubs. Not documented: output order, Sum of only nulls, Concat of nulls. |
-| Find Replace (51) | caveat | Implemented as what it is: a substring match of each Source value inside the Target field, in Source order, case-sensitive unless ticked. It equals a join only when no searched value occurs inside another; every "any part of field" use is listed in the logic document. Which Source row wins on several matches is not documented. |
+| Find Replace (51) | caveat | Implemented as what it is: a substring match of each Source value inside the Target field, in Source order, case-sensitive unless ticked. It equals a join only when no searched value occurs inside another; every "any part of field" use is listed in the migration guide. Which Source row wins on several matches is not documented. |
 | Input Data (47) | caveat | csv, txt, xlsx, xlsm. Column types come from Alteryx's file driver; the types recorded in the workflow are applied when present. `.yxdb` and databases become stubs. |
-| CReW Parallel Block Until Done (43) | caveat | Data passes through. The run order it enforces becomes ordering constraints on `run()` and is listed in the logic document. Anchor names are inferred from the connections. |
+| CReW Parallel Block Until Done (43) | caveat | Data passes through. The run order it enforces becomes ordering constraints on `run()` and is listed in the migration guide. Anchor names are inferred from the connections. |
 | Append Fields (34) | exact | Every Target row with every Source row, with the embedded Select. |
 | Union (33) | caveat | By name and by position, with the configured order. Not documented: the type when inputs disagree (assumed: any string makes it a string, numbers are rewritten as text) and the order without an explicit setting (assumed: connection order). Manual mapping becomes a stub. |
 | Multi-Field Formula (33) | exact | `[_CurrentField_]`, `[_CurrentFieldName_]`, copy-output and change-type options. |
 | Output Data (22) | caveat | csv and xlsx values and types. Cell formats that Alteryx writes are not reproduced. |
 | Transpose (22) | exact | Mixed types in the data fields become text, as with Union. |
-| Run Command (15) | **no** | It runs another program. Its full command line is printed in the logic document and the generated stub raises. These are where the VBA macros are called from: the join between the two halves of this study. |
+| Run Command (15) | **no** | It runs another program. Its full command line is printed in the migration guide and the generated stub raises. These are where the VBA macros are called from: the join between the two halves of this study. |
 | Unique (12) | caveat | First row per key, case-sensitive. Output order assumed to be input order. |
 | Dynamic Input (12) | caveat | "Read a list of data sources" with a full path. Other modes become stubs. |
 | Join (8) | caveat | Three outputs, embedded Select with `Left_` / `Right_` names, case-sensitive keys, string joined to number refused. Not documented: output order (assumed sorted by key) and whether null matches null (assumed yes; one source says no). |
@@ -66,7 +66,7 @@ Counts are those of the reference workflow, a 938-tool production workflow. "Exa
 | DateTime (1) | caveat | English formats such as `dd/MM/yyyy`. Output type for a date-only format assumed to be Date. |
 | Text Input | exact | With the recorded types. |
 | Tool Container, disabled | exact | Tools inside are left out and listed. A Union simply loses that input; any other tool that loses an input becomes a stub. |
-| Browse, Text Box (58) | n/a | Not run. Notes on tools are kept in the logic document. |
+| Browse, Text Box (58) | n/a | Not run. Notes on tools are kept in the migration guide. |
 | Other macros (`.yxmc`) | **no** | The macro's logic is in another file. A `.yxmc` is the same XML, so it can be run through `ayx2py` separately, but wiring it in is manual. |
 | Multi-Row Formula, Cross Tab, Text To Columns, RegEx tool, Tile, Running Total, Generate Rows, Dynamic Rename | not in this prototype | Mechanical in principle. Each is a stub today. None is in the reference workflow. |
 | Python, R, spatial, reporting, in-database, predictive tools | **no** | Not table-to-table rules that can be read from the XML. |
@@ -76,7 +76,7 @@ Counts are those of the reference workflow, a 938-tool production workflow. "Exa
 | Construct | Translation | Status |
 |---|---|---|
 | `IF c THEN a ELSEIF … ELSE b ENDIF`, `IIF` | Python `if` / `elif` / `return`; nested ones become conditional expressions. Only the chosen branch is evaluated. | exact |
-| `AND` `OR` `&&` `\|\|` | **Same rank, grouped left to right**, as Alteryx documents: `a OR b AND c` is `(a OR b) AND c`. Every expression where this changes the meaning is listed in the logic document. `--and-before-or` switches to the conventional rule. | documented, surprising: check with probe item P08 |
+| `AND` `OR` `&&` `\|\|` | **Same rank, grouped left to right**, as Alteryx documents: `a OR b AND c` is `(a OR b) AND c`. Every expression where this changes the meaning is listed in the migration guide. `--and-before-or` switches to the conventional rule. | documented, surprising: check with probe item P08 |
 | `NOT`, `!` | Ranked with `<` `>`, above `=`, as documented: `!a = b` is `(!a) = b`. Flagged where it matters. | documented |
 | `=` `!=` `<` `>` on strings | Ignore case. Documented, and confirmed on real output (`'P'` matched `p`). | exact |
 | `=` between a string and a number | Raises. Alteryx rejects the expression. | exact |
@@ -173,19 +173,19 @@ A standard-library reader is practical and is implemented in `vba2py/ovba.py` (a
 A person or a model must decide these; no converter can.
 
 1. **Which Alteryx behaviours are true.** The 15 or so assumed items in section 5. One probe run in Designer settles them.
-2. **Whether the workflow is right.** The converter reproduces the workflow, including its quirks: `FindAny` used as a join, `Last` meaning stream order, a formula computed and never used. The logic document makes them visible (it lists every substring match and every precedence-sensitive expression); choosing to keep or fix each one is the migration decision that a hand-written design document tends to get wrong.
+2. **Whether the workflow is right.** The converter reproduces the workflow, including its quirks: `FindAny` used as a join, `Last` meaning stream order, a formula computed and never used. The migration guide makes them visible (it lists every substring match and every precedence-sensitive expression); choosing to keep or fix each one is the migration decision that a hand-written design document tends to get wrong.
 3. **Inputs as Alteryx saw them.** Column types and blank-versus-null come from Alteryx's file drivers. The recorded types remove most of this; the rest shows up as type-mismatch errors on the first real run.
 4. **Everything behind a Run Command.** In the reference workflow that is the VBA.
 5. **Excel itself**: calculation beyond the evaluator's list, AutoFit, `Find`, what a save keeps, regional date parsing.
 6. **Other programs**: Outlook, shared drives, anything interactive.
-7. **What the code should look like.** The generated Alteryx module is faithful and flat: one function per tool, 7,800 lines for 930 tools. Whether to keep it as is, or to write a smaller hand-structured version from the logic document and use the generated one as the reference to compare against, is a choice.
+7. **What the code should look like.** The generated Alteryx module is faithful and flat: one function per tool, 7,800 lines for 930 tools. Whether to keep it as is, or to write a smaller hand-structured version from the migration guide and use the generated one as the reference to compare against, is a choice.
 
 ## 9. Verified only on synthetic input
 
 - **Every Alteryx XML layout.** The synthetic workflows follow what an earlier extraction script reads (it ran on a real workflow) for Formula, Filter, Select, Join, Append Fields, Sort, Unique, Summarize, Transpose, Multi-Field Formula, Find Replace, Union, Text Input, Tool Container and the recorded field types. The layouts of Sample, Record ID, DateTime, Directory, Dynamic Input, Input and Output options, Message, the Cleanse values and the Parallel Block Until Done anchor names are from memory. If a required setting is not where expected, the tool becomes a stub with a message; an optional setting that is laid out differently could be missed silently. On the first real run, compare a few tools of each kind against the workflow's XML.
 - **Every expected result.** Expected frames were computed by hand from the rules in sections 3 to 5. A wrong belief about Alteryx would pass these tests. Only the probe and a parity run can catch that.
-- **The factoring of repeated sub-chains.** It found the tree repeated four times in the synthetic workflow (47 tools, 4 copies). Real copies that differ in one setting will split into smaller blocks around the difference; the logic document then shows more stages, never fewer rules.
-- **Sizes.** The 3,625 lines assume that only the scenario tree repeats and every other rule is unique and of moderate length. A simpler extractor needed 1,114 lines for one of the reference workflow's four containers, without its Select tools, so expect 3,500 to 6,000 lines of logic document for a workflow of that size; the stage map is the table of contents.
+- **The factoring of repeated sub-chains.** It found the tree repeated four times in the synthetic workflow (47 tools, 4 copies). Real copies that differ in one setting will split into smaller blocks around the difference; the migration guide then shows more branches, never fewer rules.
+- **Sizes.** The sizes assume that only the scenario tree repeats and every other rule is unique and of moderate length. A simpler extractor needed 1,114 lines for one of the reference workflow's four containers, without its Select tools, The migration guide for the same 930 tools is 11,724 Markdown lines (731 cards); read it as the HTML page, where it folds.
 - **The VBA tools**, against macros written in the style of real recorded macros, and workbooks built with openpyxl. The conditional formats were read back with openpyxl, not opened in Excel.
 - **The `.xlsm` reader**, as described in section 7.
 - **Windows.** Paths, encodings and console output were written for Windows and Python 3.12 but run only on macOS here.
@@ -195,6 +195,6 @@ A person or a model must decide these; no converter can.
 
 1. Run `python run_tests.py`. It needs no real data.
 2. Open `probe/semantics_probe.yxmd` in Designer, run it, compare with the expected file. Change the switches that differ.
-3. Run `ayx2py` on the real workflow. Read the logic document's summary, stage map and last section (what to check).
+3. Run `ayx2py` on the real workflow. Open the migration guide's HTML page: the container table, then each container's branches, and the last section (what to check).
 4. Run `vba2py` on `Configuration.xlsm`.
 5. Run the generated module on one day's inputs with `write=False` and compare `ctx.outputs` with that day's real output files.

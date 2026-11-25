@@ -8,6 +8,9 @@ Blocks:
     ("table", header, rows)             table; cells are text
     ("pre", lines)                      preformatted lines
     ("diagram", nodes, edges)           drawn in HTML only; see flow_svg()
+    ("details", level, summary, anchor, blocks, open)
+                                        Markdown: a heading and its blocks; HTML: a collapsible section
+    ("card", anchor, title, fields)     a step; fields = [(label, text, [preformatted lines])]
 Inline text may use **bold**, `code` and [[anchor|label]] links.
 """
 import html
@@ -38,7 +41,7 @@ def _md_steps(items, ordered, indent=""):
     return out
 
 
-def to_markdown(blocks):
+def _md_blocks(blocks):
     out = []
     for b in blocks:
         k = b[0]
@@ -56,7 +59,20 @@ def to_markdown(blocks):
             out.append("")
         elif k == "pre":
             out += ["    " + line for line in b[1]] + [""]
-    text = "\n".join(out).strip("\n") + "\n"
+        elif k == "details":
+            out += ["", "#" * b[1] + " " + _md_inline(b[2]), ""] + _md_blocks(b[4])
+        elif k == "card":
+            out += ["", "#" * 5 + " " + _md_inline(b[2]), ""]
+            for label, text, pre in b[3]:
+                out.append("- **%s:** %s" % (label, _md_inline(text)) if label else "- " + _md_inline(text))
+                if pre:
+                    out += [""] + ["      " + line for line in pre] + [""]
+            out.append("")
+    return out
+
+
+def to_markdown(blocks):
+    text = "\n".join(_md_blocks(blocks)).strip("\n") + "\n"
     return re.sub(r"\n{3,}", "\n\n", text)
 
 
@@ -72,7 +88,7 @@ def _h_steps(items, ordered):
     tag = "ol" if ordered else "ul"
     out = ["<%s>" % tag]
     for it in items:
-        out.append("<li>" + _h_inline(it["text"]))
+        out.append(("<li id=\"%s\">" % it["anchor"] if it.get("anchor") else "<li>") + _h_inline(it["text"]))
         if it.get("pre"):
             out.append('<pre class="rule">%s</pre>' % html.escape("\n".join(it["pre"]), quote=False))
         if it.get("children"):
@@ -98,6 +114,17 @@ th,td{border:1px solid var(--line);padding:4px 8px;text-align:left;vertical-alig
 section.stage{background:var(--soft);border-left:3px solid var(--line);padding:0 0 0 14px;margin:1em 0}
 .diagram{overflow:auto;border:1px solid var(--line);border-radius:6px;background:var(--soft);margin:.6em 0 1.2em}
 .diagram svg{display:block}.warn{color:var(--warn)}
+details{margin:.5em 0}details>summary{cursor:pointer;list-style:none;padding:6px 10px;border-radius:6px;background:var(--box)}
+details>summary::-webkit-details-marker{display:none}details>summary::before{content:"▸ ";color:var(--muted)}
+details[open]>summary::before{content:"▾ "}details>.inner{padding:4px 0 4px 14px;border-left:2px solid var(--line);margin-left:6px}
+summary .h2{font-size:1.25em;font-weight:650}summary .h3{font-size:1.08em;font-weight:600}summary .h4{font-weight:600}
+details.d2{margin-top:1.4em}
+.card{border:1px solid var(--line);border-radius:8px;margin:.7em 0;background:var(--soft);scroll-margin-top:12px}
+.card-h{font-weight:600;padding:6px 10px;border-bottom:1px solid var(--line);background:var(--box);border-radius:8px 8px 0 0}
+.card dl{display:grid;grid-template-columns:7.5em 1fr;gap:3px 10px;margin:0;padding:8px 10px}
+.card dt{color:var(--muted);font-size:13px;padding-top:2px}.card dd{margin:0;min-width:0}
+.card pre.rule{margin:.2em 0}.card dd code{white-space:pre-wrap;word-break:break-word}
+:target{outline:2px solid var(--accent);outline-offset:2px}
 """
 
 
@@ -161,11 +188,8 @@ def flow_svg(nodes, edges, box_w=230, box_h=42, gap_x=26, gap_y=46):
     return "\n".join(out + ["</svg>"])
 
 
-def to_html(blocks, title):
-    out = ["<!doctype html>", '<html lang="en"><head><meta charset="utf-8">',
-           '<meta name="viewport" content="width=device-width, initial-scale=1">',
-           "<title>%s</title><style>%s</style></head><body><main>" % (html.escape(title), CSS)]
-    open_section = False
+def _h_blocks(blocks):
+    out, open_section = [], False
     for b in blocks:
         k = b[0]
         if k == "h":
@@ -190,6 +214,29 @@ def to_html(blocks, title):
             out.append("<pre>%s</pre>" % html.escape("\n".join(b[1]), quote=False))
         elif k == "diagram" and b[1]:
             out.append('<div class="diagram">%s</div>' % flow_svg(b[1], b[2]))
+        elif k == "details":
+            level, summary, anchor, inner, is_open = b[1], b[2], b[3], b[4], b[5]
+            if open_section:
+                out.append("</section>")
+                open_section = False
+            out.append('<details class="d%d"%s%s><summary><span class="h%d">%s</span></summary><div class="inner">' % (
+                level, ' id="%s"' % anchor if anchor else "", " open" if is_open else "", level, _h_inline(summary)))
+            out += _h_blocks(inner)
+            out.append("</div></details>")
+        elif k == "card":
+            out.append('<div class="card"%s><div class="card-h">%s</div><dl>' % (
+                ' id="%s"' % b[1] if b[1] else "", _h_inline(b[2])))
+            for label, text, pre in b[3]:
+                body = _h_inline(text) + ('<pre class="rule">%s</pre>' % html.escape("\n".join(pre), quote=False) if pre else "")
+                out.append("<dt>%s</dt><dd>%s</dd>" % (html.escape(label), body))
+            out.append("</dl></div>")
     if open_section:
         out.append("</section>")
-    return "\n".join(out + ["</main></body></html>"]) + "\n"
+    return out
+
+
+def to_html(blocks, title):
+    out = ["<!doctype html>", '<html lang="en"><head><meta charset="utf-8">',
+           '<meta name="viewport" content="width=device-width, initial-scale=1">',
+           "<title>%s</title><style>%s</style></head><body><main>" % (html.escape(title), CSS)]
+    return "\n".join(out + _h_blocks(blocks) + ["</main></body></html>"]) + "\n"
