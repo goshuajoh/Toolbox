@@ -104,18 +104,18 @@ On Windows, with Python 3.12 and VS Code (with its Jupyter extension). Once:
 python -m pip install pandas openpyxl ipykernel
 ```
 
-Generate the code and the notebook into a new folder (here the workflow is `C:\work\thor\Thor.yxmd`):
+Generate the code and the notebook into a new folder (here the workflow is `C:\work\flow\Workflow.yxmd`):
 
 ```bash
 cd C:\path\to\Toolbox\alteryx_vba_to_python
 ```
 
 ```bash
-python -m ayx2py C:\work\thor\Thor.yxmd C:\work\thor_py --name thor
+python -m ayx2py C:\work\flow\Workflow.yxmd C:\work\flow_py --name flow
 ```
 
 ```bash
-code C:\work\thor_py\thor_test.ipynb
+code C:\work\flow_py\flow_test.ipynb
 ```
 
 In VS Code, pick the Python 3.12 kernel, then:
@@ -133,7 +133,7 @@ In VS Code, pick the Python 3.12 kernel, then:
 3. `look("2.16")` shows a step's columns (with their Alteryx types) and first rows; `look("2.16", output="False")` shows a filter's other output. Step numbers are the guide's; a tool ID works too.
 4. The last cell compares each Output step with the file the workflow wrote: `compare("2.28", r"C:\legacy\Dataset audit.xlsx", "Issues")`. It prints the row and column counts, columns only on one side, and the differing cells. Text is compared ignoring case (as Alteryx does), null and "" count as the same, and numbers may differ by a relative 1e-6. `key=["ID"]` lines rows up by key columns instead of by position.
 
-If the notebook cannot import `thor_generated`, set `CODE_DIR` in the settings to the output folder.
+If the notebook cannot import `flow_generated`, set `CODE_DIR` in the settings to the output folder.
 
 ### Running the generated code
 

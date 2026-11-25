@@ -202,7 +202,7 @@ class StepRunner(unittest.TestCase):
 
 
 class Size(unittest.TestCase):
-    def test_thor_sized_module_and_notebook(self):
+    def test_large_module_and_notebook(self):
         d = tempfile.mkdtemp(prefix="big_")
         wb = synth_recon.big(938)
         mod = convert(wb, d)[1]
