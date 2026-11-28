@@ -1,5 +1,5 @@
-"""The migration guide: containers, branches in flow order, step cards, columns tables, links, and
-pandas one-liners that compute what the converter's runtime computes."""
+"""The migration guide: containers, one story per output in run order, every step once with its rule and pandas,
+columns tables, links, and pandas one-liners that compute what the converter's runtime computes."""
 import os
 import re
 import sys
@@ -36,46 +36,43 @@ class DatasetAudit(unittest.TestCase):
 
     def test_containers_overview(self):
         md = self.md
-        self.assertTrue("| 1. Import and consolidate | yes | 4 | 1 | datasets_export.csv | Consolidated Datasets.xlsx · sheet "
-                        "**Datasets** | — | 2. Dataset audit |" in md)
-        self.assertTrue("| 3. Old checks | no: disabled in the saved file (documented anyway) | 2 | 1 | old_rules.csv | — | — | — |"
-                        in md)
-        self.assertTrue("3 containers, 1 disabled in the saved file (documented anyway), 34 tools" in md)
-        self.assertTrue("| 1.4 | saves | `Output\\Consolidated Datasets.xlsx` | Datasets | all | replaces the sheet |" in md)
-        self.assertTrue("| 2.6 | opens each file listed in [Source], like | `Output\\template.xlsx` | Datasets | all |  |" in md)
-        self.assertTrue("- **Fed by:** 1. Import and consolidate (file `Output\\Consolidated Datasets.xlsx`)" in md)
-        self.assertTrue("- **Containers inside:** Checks" in md)
-        self.assertTrue("- **Disabled in the saved file.** Alteryx skips this container until someone enables it" in md)
-        self.assertTrue("| 3.2 | Formula | fills column **Old** = 1 | **Old** |" in md)        # documented all the same
+        self.assertTrue("3 containers, 1 disabled in the saved file (documented anyway), 34 tools, 2 outputs." in md)
+        self.assertTrue("### 1. Import and consolidate\n\nIt opens 1 source, calculates columns and saves 1 table, in 4 "
+                        "steps.\n\n- **Opens:** `datasets_export.csv`\n- **Saves:** `Consolidated Datasets.xlsx` › "
+                        "Datasets\n- **Used by:** container 2" in md, md[:3000])
+        self.assertTrue("It opens `Consolidated Datasets.xlsx`, which container 1 saves." in md)
+        self.assertTrue("- **Opens:** the list of files in folder `Output` (files named \\*.xlsx); the files listed in "
+                        "column [Source] (like `template.xlsx`)" in md)
+        self.assertTrue("### 3. Old checks _(disabled in the saved file)_" in md)
+        self.assertTrue("Disabled in the saved file: Alteryx skips it until someone enables it" in md)
+        self.assertTrue("1. Container 2 runs after container 1: it opens `Consolidated Datasets.xlsx`, which container 1 "
+                        "saves." in md)
 
-    def test_branches_follow_the_flow_and_carry_annotations(self):
-        heads = re.findall(r"^#### Branch (\S+) — ([^·]+) ·", self.md, re.M)
-        self.assertEqual(heads[1:9], [("2.1", "Newest consolidated file"), ("2.2", "CreationMode"), ("2.3", "Scenario"),
-                                      ("2.4", "Tags"), ("2.5", "Data Quality"), ("2.6", "Virtualizable"),
-                                      ("2.7", "Read/Write"), ("2.8", "All issues")])
-        self.assertFalse("Typed table" in self.md)                 # it is read inside the Join that uses it
-        self.assertTrue(self.md.index("### Inside Checks") < self.md.index("#### Branch 2.2 "))
-
-    def test_one_table_per_branch_reads_like_the_canvas(self):
+    def test_one_story_per_output_in_run_order(self):
         md = self.md
-        tables = re.findall(r"^\| Step \| Tool \| What it does \| New / changed columns \| Next \|\n\|.*\n((?:\|.*\n)+)", md, re.M)
-        steps = [re.fullmatch(r"\| (\S+) \| (.*?) \| (.*?) \| (.*?) \| (.*?) \|", line).groups()
-                 for t in tables for line in t.splitlines()]
-        self.assertEqual(len(steps), 4 + 27 + 2)        # every step once (the typed table is read inside 2.15)
-        by = {r[0]: r[1:] for r in steps}
-        self.assertEqual(by["1.1"], ("Input Data", "opens `datasets_export.csv`", "9 columns", "1.2"))
-        self.assertEqual(by["2.16"], ("Filter “Data Quality”", "keeps only the rows where [DQScore] < 0.8", "", "T → 2.17; F dropped"))
-        self.assertEqual(by["2.17"][2], "**Issue**")
-        self.assertEqual(by["2.15"], ("Join", "matches its rows with a typed table ([Owner], [Team]; 2 rows) on [Owner]", "",
-                                      "J → 2.25; L, R dropped"))
-        self.assertEqual(by["2.18"][0], "RegEx ⚠")
-        self.assertTrue(by["2.27"][1].startswith("saves the table to `Dataset audit.xlsx`, sheet `Issues`"))
-        self.assertFalse("**Reads:**" in md or "- **Does:**" in md)
-        # rule and pandas sit in one folded line per step, under the table
+        heads = re.findall(r"^#### (.+)$", md, re.M)
+        self.assertEqual(heads, ["Consolidated Datasets.xlsx › Datasets", "Dataset audit.xlsx › Issues"])
+        self.assertFalse(re.search(r"Branch \d", md))
+        story = md[md.index("#### Dataset audit.xlsx › Issues"):md.index("### Container 3.")]
+        nums = [int(x) for x in re.findall(r"^\*\*(\d+)\. ", story, re.M)]
+        self.assertEqual(nums, list(range(1, 28)))                     # 27 steps, numbered in the order they run
+        self.assertTrue("**15. Filter** “Data Quality” · step 2.16 · tool #44  \nKeeps only the rows where [DQScore] < "
+                        "0.8.  \nTakes: step 6  \nLooks at: [DQScore]" in story, story[:2000])
+        self.assertTrue("**24. Join** · step 2.15 · tool #63  \nMatches its rows with a typed table ([Owner], [Team]; 2 "
+                        "rows) on [Owner].  \nTakes: step 14" in story)                # the typed table is read inside it
+        self.assertTrue("Stacks the tables step 9, step 12, step 24 (matched rows), step 17, step 20, step 23" in story)
+        self.assertTrue('Sets: **Issue** = "Write only" when [Access] is "W", otherwise "Read/write"' in story)
+        self.assertTrue("**Not used by any output:** 2 steps (Input Data 1, Formula 1)." in md)   # container 3
+
+    def test_every_step_once_with_its_rule_and_pandas(self):
+        md = self.md
+        folds = re.findall(r"^- \*\*(\d+\.\d+)\*\* ", md, re.M)
+        self.assertEqual(sorted(folds), sorted(self.g.sid[i] for i in self.g.order if i not in self.g.fold_of))
         self.assertTrue('- **2.16** Filter #44 · exact · `t44` · `df = df[(df["DQScore"] < 0.8)]`' in md)
         fold = md[md.index("- **2.17** Formula #54"):md.index("- **2.18** ")]
         self.assertTrue('Issue = "Low data quality: " + ToString([DQScore], 2)\n      # pandas:\n      df["Issue"] = ' in fold, fold)
         self.assertTrue("- **2.18** RegEx #64 · **not converted**: tool kind RegEx has no converter" in md)
+        self.assertTrue("**17. RegEx** · step 2.18 · tool #64 · ⚠ not converted: write by hand" in md)
         self.assertTrue("pd.concat([s2_9, s2_12, s2_15_join, s2_18, s2_21, s2_24], ignore_index=True)" in md)
         self.assertTrue('s2_15_join = m[m["_merge"] == "both"]' in md)
 
@@ -83,6 +80,8 @@ class DatasetAudit(unittest.TestCase):
         self.assertEqual(guide.place("Book.xlsx|||`Sheet 1$B3:F200`"), ("Book.xlsx", "Sheet 1", "B3:F200", None))
         self.assertEqual(guide.place_text("In\\a.csv", {"ImportLine": "4", "HeaderRow": "False"}),
                          "**a.csv** · from line 4 · no header row")
+        self.assertTrue("| `Consolidated Datasets.xlsx` | Datasets | all | saved | — | Consolidated Datasets.xlsx › Datasets "
+                        "(1.4) |" in self.md)
 
     def test_columns_table(self):
         self.assertTrue("| **Issue** | V_WString | 2.8, 2.11, 2.14, 2.17, 2.20, 2.23 |" in self.md)
@@ -95,26 +94,30 @@ class DatasetAudit(unittest.TestCase):
         ids = set(re.findall(r'id="([^"]+)"', h))
         for target in set(re.findall(r'href="#([^"]+)"', h)):
             self.assertTrue(target in ids, target)
-        self.assertTrue('<details class="d2" id="c2">' in h and '<details class="d4" id="b2-5">' in h)
-        self.assertTrue('<tr id="s2-16"><td><a href="#r2-16">2.16</a></td>' in h)
-        self.assertTrue('<details class="fold"><summary><b>2.17</b> Formula #54' in h and '<pre class="rule" id="r2-17">' in h)
+        self.assertTrue('<div class="box story" id="o92"><h3><span class="chip o">Dataset audit.xlsx › Issues</span>' in h)
+        self.assertTrue('<li id="s2-16"><div><div class="tool">Filter <i>“Data Quality”</i> <small>· step 2.16 · tool #44'
+                        '</small></div>' in h)
+        self.assertTrue('<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.17</b> Formula #54' in h)
+        self.assertTrue('<pre id="r2-17">' in h)
+        self.assertTrue('Keeps only the rows where <span class="col">DQScore</span> &lt; 0.8.' in h)
 
 
 class Large(unittest.TestCase):
-    def test_every_tool_once_and_repeats_mapped(self):
+    def test_every_step_once_and_deterministic(self):
         g, md, _ = build(synth_recon.big(938))
-        cards = re.findall(r"^- \*\*(\d+\.\d+)\*\* ", md, re.M)
-        self.assertEqual(len(cards), len(set(cards)))
-        copies = [i for i in g.order if g.L.stage_of[i] in g.L.copy_of]
-        self.assertEqual(len(cards) + len(copies), len(g.order) - len(g.fold_of))   # a folded read is not a step
-        self.assertEqual(len(re.findall(r"^#### Branches .* — repeat of", md, re.M)), 3)
+        folds = re.findall(r"^- \*\*(\d+\.\d+)\*\* ", md, re.M)
+        self.assertEqual(sorted(folds), sorted(g.sid[i] for i in g.order if i not in g.fold_of))
+        outputs = [i for i in g.order if g.t[i].kind == "Output"]
+        heads = re.findall(r"^#### (.+)$", md, re.M)
+        self.assertEqual(len(heads), len(set(heads)))                   # every story and working table has its own name
+        self.assertEqual(sorted(set(re.findall(r'<div class="box story" id="(o\d+)"', build(synth_recon.big(938))[2]))),
+                         sorted("o" + i for i in outputs))
         self.assertEqual(md, build(synth_recon.big(938))[1])            # deterministic
 
     def test_small_recon(self):
         g, md, _ = build(synth_recon.small())
-        self.assertTrue("#### Branches 2.16–27 — repeat of branches 2.4–15 · steps 2.34–59" in md)
-        self.assertTrue("Step for step: 2.34–59 here is 2.8–33 there, in the same order." in md)
-        self.assertTrue("| 2.2 | Join on [DEAL ID] | 2.5 |" in md)
+        self.assertTrue("Matches its rows with" in md and " on [DEAL ID]." in md)
+        self.assertFalse(re.search(r"Branch \d", md))
 
 
 class Sketches(unittest.TestCase):

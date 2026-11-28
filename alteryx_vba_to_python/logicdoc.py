@@ -13,16 +13,27 @@ Blocks:
     ("card", anchor, title, fields)     a step; fields = [(label, text, [preformatted lines])]
     ("folds", items)                    small closed sections; item = {"anchor", "summary", "lines"}
                                         Markdown: a list item and its lines as code; HTML: one <details> each
-Inline text may use **bold**, `code` and [[anchor|label]] links.
+    ("nav", items)                      contents list (items as for "steps")
+    ("box", anchor, title, badge, paragraphs, meta)
+                                        a summary card; meta = [(label, text or [lines])]
+    ("story", anchor, kind, title, badge, intro, items)
+                                        numbered steps; kind: output / table; item = a step or a side
+    ("side", side)                      folded numbered steps: {"anchor", "title", "steps"}
+A step is {"anchor", "tool", "note", "small", "text", "meta": [(label, text)], "split", "hand", "fold"}, fold as in
+"folds"; a side is {"side": True, "anchor", "title", "steps"}.
+Inline text may use **bold**, `code`, [[anchor|label]] links, and chips: {{f|file}}, {{o|saved file}}, {{s|small}},
+{{b|badge}}. In HTML a [Column] outside code is drawn as a column chip.
 """
 import html
 import re
 
-_LINK = re.compile(r"\[\[([\w-]+)\|([^\]]+)\]\]")
+_LINK = re.compile(r"\[\[([\w-]+)\|(.+?)\]\](?!\])")
+_CHIP = re.compile(r"\{\{([fosb])\|(.+?)\}\}")
 
 
 # ----------------------------------------------------------------------------- Markdown
 def _md_inline(text):
+    text = _CHIP.sub(lambda m: {"f": "`%s`", "o": "`%s`", "s": "(%s)", "b": "_(%s)_"}[m.group(1)] % m.group(2), text)
     text = _LINK.sub(lambda m: m.group(2), text)
     parts = re.split(r"(`[^`]*`)", text)                  # leave `code` alone
     return "".join(x if x.startswith("`") else re.sub(r"(?<![\w\\*])\*(?![*\w])", r"\\*", x) for x in parts)
@@ -69,6 +80,25 @@ def _md_blocks(blocks):
             out += ["    " + line for line in b[1]] + [""]
         elif k == "details":
             out += ["", "#" * b[1] + " " + _md_inline(b[2]), ""] + _md_blocks(b[4])
+        elif k == "nav":
+            out += _md_steps(b[1], False) + [""]
+        elif k == "box":
+            out += ["", "### " + _md_inline(b[2]) + (" _(%s)_" % b[3] if b[3] else ""), ""]
+            out += [_md_inline(x) + "\n" for x in b[4]]
+            for label, text in b[5]:
+                out.append("- **%s:** %s" % (label, _md_inline("; ".join(text) if isinstance(text, list) else text)))
+            out.append("")
+        elif k == "story":
+            out += ["", "#### " + _md_inline(b[3]) + (" _(%s)_" % b[4] if b[4] else ""), "", _md_inline(b[5]), ""]
+            n = 0
+            for it in b[6]:
+                if it.get("side"):
+                    out += _md_side(it)
+                else:
+                    n += 1
+                    out += _md_step(it, n)
+        elif k == "side":
+            out += _md_side(b[1])
         elif k == "card":
             out += ["", "#" * 5 + " " + _md_inline(b[2]), ""]
             for label, text, pre in b[3]:
@@ -79,17 +109,48 @@ def _md_blocks(blocks):
     return out
 
 
+def _md_step(it, n, lead=""):
+    head = "%s**%s. %s**%s · %s%s" % (lead, n, it["tool"], " “%s”" % it["note"] if it.get("note") else "", it["small"],
+                                     " · ⚠ " + it["hand"] if it.get("hand") else "")
+    out = [head + "  ", lead + _md_inline(it["text"]) + "  "]
+    out += [lead + ("%s: " % label if label else "") + _md_inline(text) + "  " for label, text in it.get("meta", [])]
+    if it.get("split"):
+        out.append(lead + "↳ " + _md_inline(it["split"]) + "  ")
+    out.append("")
+    f = it.get("fold")
+    if f:
+        out.append("- " + _md_inline(f["summary"]))
+        if f.get("lines"):
+            out += [""] + ["      " + line for line in f["lines"]]
+        out.append("")
+    return out
+
+
+def _md_side(side):
+    out = ["", "> **%s**" % _md_inline(side["title"]), ""]
+    for n, it in enumerate(side["steps"], 1):
+        out += _md_step(it, n, "> ")
+    return out
+
+
 def to_markdown(blocks):
     text = "\n".join(_md_blocks(blocks)).strip("\n") + "\n"
     return re.sub(r"\n{3,}", "\n\n", text)
 
 
 # ----------------------------------------------------------------------------- HTML
+_CHIP_CLASS = {"f": '<span class="chip f">%s</span>', "o": '<span class="chip o">%s</span>',
+               "s": '<small class="sid">%s</small>', "b": '<span class="badge">%s</span>'}
+
+
 def _h_inline(text):
     s = html.escape(text, quote=False)
     s = _LINK.sub(lambda m: '<a href="#%s">%s</a>' % (m.group(1), m.group(2)), s)
+    s = _CHIP.sub(lambda m: _CHIP_CLASS[m.group(1)] % m.group(2), s)
     s = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", s)
-    return re.sub(r"`([^`]+)`", r"<code>\1</code>", s)
+    parts = re.split(r"`([^`]+)`", s)
+    return "".join("<code>%s</code>" % x if n % 2 else re.sub(r"\[([^\[\]<>]{1,80})\]", r'<span class="col">\1</span>', x)
+                   for n, x in enumerate(parts))
 
 
 def _h_steps(items, ordered):
@@ -106,35 +167,70 @@ def _h_steps(items, ordered):
 
 
 CSS = """
-:root{--ink:#1f2328;--muted:#59636e;--line:#d1d9e0;--soft:#f6f8fa;--accent:#0b5cad;--warn:#9a3412;--box:#eef4fb}
-@media (prefers-color-scheme:dark){:root{--ink:#e6edf3;--muted:#9da7b3;--line:#3d444d;--soft:#151b23;--accent:#58a6ff;
---warn:#f0883e;--box:#16273d}}
-body{font:15px/1.55 -apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--soft);margin:0}
-main{max-width:1150px;margin:0 auto;padding:24px 16px 80px;background:transparent}
-h1{font-size:1.6em;margin:.2em 0 .6em}h2{font-size:1.3em;margin:2em 0 .5em;padding-bottom:.25em;border-bottom:1px solid var(--line)}
-h3{font-size:1.1em;margin:1.6em 0 .4em}h4{font-size:1em;margin:1.2em 0 .3em;color:var(--muted)}
+:root{--bg:#fbfbfc;--ink:#1c1d21;--muted:#676973;--line:#dfe1e6;--card:#fff;--accent:#1f5fbf;--warn:#9a3412;--box:#f1f1f4;
+--file:#e9f2ff;--filefg:#134a9c;--out:#e6f6ec;--outfg:#17643a;--tab:#f3ecfb;--tabfg:#5b2d91;--hand:#fff4dc;--handfg:#8a5a00;
+--off:#f4e9ea;--offfg:#8c2f39;--soft:#fbfbfc}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#131417;--ink:#ecedf1;--muted:#9c9fab;--line:#2b2d34;
+--card:#1b1c21;--accent:#7fb0ff;--warn:#f0883e;--box:#26272e;--file:#172a47;--filefg:#a9cbff;--out:#16301f;--outfg:#8fd9aa;
+--tab:#2b2140;--tabfg:#cdb4f5;--hand:#3a2e12;--handfg:#f0c36a;--off:#3a1f23;--offfg:#f0a3ab;--soft:#131417}}
+:root[data-theme="dark"]{--bg:#131417;--ink:#ecedf1;--muted:#9c9fab;--line:#2b2d34;--card:#1b1c21;--accent:#7fb0ff;
+--warn:#f0883e;--box:#26272e;--file:#172a47;--filefg:#a9cbff;--out:#16301f;--outfg:#8fd9aa;--tab:#2b2140;--tabfg:#cdb4f5;
+--hand:#3a2e12;--handfg:#f0c36a;--off:#3a1f23;--offfg:#f0a3ab;--soft:#131417}
+*{box-sizing:border-box}
+body{font:15px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--bg);margin:0}
+main{max-width:980px;margin:0 auto;padding:20px 16px 80px}
+h1{font-size:1.5em;margin:.2em 0 .3em}h2{font-size:1.25em;margin:2em 0 .5em;padding-bottom:.25em;border-bottom:1px solid var(--line)}
+h3{font-size:1.05em;margin:1.4em 0 .4em}h4{font-size:1em;margin:1.2em 0 .3em;color:var(--muted)}
 p{margin:.4em 0 .8em}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
-code{font:13px ui-monospace,Consolas,monospace;background:var(--box);padding:1px 4px;border-radius:4px}
-pre{font:13px/1.45 ui-monospace,Consolas,monospace;background:var(--box);padding:8px 12px;border-radius:6px;overflow-x:auto;
-margin:.4em 0 .7em}li{margin:.25em 0}li>pre.rule{margin-top:.3em}
-table{border-collapse:collapse;margin:.5em 0 1.2em;font-size:14px;width:100%}
-th,td{border:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top}th{background:var(--box)}
-section.stage{background:var(--soft);border-left:3px solid var(--line);padding:0 0 0 14px;margin:1em 0}
-.diagram{overflow:auto;border:1px solid var(--line);border-radius:6px;background:var(--soft);margin:.6em 0 1.2em}
-.diagram svg{display:block}.warn{color:var(--warn)}
-details{margin:.5em 0}details>summary{cursor:pointer;list-style:none;padding:6px 10px;border-radius:6px;background:var(--box)}
-details>summary::-webkit-details-marker{display:none}details>summary::before{content:"▸ ";color:var(--muted)}
-details[open]>summary::before{content:"▾ "}details>.inner{padding:4px 0 4px 14px;border-left:2px solid var(--line);margin-left:6px}
-summary .h2{font-size:1.25em;font-weight:650}summary .h3{font-size:1.08em;font-weight:600}summary .h4{font-weight:600}
-details.d2{margin-top:1.4em}
-.card{border:1px solid var(--line);border-radius:8px;margin:.7em 0;background:var(--soft);scroll-margin-top:12px}
+code{font:12.5px ui-monospace,Menlo,Consolas,monospace;background:var(--box);padding:1px 4px;border-radius:4px;
+overflow-wrap:anywhere}
+pre{font:12.5px/1.45 ui-monospace,Menlo,Consolas,monospace;background:var(--box);padding:8px 10px;border-radius:6px;
+overflow-x:auto;margin:.4em 0 .7em}li{margin:.25em 0}li>pre.rule{margin-top:.3em}
+table{border-collapse:collapse;margin:.5em 0 1.2em;font-size:13.5px;width:100%;display:block;overflow-x:auto}
+th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600;font-size:12.5px}
+.chip{display:inline-block;border-radius:6px;padding:0 7px;font-size:13px;overflow-wrap:anywhere}
+.chip.f{background:var(--file);color:var(--filefg)}.chip.o{background:var(--out);color:var(--outfg)}
+.chip.w{background:var(--tab);color:var(--tabfg)}
+.col{background:var(--box);border-radius:4px;padding:0 5px;font-size:13px}
+.badge{font-size:11.5px;font-weight:650;border-radius:999px;padding:1px 8px;background:var(--off);color:var(--offfg);
+white-space:nowrap}
+.hand{background:var(--hand);color:var(--handfg);border-radius:6px;padding:1px 7px;font-size:12px;font-weight:600}
+small.sid,.sub{color:var(--muted)}small.sid{font-size:11.5px}
+.kind{font-size:11.5px;font-weight:650;color:var(--tabfg);text-transform:uppercase;letter-spacing:.03em}
+nav.toc{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:6px 14px;margin:12px 0}
+nav.toc ul{margin:.2em 0;padding-left:1.3em}nav.toc li{margin:.1em 0}
+.box{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:12px 0;
+scroll-margin-top:12px}.box>h3{margin:0 0 6px}
+.meta{font-size:13px;color:var(--muted);display:grid;grid-template-columns:90px 1fr;gap:2px 8px;margin:4px 0}
+.meta b{font-weight:600}.meta span{color:var(--ink);min-width:0;overflow-wrap:anywhere}
+ol.steps{list-style:none;padding:0;margin:8px 0 0;counter-reset:s}
+ol.steps>li{counter-increment:s;display:grid;grid-template-columns:30px 1fr;gap:10px;padding:10px 0;
+border-top:1px solid var(--line);margin:0;scroll-margin-top:12px}
+ol.steps>li::before{content:counter(s);width:26px;height:26px;border-radius:50%;background:var(--box);display:grid;
+place-items:center;font-weight:650;font-size:13px}
+ol.steps>li.side{counter-increment:none;display:block;padding:6px 0 6px 40px}ol.steps>li.side::before{content:none}
+.tool{font-size:12px;font-weight:650;color:var(--accent);text-transform:uppercase;letter-spacing:.03em}
+.tool small,.tool i{color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0}
+.does{margin:1px 0 4px;overflow-wrap:anywhere}.split{font-size:13px;margin-top:4px;overflow-wrap:anywhere}
+details{margin:.5em 0}details>summary{cursor:pointer;color:var(--accent)}
+details.rule{margin:6px 0 0;font-size:13px}details.rule .fs{color:var(--muted);font-size:12.5px;margin:4px 0}
+details.side{background:var(--soft);border-left:3px solid var(--tabfg);border-radius:6px;padding:4px 10px;margin:4px 0}
+details.side>summary{font-size:13.5px;font-weight:600}
+details.d2>summary .h2{font-size:1.1em;font-weight:650;color:var(--ink)}details.d3>summary .h3{font-weight:600;color:var(--ink)}
+details>.inner{padding:4px 0 4px 14px;border-left:2px solid var(--line);margin-left:6px}
+section.stage{border-left:3px solid var(--line);padding:0 0 0 14px;margin:1em 0}
+.diagram{overflow:auto;border:1px solid var(--line);border-radius:6px;margin:.6em 0 1.2em}.diagram svg{display:block}
+.warn{color:var(--warn)}
+.card{border:1px solid var(--line);border-radius:8px;margin:.7em 0;background:var(--card);scroll-margin-top:12px}
 .card-h{font-weight:600;padding:6px 10px;border-bottom:1px solid var(--line);background:var(--box);border-radius:8px 8px 0 0}
 .card dl{display:grid;grid-template-columns:7.5em 1fr;gap:3px 10px;margin:0;padding:8px 10px}
 .card dt{color:var(--muted);font-size:13px;padding-top:2px}.card dd{margin:0;min-width:0}
 .card pre.rule{margin:.2em 0}.card dd code{white-space:pre-wrap;word-break:break-word}
 :target{outline:2px solid var(--accent);outline-offset:2px}tr:target{background:var(--box)}
-details.fold{margin:.15em 0}details.fold>summary{background:transparent;padding:2px 6px;font-size:14px}
-details.fold>pre{margin:.2em 0 .6em 1.2em}div.fold{padding:2px 6px 2px 22px;font-size:14px}td:first-child{white-space:nowrap}
+details.fold{margin:.15em 0}details.fold>summary{padding:2px 6px;font-size:14px}
+details.fold>pre{margin:.2em 0 .6em 1.2em}div.fold{padding:2px 6px 2px 22px;font-size:14px}
+@media (max-width:600px){.meta{grid-template-columns:1fr}ol.steps>li.side{padding-left:0}}
 """
 
 
@@ -243,6 +339,29 @@ def _h_blocks(blocks):
                 level, ' id="%s"' % anchor if anchor else "", " open" if is_open else "", level, _h_inline(summary)))
             out += _h_blocks(inner)
             out.append("</div></details>")
+        elif k == "nav":
+            out.append('<nav class="toc">')
+            out += _h_steps(b[1], False)
+            out.append("</nav>")
+        elif k == "box":
+            out.append('<div class="box"%s><h3>%s%s</h3>' % (' id="%s"' % b[1] if b[1] else "", _h_inline(b[2]),
+                                                             ' <span class="badge">%s</span>' % html.escape(b[3]) if b[3] else ""))
+            out += ["<p>%s</p>" % _h_inline(x) for x in b[4]]
+            if b[5]:
+                out.append('<div class="meta">%s</div>' % "".join(
+                    "<b>%s</b><span>%s</span>" % (html.escape(label), "<br>".join(_h_inline(x) for x in text)
+                                                  if isinstance(text, list) else _h_inline(text)) for label, text in b[5]))
+            out.append("</div>")
+        elif k == "story":
+            chip = '<span class="chip %s">%s</span>' % ("o" if b[2] == "output" else "w", _h_inline(b[3]))
+            out.append('<div class="box story"%s><h3>%s%s%s</h3><p class="sub">%s</p><ol class="steps">' % (
+                ' id="%s"' % b[1] if b[1] else "", '<span class="kind">working table</span> ' if b[2] == "table" else "",
+                chip, ' <span class="badge">%s</span>' % html.escape(b[4]) if b[4] else "", _h_inline(b[5])))
+            for it in b[6]:
+                out += _h_side(it, True) if it.get("side") else _h_step(it)
+            out.append("</ol></div>")
+        elif k == "side":
+            out += _h_side(b[1], False)
         elif k == "card":
             out.append('<div class="card"%s><div class="card-h">%s</div><dl>' % (
                 ' id="%s"' % b[1] if b[1] else "", _h_inline(b[2])))
@@ -253,6 +372,36 @@ def _h_blocks(blocks):
     if open_section:
         out.append("</section>")
     return out
+
+
+def _h_step(it):
+    note = ' <i>“%s”</i>' % html.escape(it["note"]) if it.get("note") else ""
+    out = ['<li%s><div><div class="tool">%s%s <small>· %s</small>%s</div>' % (
+        ' id="%s"' % it["anchor"] if it.get("anchor") else "", html.escape(it["tool"]), note, html.escape(it["small"]),
+        ' <span class="hand">%s</span>' % html.escape(it["hand"]) if it.get("hand") else ""),
+        '<div class="does">%s</div>' % _h_inline(it["text"])]
+    if it.get("meta"):
+        out.append('<div class="meta">%s</div>' % "".join(
+            "<b>%s</b><span>%s</span>" % (html.escape(label), _h_inline(text)) for label, text in it["meta"]))
+    if it.get("split"):
+        out.append('<div class="split">↳ %s</div>' % _h_inline(it["split"]))
+    f = it.get("fold")
+    if f:
+        out.append('<details class="rule"><summary>Rule and pandas</summary><div class="fs">%s</div>%s</details>' % (
+            _h_inline(f["summary"]), '<pre%s>%s</pre>' % (' id="%s"' % f["anchor"] if f.get("anchor") else "",
+                                                          html.escape("\n".join(f["lines"]), quote=False))
+            if f.get("lines") else '<span%s></span>' % (' id="%s"' % f["anchor"] if f.get("anchor") else "")))
+    return out + ["</div></li>"]
+
+
+def _h_side(side, in_list):
+    out = ['<li class="side">'] if in_list else []
+    out.append('<details class="side"%s><summary>%s</summary><ol class="steps">' % (
+        ' id="%s"' % side["anchor"] if side.get("anchor") else "", _h_inline(side["title"])))
+    for it in side["steps"]:
+        out += _h_step(it)
+    out.append("</ol></details>")
+    return out + (["</li>"] if in_list else [])
 
 
 def to_html(blocks, title):

@@ -1,9 +1,9 @@
 """python -m ayx2py WORKFLOW [OUT_DIR] [--name NAME] [--no-code] [--brief] [--tool-listing] [--and-before-or]
 
 Reads an Alteryx workflow (.yxmd, or the same XML saved as .txt) and writes, into OUT_DIR:
-    NAME_guide.md        migration guide: containers, their branches, one card per step (In, Does,
-                         Rule, Reads, Writes, Out, Python), a columns table per container
-    NAME_guide.html      the same, collapsible, with diagrams; opens in any browser, no network
+    NAME_guide.md        migration guide: what each container does, one story per output (its steps in
+                         run order, each with its rule and pandas), run order, files, and detail
+    NAME_guide.html      the same, with folding sections; opens in any browser, no network
     NAME_logic.md/.html  the shorter stage-by-stage summary                  (only with --brief)
     NAME_generated.py    Python/pandas code, one function per tool          (not with --no-code)
     NAME_steps.ipynb     plain pandas template: settings, load every file, one cell per branch with

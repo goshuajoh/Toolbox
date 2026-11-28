@@ -74,11 +74,12 @@ class DisabledContainers(unittest.TestCase):
         wf, g, md = guide_md(path)
         self.assertTrue("4 containers, 3 disabled in the saved file (documented anyway), 13 tools" in md)
         for n, name in ((2, "Keys"), (3, "Recon T+1"), (4, "Recon T+2")):
-            self.assertTrue("## %d. %s — disabled in the saved file" % (n, name) in md, name)
-            self.assertTrue("| %d. %s | no: disabled in the saved file (documented anyway) |" % (n, name) in md, name)
-        self.assertTrue(re.search(r"^\| 3\.\d \| Formula \| fills column \*\*Reconciled\*\* = \"Y\"", md, re.M))
-        self.assertTrue(re.search(r"- \*\*Fed by:\*\* 1\. Import \(step 1\.2 → 3\.\d", md))      # links still shown
-        self.assertTrue("2. Keys (file `Output\\keys.csv`)" in md)
+            self.assertTrue("### %d. %s _(disabled in the saved file)_" % (n, name) in md, name)
+            self.assertTrue("in the generated code run it with `only=%d`" % n in md, name)
+        self.assertTrue("#### recon.csv _(container 3 · disabled in the saved file)_" in md)
+        self.assertTrue('Sets: **Reconciled** = "Y"' in md)                                     # explained all the same
+        self.assertTrue("It takes rows from **a typed table, with Checked calculated** (container 1); it opens "
+                        "`keys.csv`, which container 2 saves." in md)                         # links still shown
         self.assertEqual(g.errors, [])
         # generated code: the saved file's behaviour by default, any container on request
         os.makedirs(os.path.join(d, "Output"))
@@ -92,7 +93,8 @@ class DisabledContainers(unittest.TestCase):
         self.assertEqual(len(s["11"]["True"]), 1)
         # --enabled-only: the old behaviour
         _, _, md_old = guide_md(path, enabled_only=True)
-        self.assertTrue("| 2. Keys | no: disabled in the saved file (left out: --enabled-only) | 0 |" in md_old)
+        self.assertTrue("### 2. Keys _(disabled in the saved file)_\n\nLeft out: the guide was made with --enabled-only."
+                        in md_old)
 
     def test_notebooks_put_disabled_containers_last(self):
         d, path = save(four_containers())
@@ -201,11 +203,11 @@ class DynamicInput(unittest.TestCase):
                 fh.write("V\n%s\n" % v)
         wf, g, md = guide_md(path)
         self.assertEqual([wf.tools[str(20 + n)].status for n in range(5)], ["caveat"] * 4 + ["stub"])
-        self.assertTrue("opens every file listed in column [F] (the column holds the whole path" in md)
-        self.assertTrue("opens the file named in column [F], in folder `data`" in md)
+        self.assertTrue("Opens every file listed in column [F] (the column holds the whole path" in md)
+        self.assertTrue("Opens the file named in column [F], in folder `data`" in md)
         self.assertTrue("with column [F] put before its file name" in md)
         self.assertTrue("with column [F] added to its file name" in md)
-        self.assertTrue("opens the files given by column [F] (mode ReadList/SomethingNew, not known to the converter" in md)
+        self.assertTrue("Opens the files given by column [F] (mode ReadList/SomethingNew, not known to the converter" in md)
         mod = convert(wb, d)[1]
         ctx = rt.Context(workflow_dir=d)
         s = mod.run(ctx, keep_going=True)
@@ -231,7 +233,7 @@ class RunCommand(unittest.TestCase):
         wb.formula(5, [("After", "'done'")]); wb.conn(4, 5)
         d, path = save(wb)
         wf, g, md = guide_md(path)
-        self.assertTrue("runs `cscript.exe ImportAll.vbs Configuration.xlsm` outside Alteryx: write this step by hand" in md)
+        self.assertTrue("Runs `cscript.exe ImportAll.vbs Configuration.xlsm` outside Alteryx: write this step by hand." in md)
         self.assertTrue("**1 external program to replace** (Run Command)" in last_section(md))
         self.assertFalse("Not converted" in last_section(md))
         mod = convert(wb, d)[1]
@@ -284,7 +286,8 @@ class Failures(unittest.TestCase):
         finally:
             guide.Guide.card = real
         self.assertEqual(g.errors, [("ValueError", "guide.safe_card", "2", "Formula")])
-        self.assertTrue(re.search(r"^\| 1\.2 \| Formula ⚠ \| fills column \*\*B\*\* = \[A\] \+ \"x\"", md, re.M), md)
+        self.assertTrue("> **2. Formula** · step 1.2 · tool #2 · ⚠ not converted: write by hand  \n> Sets 1 column.  \n> "
+                        'Sets: **B** = [A] + "x"' in md, md)
         self.assertTrue("- **1.2** Formula #2 · **not converted**: the converter failed on this step (ValueError in "
                         "guide.safe_card)" in md)
         self.assertTrue("      setting: B [V_WString] = [A] + 'x'" in md)                       # its settings, from the XML
@@ -303,7 +306,7 @@ class Failures(unittest.TestCase):
         d, path = save(wb)
         wf, g, md = guide_md(path)
         self.assertEqual(g.errors, [])
-        self.assertTrue("matches its rows with `clients.xlsx` › sheet `DAC Client` on [Key]" in md)
+        self.assertTrue("Matches its rows with `clients.xlsx › DAC Client` on [Key]." in md)
         self.assertTrue("src_clients_dac_client_1_2b = src_clients_dac_client.copy()" in md)
         self.assertTrue('src_clients_dac_client_1_2b = src_clients_dac_client_1_2b.rename(columns={"Name": "Client"})' in md)
 

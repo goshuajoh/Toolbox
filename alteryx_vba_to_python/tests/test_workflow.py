@@ -86,11 +86,11 @@ class Size(unittest.TestCase):
         compile(code, "big_generated.py", "exec")
         tools = len(wb.items)
         self.assertGreater(tools, 900)
-        self.assertLess(len(spec), 10 * tools)
+        self.assertLess(len(spec), 16 * tools)
         cards = sum(1 for x in spec if re.match(r"- \*\*\d+\.\d+\*\* ", x))
-        self.assertGreater(cards, 700)                              # every tool once; repeated copies are not printed
+        self.assertGreater(cards, 850)                              # every step once, each in the story it belongs to
         self.assertTrue(os.path.exists(os.path.join(tmp, "out", "big_steps.ipynb")))
-        self.assertEqual(sum(1 for x in spec if re.match(r"#### Branches .* — repeat of branch", x)), 3)
+        self.assertFalse(re.search(r"^#+ Branch", "\n".join(spec), re.M))
         self.assertTrue("copy 4 of 4" in "\n".join(listing))
         print("\n[size] %d tools -> guide %d lines / %d chars, %d steps; tool listing %d lines; code %d lines / %d chars" % (
             tools, len(spec), sum(len(x) + 1 for x in spec), cards, len(listing), code.count("\n"), len(code)))
