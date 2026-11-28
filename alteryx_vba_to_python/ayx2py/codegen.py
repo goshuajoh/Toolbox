@@ -45,7 +45,7 @@ def tool_code(t, name):
         sig, body = "tool_id", _call("text_input", repr(ir["columns"]), repr(ir["rows"]), repr(ir["types"]), tool_id="tool_id")
     elif k == "DynamicInput":
         sig, body = "df, tool_id", _call("dynamic_input", "df", repr(ir["file"]), repr(ir["options"]), repr(ir["field"]),
-                                         repr(ir["how"]), repr(ir["types"]), tool_id="tool_id")
+                                         repr(ir["kind"]), repr(ir["types"]), tool_id="tool_id")
     elif k == "Output":
         sig, body = "df, tool_id", _call("write_output", "df", repr(ir["file"]), repr(ir["options"]), tool_id="tool_id")
     elif k == "Select":
@@ -98,6 +98,8 @@ def tool_code(t, name):
                                 to_string_=ir["to_string"])
     elif k == "Cleanse":
         sig, body = "df", _call("cleanse", "df", repr(ir["fields"]), **{o: repr(v) for o, v in ir["options"].items()})
+    elif k == "RunCommand":
+        sig, body = "tool_id, *inputs", _call("external", "tool_id", repr(ir["command"]), repr(ir["args"]), "*inputs")
     elif k == "Message":
         pre += _fn(ir["text"], x + "_text") + [""]
         flt = "None"
@@ -186,8 +188,14 @@ def generate(wf, module_doc=""):
     g = Guide(wf)
     containers = {g.cnum[k]: g.cname(k) for k in g.tops if any(g.top_of[i] == k for i in g.order)}
     links = file_links(wf, g)
+    off = sorted(g.cnum[k] for k in g.off if k in g.cnum and g.cnum[k] in containers)
     out += ["# The containers, numbered as in the migration guide.",
-            "CONTAINERS = {%s}" % ", ".join("%d: %r" % kv for kv in containers.items()), "",
+            "CONTAINERS = {%s}" % ", ".join("%d: %r" % kv for kv in containers.items()),
+            "# Containers disabled in the saved workflow: run(ctx) skips them, as Alteryx does; run(ctx, only=N) runs one.",
+            "DISABLED = {%s}" % ", ".join(map(str, off)) if off else "DISABLED = set()",
+            "# Tools in a disabled container inside another container: skipped unless include_disabled=True.",
+            "OFF = {%s}" % ", ".join(repr(i) for i in ordered if wf.off_inside(i)) if any(wf.off_inside(i) for i in ordered)
+            else "OFF = set()", "",
             "# An Input that reads a file an earlier Output writes: {input tool: output tool}. Used by run(chain=True).",
             "FILE_LINKS = {%s}" % ", ".join("%r: %r" % kv for kv in links.items()), "",
             "# Every tool in run order: (tool id, container, step, tool, the tools it reads from, what it runs).",
@@ -200,6 +208,10 @@ def generate(wf, module_doc=""):
         def src(e):
             deps.append(e[0])
             kind = tools[e[0]].kind
+            if t.kind == "Union":                                # an input may be off: union() leaves it out
+                if kind in MULTI_OUT or kind in ("ParallelBlockUntilDone", "BlockUntilDone"):
+                    return "s.get(%r, {}).get(%r)" % (e[0], e[1])
+                return "s.get(%r)" % e[0]
             if kind in MULTI_OUT or kind in ("ParallelBlockUntilDone", "BlockUntilDone"):
                 return "s[%r][%r]" % (e[0], e[1])
             return "s[%r]" % e[0]
@@ -229,6 +241,8 @@ def generate(wf, module_doc=""):
                     args += [src(e) for e in es]
             elif t.kind in SOURCES:
                 args = []
+            elif t.kind == "RunCommand":
+                args = [repr(i)] + [src(e) for e in ins]
             elif t.kind == "Union":
                 es = list(ins)
                 if t.ir["order"]:
@@ -251,14 +265,16 @@ def generate(wf, module_doc=""):
             i, g.cnum[g.top_of[i]], g.sid.get(i, "?"), designer(t.kind),
             tuple(dict.fromkeys(deps)), call))
     out += ["]", "", "",
-            "def run(ctx=None, only=None, s=None, keep_going=False, report=False, chain=False):",
+            "def run(ctx=None, only=None, s=None, keep_going=False, report=False, chain=False, include_disabled=False):",
             '    """Run the tools in dependency order. Returns {tool id: output}; ctx.outputs holds what Output tools got.',
             "    only: a container's number or name: run its steps, plus any earlier step they need that s does not hold.",
             "    s: the dictionary an earlier run returned, to go on from it.",
             "    keep_going: a failing step goes to ctx.errors; only the steps that need it are skipped.",
             "    report: print one line per step (rows and columns out, or the error).",
-            '    chain: an Input that reads a file an earlier Output wrote in this run gets that Output\'s rows."""',
-            "    return rt.run_steps(STEPS, ctx, only, s, keep_going, report, FILE_LINKS if chain else None, CONTAINERS)",
+            "    chain: an Input that reads a file an earlier Output wrote in this run gets that Output\'s rows.",
+            '    include_disabled: also run the containers disabled in the saved workflow (see DISABLED)."""',
+            "    return rt.run_steps(STEPS, ctx, only, s, keep_going, report, FILE_LINKS if chain else None, CONTAINERS,",
+            "                        disabled=() if include_disabled else DISABLED, off=() if include_disabled else OFF)",
             "", ""]
     out += ['if __name__ == "__main__":', "    import sys",
             "    _ctx = rt.Context(workflow_dir=sys.argv[1] if len(sys.argv) > 1 else '.')",

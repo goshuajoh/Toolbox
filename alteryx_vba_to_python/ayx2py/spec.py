@@ -70,7 +70,10 @@ def describe(t, canonical=False):
     if k in ("Input", "Output", "DynamicInput"):
         opts = "; ".join("%s=%s" % kv for kv in sorted(ir["options"].items()) if kv[1] != "")
         if k == "DynamicInput":
-            out.append("one file per row, path in [%s]; read like: %s" % (ir["field"], ir["file"]))
+            out.append("one file per row, %s in [%s] (mode %s/%s); template: %s" % (
+                {"path": "whole path", "name": "file name", "prefix": "prefix of the file name",
+                 "suffix": "suffix of the file name"}.get(ir.get("kind"), "unknown part"), ir["field"], ir.get("mode"),
+                ir.get("how"), ir["file"]))
         else:
             out.append("file: " + ir["file"])
         if opts:
@@ -143,6 +146,11 @@ def describe(t, canonical=False):
         out.append("fields: " + _names(ir["fields"]))
         out.append("options: " + (_names(on) or "none") + "   [raw: " +
                    "; ".join("%s=%s" % kv for kv in sorted(ir["raw"].items()) if not kv[0].startswith("List Box")) + "]")
+    elif k == "RunCommand":
+        out.append("runs: %s %s" % (ir["command"], ir["args"]))
+        if ir["folder"]:
+            out.append("folder: " + ir["folder"])
+        out += ["file: " + f for f in ir["files"]]
     elif k == "Message":
         out.append("%s, %s: %s%s" % (ir["when"], ir["type"], ex(ir["text"]),
                                      " when " + ex(ir["filter"]) if ir["filter"] else ""))

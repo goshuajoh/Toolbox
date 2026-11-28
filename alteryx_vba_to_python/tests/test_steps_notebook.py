@@ -141,8 +141,11 @@ class DatasetAudit(unittest.TestCase):
         self.assertTrue("# 2.15 Join — matches its rows with a typed table ([Owner], [Team]; 2 rows) on [Owner]   (paste" in tags)
         self.assertTrue(tags.endswith("# step 2.15's lines make s2_15_join\ns2_15_join.head()"))
         self.assertFalse(any("# 2.15a" in c for c in code))                 # the typed table is not a step of its own
-        self.assertTrue("# s2_27.to_excel(os.path.join(OUT, \"Dataset audit.xlsx\"), sheet_name=\"Issues\", index=False)" in code[-1])
-        self.assertEqual(fill(nb, md), 30)                   # every step but the one the Load cell reads
+        save = next(c for c in code if "to_excel(os.path.join(OUT" in c)
+        self.assertTrue("# s2_27.to_excel(os.path.join(OUT, \"Dataset audit.xlsx\"), sheet_name=\"Issues\", index=False)" in save)
+        self.assertTrue(code[-1].startswith("# Branch 3.1 "))                  # the disabled container comes last
+        self.assertTrue(code[-2].startswith("# step 3.1: old_rules.csv\nsrc_old_rules = pd.read_csv("))
+        self.assertEqual(fill(nb, md), 31)                   # every step but the ones the Load cells read
         rc, log = run(nb)
         self.assertEqual(rc, 0, log)
         self.assertTrue("=== done" in log and "src_datasets_export (3, 9)" in log, log)

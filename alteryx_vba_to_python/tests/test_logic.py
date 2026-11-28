@@ -86,7 +86,7 @@ class WorkflowDocument(unittest.TestCase):
         wb.conn(1, 2); wb.conn(1, 3)
         _, md, _ = logic_md(wb)
         self.assertTrue("The rows are not used after this (the stream ends here)" in md)
-        self.assertTrue("Run the external command `cscript.exe job.vbs` (#3) — not converted to Python" in md)
+        self.assertTrue("Run the external command `cscript.exe job.vbs` (#3)" in md)
         self.assertTrue("**runs** 1 external command" in md)
 
 

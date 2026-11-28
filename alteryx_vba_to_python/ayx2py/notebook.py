@@ -90,17 +90,24 @@ def build_steps(wf, workflow_dir, guide=None):
                    "different; the guide's pandas lines use these two helpers."]),
               _code(list(HELPERS))]
 
-    load = []
-    for read in g.reads.values():
-        first = read["tools"][0]
-        what = "a typed table" if t[first].kind == "TextInput" else \
-            _plain(file_text(t[first].ir["file"], t[first].ir["options"])).replace("`", "")
-        load += ["# step %s: %s" % (", ".join(dict.fromkeys(users(i) for i in read["tools"])), what)]
-        load += g.load_lines(first)
-    load += [""] + ['print("%s", %s.shape)' % (r["var"], r["var"]) for r in g.reads.values()]
+    off = {k for k in g.off if k in g.cnum}                  # top containers disabled in the saved file: at the end
+    is_off = lambda i: g.top_of.get(i) in off
+
+    def load_cell(reads):
+        load = []
+        for read in reads:
+            first = read["tools"][0]
+            what = "a typed table" if t[first].kind == "TextInput" else \
+                _plain(file_text(t[first].ir["file"], t[first].ir["options"])).replace("`", "")
+            load += ["# step %s: %s" % (", ".join(dict.fromkeys(users(i) for i in read["tools"])), what)]
+            load += g.load_lines(first)
+        return load + [""] + ['print("%s", %s.shape)' % (r["var"], r["var"]) for r in reads]
+
+    reads_on = [r for r in g.reads.values() if not all(is_off(i) for i in r["tools"])]
+    reads_off = [r for r in g.reads.values() if all(is_off(i) for i in r["tools"])]
     cells += [_md(["## Load", "", "Every file the workflow opens, read once. In Alteryx each is its own Input tool; the "
                    "guide shows a file that only feeds a Join, Find Replace or Union inside that step."]),
-              _code(load if g.reads else ["# this workflow opens no file directly"])]
+              _code(load_cell(reads_on) if reads_on else ["# the enabled containers open no file directly"])]
 
     # branches, in an order where every table a cell starts from is made by an earlier cell
     stages = sorted(g.bid, key=lambda s: (g.cnum[g.top_of[L.stages[s][0]]], _bkey(g.bid[s])))
@@ -109,15 +116,28 @@ def build_steps(wf, workflow_dir, guide=None):
         ids = set(L.stages[s])
         return {L.stage_of[e[0]] for i in L.stages[s] for e in wf.ins.get(i, []) if e[0] not in ids and e[0] not in g.fold_of}
 
-    made, pending, ordered = set(), list(stages), []
-    while pending:
+    made, pending, ordered = set(), [x for x in stages if not is_off(L.stages[x][0])], []
+    later = [x for x in stages if is_off(L.stages[x][0])]
+    while pending or later:
+        if not pending:                                       # the disabled containers come after Save and compare
+            ordered.append(None)
+            pending, later = later, []
         nxt = next((s for s in pending if needs(s) <= made), pending[0])
         pending.remove(nxt)
         ordered.append(nxt)
         made.add(nxt)
 
-    shown_key, seen_keys, shown_group = None, set(), set()
+    shown_key, seen_keys, shown_group, tail = None, set(), set(), []
+    main = cells
     for s in ordered:
+        if s is None:
+            cells = tail
+            tail += [_md(["## Containers disabled in the saved file", "",
+                          "Alteryx skips these until someone enables them (teams often run one container at a time). They "
+                          "are here so each can be rebuilt and run on its own; run their cells only when you want them."])]
+            if reads_off:
+                tail += [_code(load_cell(reads_off))]
+            continue
         ids = L.stages[s]
         key = g.top_of[ids[0]]
         if key != shown_key:
@@ -127,7 +147,8 @@ def build_steps(wf, workflow_dir, guide=None):
                     verb = {"Input": "opens", "Output": "saves", "DynamicInput": "opens each file like"}[t[i].kind]
                     files.append("- step %s %s %s" % (users(i), verb, file_text(t[i].ir["file"], t[i].ir["options"])))
             again = key in seen_keys
-            cells.append(_md(["## %d. %s%s" % (g.cnum[key], g.cname(key), " (continued)" if again else "")] +
+            cells.append(_md(["## %d. %s%s%s" % (g.cnum[key], g.cname(key), " (disabled in the saved file)" if key in off
+                                                  else "", " (continued)" if again else "")] +
                              ([""] + files if files and not again else [])))
             shown_key = key
             seen_keys.add(key)
@@ -149,7 +170,7 @@ def build_steps(wf, workflow_dir, guide=None):
             cells.append(_md(["### Branch %s — %s" % (g.bid[s], _plain(g.label(s))), ""] + rows))
         cells.append(_code(skeleton(g, s)))
 
-    outs = [i for i in g.order if t[i].kind == "Output"]
+    outs = [i for i in g.order if t[i].kind == "Output" and not is_off(i)]
     last = ["# Save what each Output step saves (uncomment to write the files into OUT):",
             "# os.makedirs(OUT, exist_ok=True)"]
     for i in outs:
@@ -174,8 +195,8 @@ def build_steps(wf, workflow_dir, guide=None):
                  "    common = [c for c in %s.columns if c in legacy.columns]" % v,
                  '    print(%s[common].reset_index(drop=True).compare(legacy[common]) if len(%s) == len(legacy) else '
                  '"the row counts differ")' % (v, v)]
-    cells += [_md(["## Save and compare"]), _code(last if outs else ["# this workflow saves no file"])]
-    return _notebook(cells)
+    return _notebook(main + [_md(["## Save and compare"]), _code(last if outs else ["# the enabled containers save no file"])]
+                     + tail)
 
 
 def skeleton(g, s):
@@ -287,9 +308,15 @@ def build_runner(wf, module, workflow_dir):
                   "Nothing is written while `WRITE = False`. Re-run a container's cell after changing a setting; it "
                   "re-runs that container only."]),
              _code(settings), _code(setup)]
-    for key in g.tops:
+    main, tail = cells, []
+    off = [k for k in g.tops if k in g.off and k in live]
+    for key in [k for k in g.tops if k not in off] + off:
         n = g.cnum[key]
         tools = [i for i in g.order if g.top_of[i] == key]
+        if key in off and not tail:
+            cells = tail
+            tail.append(_md(["## Containers disabled in the saved file", "", "Alteryx skips these until someone enables "
+                             "them (teams often run one container at a time). Each cell runs one of them on its own."]))
         if key not in live:
             cells.append(_md(["## %d. %s" % (n, g.cname(key)), "", "Disabled in the workflow: nothing to run."]))
             continue
@@ -303,12 +330,13 @@ def build_runner(wf, module, workflow_dir):
                                                        ", cells %s" % cells_.upper() if cells_ else ""))
             elif k == "Directory":
                 files.append("- step %s lists `%s` (`%s`)" % (g.sid[i], t[i].ir["dir"], t[i].ir["spec"]))
-        cells.append(_md(["## %d. %s" % (n, g.cname(key)), "",
+        cells.append(_md(["## %d. %s%s" % (n, g.cname(key), " (disabled in the saved file)" if key in off else ""), "",
                           "Steps %s to %s (%d tools)." % (g.sid[tools[0]], g.sid[tools[-1]], len(tools))] +
                          ([""] + files if files else [])))
         cells.append(_code(["s = wf.run(ctx, only=%d, s=s, keep_going=True, report=True, chain=CHAIN)" % n]))
 
-    outs = [i for i in g.order if t[i].kind == "Output"]
+    cells = main
+    outs = [i for i in g.order if t[i].kind == "Output" and g.top_of[i] not in off]
     first = outs[0] if outs else g.order[0]
     shown = next((e[0] for e in wf.ins.get(first, [])), first) if outs else first
     cells += [_md(["## Steps without an output", "", "Every step that failed, and the steps skipped because they "
@@ -324,5 +352,5 @@ def build_runner(wf, module, workflow_dir):
               _code(["%s" % _comment_line('diff_%s = compare("%s", %s%s)' % (
                   g.sid[i].replace(".", "_"), g.sid[i], _raw(place(t[i].ir["file"])[0]),
                   ", %r" % place(t[i].ir["file"])[1] if place(t[i].ir["file"])[1] else ""), where(i), 70)
-                     for i in outs] or ["# this workflow has no Output step"])]
-    return _notebook(cells)
+                     for i in outs] or ["# the enabled containers have no Output step"])]
+    return _notebook(cells + tail)

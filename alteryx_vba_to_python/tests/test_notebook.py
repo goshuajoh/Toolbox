@@ -50,6 +50,8 @@ def make_files(folder, legacy_audit=None):
     os.makedirs(os.path.join(folder, "legacy"))
     with open(os.path.join(folder, "Input", "datasets_export.csv"), "w", encoding="utf-8-sig", newline="") as fh:
         fh.write(",".join(COLS) + "\n" + "".join(",".join(r) + "\n" for r in ROWS))
+    with open(os.path.join(folder, "Input", "old_rules.csv"), "w", encoding="utf-8", newline="") as fh:
+        fh.write("Rule\nkeep\n")                       # read by the container that is disabled in the saved file
     # what step 1.4 writes in Alteryx: cleansed text, numbers as numbers, today's Load Date
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -111,7 +113,7 @@ class Notebook(unittest.TestCase):
         self.assertTrue("    # '64': lambda *tables: tables[0]," in settings)
         self.assertTrue("WRITE = False" in settings)
         kinds = [c["cell_type"] for c in self.nb["cells"]]
-        self.assertEqual(kinds.count("code"), 2 + 2 + 3)          # settings, setup, 2 containers, problems/look/compare
+        self.assertEqual(kinds.count("code"), 2 + 3 + 3)          # settings, setup, 3 containers, problems/look/compare
 
     def test_runs_top_to_bottom_and_reports_each_step(self):
         log = self.log

@@ -269,10 +269,12 @@ class Tools(unittest.TestCase):
         wb.sample(5, "NPercent", 10)
         wb.conn(1, 2); wb.conn(1, 3); wb.conn(1, 4); wb.conn(1, 5)
         wf, mod, lines, _ = convert(wb)
-        self.assertEqual({i: wf.tools[i].status for i in "2345"}, {i: "stub" for i in "2345"})
+        self.assertEqual({i: wf.tools[i].status for i in "2345"}, {"2": "caveat", "3": "stub", "4": "stub", "5": "stub"})
+        ctx = rt.Context()
         with self.assertRaises(rt.NotConverted) as cm:
-            mod.run(rt.Context())
-        self.assertIn("#2", str(cm.exception))
+            mod.run(ctx)
+        self.assertIn("#3", str(cm.exception))
+        self.assertEqual(ctx.log[0], "#2 external program not run: cscript.exe RunMacro.vbs ImportAll")  # logged only
         text = "\n".join(lines)
         self.assertIn("NOT CONVERTED", text)
         self.assertIn("RunMacro.vbs ImportAll", text)

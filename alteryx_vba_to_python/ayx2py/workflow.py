@@ -29,7 +29,8 @@ STATUS = {
     "BlockUntilDone": ("caveat", "data passes through; only the run order is reproduced"),
     "ParallelBlockUntilDone": ("caveat", "data passes through; only the run order is reproduced"),
     "Input": ("caveat", "column types depend on Alteryx's file driver; the types recorded in the workflow are applied when present"),
-    "DynamicInput": ("caveat", "as Input; only 'read a list of data sources' with a full path"),
+    "DynamicInput": ("caveat", "as Input; 'read a list of data sources' (whole path, file name, prefix or suffix)"),
+    "RunCommand": ("caveat", "runs a program outside Alteryx; the generated code only logs it, so write it by hand"),
     "Directory": ("caveat", "file times come from the operating system"),
     "Join": ("caveat", "row order of the three outputs and null = null on keys are not documented"),
     "Union": ("caveat", "the type chosen when inputs disagree, and the order of the inputs, are not documented"),
@@ -125,10 +126,13 @@ class Tool:
 
 
 class Workflow:
-    def __init__(self, path):
-        self.source = path
+    """enabled_only: leave out the tools of disabled containers (by default they are read like the others, because
+    teams often run one container at a time by disabling the rest before saving)."""
+
+    def __init__(self, path, enabled_only=False):
+        self.source, self.enabled_only = path, enabled_only
         root, self.sha256 = load(path)
-        self.tools, self.containers = {}, []
+        self.tools, self.containers, self.own_off = {}, [], {}
         self._walk(root.find("Nodes"), [], False)
         self.edges = []                     # (src, src_anchor, dst, dst_anchor, name)
         for c in root.findall("Connections/Connection"):
@@ -138,7 +142,8 @@ class Workflow:
                                    d.get("Connection") or "Input", c.get("name") or ""))
         for t in self.tools.values():
             _parse(t)
-        self.live = {i for i, t in self.tools.items() if not t.disabled and t.kind not in IGNORED}
+        self.live = {i for i, t in self.tools.items() if t.kind not in IGNORED and not (enabled_only and t.disabled)}
+        self.missing_ends = [e for e in self.edges if e[0] not in self.tools or e[2] not in self.tools]
         self.ins, self.outs = defaultdict(list), defaultdict(list)
         for e in self.edges:
             if e[0] in self.live and e[2] in self.live:
@@ -147,7 +152,8 @@ class Workflow:
         for i in self.ins:                  # Union inputs follow their connection names (#1, #2, ...)
             self.ins[i].sort(key=lambda e: (_conn_no(e[4]), _id_key(e[0])))
         self.order_edges = self._block_until_done()
-        self.rank = self._topo()
+        self.rank, self.cycle_edges, self.dropped = self._topo()
+        self.cyclic = sorted({i for e in self.cycle_edges for i in (e[0], e[2])}, key=_id_key)
 
     def _walk(self, parent, path, disabled):
         if parent is None:
@@ -161,8 +167,10 @@ class Workflow:
             if cfg is None:
                 cfg = ET.Element("Configuration")
             if kind == "ToolContainer":
-                off = disabled or _true(_val(cfg, "Disabled", "False"))
+                own = _true(_val(cfg, "Disabled", "False"))
+                off = disabled or own
                 caption = flat(cfg.findtext("Caption", "")) or "(unnamed container)"
+                self.own_off[tuple(path + [caption])] = own
                 self.containers.append((path + [caption], off))
                 self._walk(node.find("ChildNodes"), path + [caption], off)
                 continue
@@ -177,7 +185,13 @@ class Workflow:
             self.tools[tid].macro = macro
             self._walk(node.find("ChildNodes"), path, disabled)
 
+    def off_inside(self, i):
+        """True when tool i sits in a disabled container nested inside its top-level container."""
+        p = self.tools[i].path
+        return any(self.own_off.get(tuple(p[:n])) for n in range(2, len(p) + 1))
+
     def reach(self, start_edges):
+        """Every tool downstream of the given connections (iterative; safe on any graph)."""
         seen, todo = set(), [e[2] for e in start_edges]
         while todo:
             i = todo.pop()
@@ -206,27 +220,37 @@ class Workflow:
         return extra
 
     def _topo(self):
-        """Dependency order that follows one chain to its end before starting the next."""
-        succ, indeg = defaultdict(set), {i: 0 for i in self.live}
-        for s, d in [(e[0], e[2]) for i in self.live for e in self.outs.get(i, ())] + self.order_edges:
-            if d not in succ[s]:
-                succ[s].add(d)
-                indeg[d] += 1
+        """Run order: real connections decide (this always succeeds on a workflow without a loop); Block Until Done
+        only decides which ready branch goes first. A Block Until Done preference that the connections contradict is
+        dropped and returned, never turned into a loop.
+        -> (rank, connections that form a real loop, dropped (before, after) preferences)."""
+        succ, indeg = defaultdict(list), {i: 0 for i in self.live}
+        for i in self.live:
+            for e in self.outs.get(i, ()):
+                if e[2] not in succ[i]:
+                    succ[i].append(e[2])
+                    indeg[e[2]] += 1
+        wait = defaultdict(set)                       # after -> befores it would like to follow
+        for before, after in self.order_edges:
+            wait[after].add(before)
         ready = sorted((i for i, n in indeg.items() if n == 0), key=_id_key)
-        rank = {}
+        rank, dropped = {}, []
         while ready:
-            i = ready.pop(0)
+            pick = next((n for n, i in enumerate(ready) if wait[i] <= rank.keys()), 0)
+            i = ready.pop(pick)
+            dropped += [(b, i) for b in sorted(wait[i] - rank.keys(), key=_id_key)]
             rank[i] = len(rank)
             freed = []
             for d in sorted(succ.get(i, ()), key=_id_key):
                 indeg[d] -= 1
                 if indeg[d] == 0:
                     freed.append(d)
-            ready[0:0] = freed
-        self.cyclic = sorted(set(self.live) - set(rank), key=_id_key)
-        for i in self.cyclic:
+            ready[0:0] = freed                        # follow one chain to its end before starting the next
+        left = set(self.live) - set(rank)
+        loop = [e for i in sorted(left, key=_id_key) for e in self.outs.get(i, ()) if e[2] in left]
+        for i in sorted(left, key=_id_key):
             rank[i] = len(rank)
-        return rank
+        return rank, loop, dropped
 
     def ordered(self):
         return sorted(self.live, key=lambda i: self.rank[i])
@@ -278,6 +302,22 @@ def _expr(tool, text, label):
     except (RecursionError, MemoryError):
         tool.problems.append("%s: %s" % (label, expr.too_deep(text)))
     return {"text": flat(text), "ast": None, "canon": flat(text)}
+
+
+def dyn_kind(how):
+    """Dynamic Input 'read a list of data sources': what the listed value replaces in the template.
+    -> "path" (the entire file path), "name" (the file name, in the template's folder), "prefix" or "suffix"
+    (added to the template's file name), or None when the setting is not one of these."""
+    h = re.sub(r"[^a-z]", "", (how or "").lower())
+    if "prepend" in h or "prefix" in h:
+        return "prefix"
+    if "append" in h or "suffix" in h:
+        return "suffix"
+    if "path" in h:
+        return "path"
+    if "file" in h or "table" in h or "name" in h:
+        return "name"
+    return None
 
 
 def _file(cfg):
@@ -337,8 +377,15 @@ def _parse(t):
         ir["file"], ir["options"] = _file(inner if inner is not None else cfg)
         ir["mode"], ir["field"] = _val(cfg, "Mode", "ReadList"), _val(cfg, "ReadList_Field")
         ir["how"], ir["types"] = _val(cfg, "ReadList_Type", "FullPath"), _recorded(t)
-        if ir["mode"] != "ReadList" or ir["how"] != "FullPath":
-            t.problems.append("Dynamic Input mode %s/%s is not supported" % (ir["mode"], ir["how"]))
+        ir["kind"] = dyn_kind(ir["how"])
+        if ir["mode"] != "ReadList" or ir["kind"] is None:
+            t.problems.append("Dynamic Input mode %s/%s is not known to the converter" % (ir["mode"], ir["how"]))
+    elif k == "RunCommand":
+        ir["command"], ir["args"] = flat(cfg.findtext("Command", "")), flat(cfg.findtext("CommandArguments", ""))
+        ir["folder"] = flat(cfg.findtext("WorkingDirectory", "") or cfg.findtext("RunDirectory", ""))
+        ir["files"] = list(dict.fromkeys(
+            flat(e.text) for e in cfg.iter() if e.text and e.tag not in ("Command", "CommandArguments") and
+            re.search(r"\.(csv|txt|xlsx|xlsm|xls|yxdb|json|xml|dat)(\|\|\|.*)?$", flat(e.text), re.I)))
     elif k == "TextInput":
         ir["columns"] = [f.get("name", "") for f in cfg.findall("Fields/Field")]
         ir["rows"] = [[c.text for c in r.findall("c")] for r in cfg.findall("Data/r")]

@@ -11,9 +11,11 @@ sub-chains are described once. Deterministic; standard library only.
 import fnmatch
 import os
 import re
+import traceback
 from collections import Counter, defaultdict
 
 from . import codegen, expr, sketch
+from .spec import describe
 from .logic import BLOCKERS, CLEANSE_WORDS, CODE_PAGES, STRING, WIDTH, Logic, _file, _names
 from .workflow import STATUS, _id_key
 
@@ -209,9 +211,17 @@ def _cols(names):
     return "[%s]" % ", ".join(_q(n) for n in names)
 
 
+def where_raised(exc):
+    """The innermost function of this package that the exception passed through: "guide.short"."""
+    frames = [f for f in traceback.extract_tb(exc.__traceback__) if os.sep + "ayx2py" + os.sep in f.filename]
+    f = frames[-1] if frames else (traceback.extract_tb(exc.__traceback__) or [None])[-1]
+    return "%s.%s" % (os.path.splitext(os.path.basename(f.filename))[0], f.name) if f else "?"
+
+
 class Guide:
     def __init__(self, wf):
         self.wf, self.t = wf, wf.tools
+        self.errors = []                 # (exception type, where, tool id, tool kind): shown in the guide, and --diagnose
         self.L = Logic(wf)
         self.fn, _ = codegen.function_names(wf)
         self.rank = wf.rank
@@ -221,6 +231,7 @@ class Guide:
         off = [p[0] for p, dis in wf.containers if len(p) == 1 and dis and p[0] not in live_tops]
         self.tops = live_tops + list(dict.fromkeys(off))
         self.cnum = {k: n for n, k in enumerate(self.tops, 1)}
+        self.off = {p[0] for p, dis in wf.containers if len(p) == 1 and dis}      # top containers disabled when saved
         self.number()
         self.cards = {i: self.safe_card(i) for i in self.order}
         kinds = sorted({self.t[i].kind for i in self.order if self.t[i].status == "caveat" and STATUS.get(self.t[i].kind, ("", ""))[1]})
@@ -460,16 +471,29 @@ class Guide:
             return ["%s = pd.read_excel(%s%s)%s" % (v, pv, "".join(", " + a for a in args), typed)]
         return ["%s = pd.DataFrame()  # pandas cannot read %s directly: export it to CSV or Excel and read that" % (v, path)]
 
+    def failed(self, i, exc):
+        """Record an exception met while describing tool i; -> the words to show for it."""
+        what = "%s in %s" % (type(exc).__name__, where_raised(exc))
+        self.errors.append((type(exc).__name__, where_raised(exc), i, self.t[i].kind if i in self.t else "?"))
+        return what
+
     def safe_card(self, i):
         try:
             return self.card(i)
-        except (RecursionError, MemoryError):
+        except Exception as exc:  # noqa: BLE001 - one tool must not stop the guide; the error is reported
             t = self.t[i]
-            if not any("nested too deeply" in p for p in t.problems):
-                t.problems.append("expression nested too deeply to describe")
-            return {"does": "Runs **%s**; its rule is nested too deeply to describe here." % t.kind,
-                    "rule": [], "reads": [], "writes": [], "py": ["# rule nested too deeply: write this step by hand"],
-                    "notes": []}
+            what = self.failed(i, exc)
+            t.problems.append("the converter failed on this step (%s)" % what)
+            return {"does": "Runs **%s** (the converter could not describe this step: %s; its settings are below)."
+                            % (designer(t.kind), what),
+                    "rule": ["setting: " + x for x in describe(t)], "reads": [], "writes": [],
+                    "py": ["# not converted (%s): write this step by hand from its settings" % what], "notes": []}
+
+    def guard(self, i, fn, *args):
+        try:
+            return fn(*args)
+        except Exception as exc:  # noqa: BLE001 - reported in the row and in the last section
+            return "(could not describe: %s)" % self.failed(i, exc)
 
     # ---- one card
     def card(self, i):
@@ -522,15 +546,26 @@ class Guide:
             c["py"] = self.load_lines(i)
         elif k == "DynamicInput":
             tpl, sheet, _, _ = place(ir["file"], ir["options"])
-            c["does"] = "Reads every file named in [%s] (each like `%s`) and stacks their rows." % (ir["field"], tpl)
+            kind = ir.get("kind")
+            c["does"] = "Opens, for each incoming row, %s, and stacks their rows." % self.dyn_words(i)
             c["reads"] = [ir["field"]]
-            full = 'os.path.join(FOLDER, p.split("|||")[0].replace("\\\\", os.sep))'
+            folder, name = os.path.split(tpl.replace("\\", "/"))
+            stem, ext = os.path.splitext(name)
+            value = 'p.split("|||")[0]'
+            path = {"path": 'os.path.join(FOLDER, %s.replace("\\\\", os.sep))' % value,
+                    "name": "os.path.join(%s, %s)" % (path_parts(folder or "."), value),
+                    "prefix": "os.path.join(%s, %s + %r)" % (path_parts(folder or "."), value, name),
+                    "suffix": "os.path.join(%s, %r + %s + %r)" % (path_parts(folder or "."), stem, value, ext)}.get(kind)
             excel = tpl.lower().endswith((".xlsx", ".xlsm", ".xls"))
             opts = ', sheet_name="%s"' % sheet if excel and sheet else ", dtype=str%s" % _encoding(ir["options"]) if not excel else ""
             fn = "pd.read_excel" if excel else "pd.read_csv"
-            c["py"] = ['files = [%s(%s%s) for p in df["%s"]]' % (fn, full, opts, ir["field"]),
-                       'df = pd.concat(files or [%s(%s%s, nrows=0)], ignore_index=True)  # no file listed: the template\'s '
-                       'columns, no rows' % (fn, path_parts(tpl), opts)]
+            if path is None:
+                c["py"] = ["# Dynamic Input mode %s/%s is not known to the converter: read each file named in [%s] by hand"
+                           % (ir["mode"], ir["how"], ir["field"])]
+            else:
+                c["py"] = ['files = [%s(%s%s) for p in df["%s"].dropna()]' % (fn, path, opts, ir["field"]),
+                           'df = pd.concat(files or [%s(%s%s, nrows=0)], ignore_index=True)  # no file listed: the '
+                           'template\'s columns, no rows' % (fn, path_parts(tpl), opts)]
             for name, typ in ir.get("types", {}).items():
                 write(name, typ, "read from the files")
         elif k == "Directory":
@@ -825,10 +860,17 @@ class Guide:
                 c["py"].append("%s = %s  # the data passes through" % (self.var(i, a), self.var(e[0], e[1]) if e and not same else "df"))
             c["py"].append("# run what follows output 1 before what follows output 2")
         elif k == "RunCommand":
-            prog, args = t.cfg.findtext("Command", ""), t.cfg.findtext("CommandArguments", "")
-            cmd = " ".join(x for x in (prog, args) if x)
-            c["does"] = "Runs the external command `%s`." % cmd
-            c["py"] = ["# subprocess.run(%r, check=True)  # runs another program: uncomment to run it" % ([prog] + args.split())]
+            cmd = " ".join(x for x in (ir["command"], ir["args"]) if x)
+            c["does"] = "Runs `%s` outside Alteryx%s: write this step by hand." % (
+                cmd, " (in folder `%s`)" % ir["folder"] if ir["folder"] else "")
+            if ir["files"]:
+                c["notes"].append("Files named in its settings: %s." % ", ".join("`%s`" % f for f in ir["files"]))
+            c["rule"] = ["program:   " + (ir["command"] or "?"), "arguments: " + (ir["args"] or "—")] + \
+                (["folder:    " + ir["folder"]] if ir["folder"] else []) + ["file:      " + f for f in ir["files"]]
+            c["py"] = ["# runs %s outside Alteryx (often a .vbs or .bat that drives an Excel macro): write its work in "
+                       "Python by hand" % cmd,
+                       "# subprocess.run(%r, check=True)  # or run the same program: uncomment" % ([ir["command"]] +
+                                                                                                ir["args"].split())]
         else:
             c["does"] = "Runs **%s**; its settings are below." % k.replace("Macro:", "the macro ")
             c["rule"] = [ir.get("raw", "")]
@@ -844,7 +886,7 @@ class Guide:
                     c["py"].append("%s = df" % self.var(i, a))
         prep = []
         for e in ins:                                     # a folded read that also chooses or cleans columns
-            if e[0] in self.fold_of:
+            if e[0] in self.fold_of and i not in self.fold_of:      # (only for the step that uses it)
                 ids, v = self.chain(e[0])
                 if len(ids) > 1 and v not in "".join(prep):
                     prep.append("%s = %s.copy()  # %s, then:" % (v, self.src_of[ids[0]], _md_plain(self.read_label(e[0]))))
@@ -940,8 +982,9 @@ class Guide:
                    ("pre", HELPERS),
                    ("h", 2, "Summary", "summary"),
                    ("steps", [{"text": x} for x in [
-                       "%d containers, %d tools that run, %d branches." % (
-                           len(self.tops), len(live), len({b for b in self.bid.values()})),
+                       "%d containers%s, %d tools, %d branches." % (
+                           len(self.tops), ", %d disabled in the saved file (documented anyway)" % len(self.off & set(self.tops))
+                           if self.off & set(self.tops) else "", len(live), len({b for b in self.bid.values()})),
                        "**Python:** %d steps convert exactly, %d with a stated assumption, %d are not converted." % (
                            status["exact"], status["caveat"], status["stub"]),
                        "**Before relying on it:** see [[check|the last section]]."]], False)]
@@ -950,13 +993,15 @@ class Guide:
         for key in self.tops:
             reads, writes, runs, _ = self.files(key)
             reads = list(dict.fromkeys(reads))
-            disabled = not any(self.top_of[i] == key for i in self.order)
+            empty = not any(self.top_of[i] == key for i in self.order)
+            disabled = key in self.off
             n_tools = sum(1 for i in self.order if self.top_of[i] == key)
             fed = list(dict.fromkeys(self.cref(a) for a, b, _ in links if b == key))
             feeds = list(dict.fromkeys(self.cref(b) for a, b, _ in links if a == key))
             base = lambda xs: ", ".join(dict.fromkeys(place_text(x, bold=False).replace("`" + place(x)[0] + "`", os.path.basename(
                 place(x)[0].replace("\\", "/"))) for x in xs)) or "—"
-            rows.append([self.cref(key), "no (disabled)" if disabled else "yes", n_tools,
+            rows.append([self.cref(key), ("no: disabled in the saved file" + (" (left out: --enabled-only)" if empty else
+                                                                               " (documented anyway)")) if disabled else "yes", n_tools,
                          len({self.bid[s] for s in self.bid if self.top_of[L.stages[s][0]] == key}),
                          ", ".join([base([r for r in reads if not r.startswith(("files named", "folder "))])] * any(
                              not r.startswith(("files named", "folder ")) for r in reads) +
@@ -964,7 +1009,8 @@ class Guide:
                          base(writes) + ("; runs %d command%s" % (len(runs), "" if len(runs) == 1 else "s") if runs else ""),
                          ", ".join(fed) or "—", ", ".join(feeds) or "—"])
             nodes.append({"id": "c%d" % self.cnum[key], "label": "%d. %s" % (self.cnum[key], self.cname(key)),
-                          "sub": "disabled" if disabled else "%d tools" % n_tools, "kind": "stub" if disabled else "stage",
+                          "sub": ("disabled · %d tools" if disabled else "%d tools") % n_tools,
+                          "kind": "stub" if disabled else "stage",
                           "href": "c%d" % self.cnum[key]})
         edges = [("c%d" % self.cnum[a], "c%d" % self.cnum[b]) for a, b, _ in links]
         toc = []
@@ -984,7 +1030,7 @@ class Guide:
                     kids.append({"text": "Inside " + " > ".join(path[1:]), "children": items})
                 else:
                     kids += items
-            toc.append({"text": self.cref(key) + ("" if kids else " (disabled)"), "children": kids})
+            toc.append({"text": self.cref(key) + (" (disabled in the saved file)" if key in self.off else ""), "children": kids})
         blocks.append(("details", 2, "Contents", "toc", [("steps", toc, False)], False))
         blocks += [("h", 2, "Containers", "containers"),
                    ("table", ["Container", "Runs", "Tools", "Branches", "Reads", "Writes", "Fed by", "Feeds"], rows),
@@ -1002,9 +1048,10 @@ class Guide:
         if not tools:
             n = sum(1 for t in self.t.values() if t.path[:1] == [key] and t.disabled)
             kinds = Counter(t.kind for t in self.t.values() if t.path[:1] == [key] and t.disabled)
-            return ("details", 2, title + " — disabled", "c%d" % k, [
-                ("p", "Disabled in the workflow: its %d tools do not run, and are not described here. Kinds: %s." % (
-                    n, ", ".join("%s %d" % kv for kv in kinds.most_common())))], False)
+            return ("details", 2, title + " — disabled in the saved file", "c%d" % k, [
+                ("p", "Disabled in the saved file, and left out because the guide was made with --enabled-only: its %d "
+                      "tools are not described. Kinds: %s." % (n, ", ".join("%s %d" % kv for kv in kinds.most_common())))],
+                    False)
         reads, writes, runs, _ = self.files(key)
         reads, writes = list(dict.fromkeys(reads)), list(dict.fromkeys(writes))
         inner, facts = [], []
@@ -1039,8 +1086,13 @@ class Guide:
         if stubs:
             facts.append({"text": "**Not converted to Python:** steps " + ", ".join(self.ref(i) for i in stubs)})
         off = [p for p, dis in self.wf.containers if dis and p[:1] == [key] and len(p) > 1]
-        if off:
-            facts.append({"text": "**Disabled inside (not run):** " + "; ".join(" > ".join(p[1:]) for p in off)})
+        if off and key not in self.off:
+            facts.append({"text": "**Disabled in the saved file, inside it:** " + "; ".join(" > ".join(p[1:]) for p in off) +
+                                  " (documented below anyway)"})
+        if key in self.off:
+            facts.insert(0, {"text": "**Disabled in the saved file.** Alteryx skips this container until someone "
+                                     "enables it (teams often run one container at a time this way). It is documented "
+                                     "and converted like the others; in the generated code run it with `only=%d`." % k})
         if frows:
             inner += [("p", "**Files it opens and saves:**"), ("table", ["Step", "", "File", "Sheet", "Cells", "Notes"], frows)]
         inner.append(("steps", facts, False))
@@ -1102,8 +1154,9 @@ class Guide:
             else:
                 inner += body
         inner.append(self.columns(key, tools))
-        return ("details", 2, "%s — %d tool%s, %d branch%s" % (title, len(tools), "" if len(tools) == 1 else "s", len(branches),
-                                                                "" if len(branches) == 1 else "es"), "c%d" % k, inner, False)
+        return ("details", 2, "%s%s — %d tool%s, %d branch%s" % (
+            title, " — disabled in the saved file" if key in self.off else "", len(tools), "" if len(tools) == 1 else "s",
+            len(branches), "" if len(branches) == 1 else "es"), "c%d" % k, inner, False)
 
     def twin_stage(self, s):
         b, c = self.L.copy_of[s]
@@ -1186,8 +1239,7 @@ class Guide:
             mode = OUT_MODE.get(ir["options"].get("OutputOption", ""), "")
             return "saves the table to " + file_text(ir["file"], ir["options"]).replace(" › ", ", ") + (" (%s)" % mode if mode else "")
         if k == "DynamicInput":
-            return "opens every file listed in [%s] (each like %s) and stacks them" % (
-                ir["field"], file_text(ir["file"], ir["options"]).replace(" › ", ", "))
+            return "opens %s, and stacks them" % self.dyn_words(i)
         if k == "Directory":
             return "lists the files in folder `%s` named `%s`" % (ir["dir"], ir["spec"])
         if k == "TextInput":
@@ -1275,7 +1327,8 @@ class Guide:
         if k in BLOCKERS:
             return "waits for all rows; what follows output 2 runs after output 1 is done"
         if k == "RunCommand":
-            return "runs the program `%s`" % _short(" ".join(x for x in (t.cfg.findtext("Command", ""), t.cfg.findtext("CommandArguments", "")) if x), 60)
+            return "runs `%s` outside Alteryx: write this step by hand" % _short(
+                " ".join(x for x in (ir["command"], ir["args"]) if x), 60)
         if k == "TextToColumns":
             cfg = t.cfg
             delim = cfg.find("Delimeters")
@@ -1288,6 +1341,19 @@ class Guide:
             return "applies the pattern `%s` to [%s] (%s)" % (_short(rx.get("value") if rx is not None else "?", 40),
                                                             t.cfg.findtext("Field", "?"), t.cfg.findtext("Method", "?"))
         return "settings in the step's details"
+
+    def dyn_words(self, i):
+        ir = self.t[i].ir
+        like = file_text(ir["file"], ir["options"]).replace(" › ", ", ")
+        tpl = place(ir["file"])[0]
+        folder, name = os.path.split(tpl.replace("\\", "/"))
+        return {"path": "every file listed in column [%s] (the column holds the whole path; sheet as in the template %s)"
+                        % (ir["field"], like),
+                "name": "the file named in column [%s], in folder `%s` (like %s)" % (ir["field"], folder or ".", like),
+                "prefix": "the template %s with column [%s] put before its file name" % (like, ir["field"]),
+                "suffix": "the template %s with column [%s] added to its file name" % (like, ir["field"])}.get(
+            ir.get("kind"), "the files given by column [%s] (mode %s/%s, not known to the converter; template %s)"
+            % (ir["field"], ir.get("mode"), ir.get("how"), like))
 
     def new_cols(self, i):
         w = [x[0] for x in self.cards[i]["writes"]]
@@ -1344,10 +1410,18 @@ class Guide:
             t = self.t[i]
             tool = designer(t.kind) + (" “%s”" % _short(t.note, 40) if t.note else "")
             rows.append(["[[r%s|%s]]" % (self.sid[i].replace(".", "-"), self.sid[i]), tool + (" ⚠" if t.status == "stub" else ""),
-                         self.short(i), self.new_cols(i), self.next_text(i)])
+                         self.guard(i, self.short, i), self.guard(i, self.new_cols, i), self.guard(i, self.next_text, i)])
             anchors.append("s" + self.sid[i].replace(".", "-"))
         return [("table", ["Step", "Tool", "What it does", "New / changed columns", "Next"], rows, anchors),
-                ("folds", [self.fold(i) for i in ids])]
+                ("folds", [self.safe_fold(i) for i in ids])]
+
+    def safe_fold(self, i):
+        try:
+            return self.fold(i)
+        except Exception as exc:  # noqa: BLE001 - reported
+            return {"anchor": "r" + self.sid[i].replace(".", "-"), "lines": ["setting: " + x for x in describe(self.t[i])],
+                    "summary": "**%s** %s #%s · could not describe: %s" % (self.sid[i], designer(self.t[i].kind), i,
+                                                                           self.failed(i, exc))}
 
     def repeat(self, group):
         L = self.L
@@ -1426,7 +1500,7 @@ class Guide:
                                   "until the step is written by hand, or until the test notebook gives it a stand-in."
                                   % (len(stubs), "" if len(stubs) == 1 else "s"),
                           "children": [{"text": "%s, %d step%s (%s): %s" % (kind, len(ts), "" if len(ts) == 1 else "s",
-                                                                           ", ".join(self.ref(t.id) for t in ts), reason)}
+                                                                           ", ".join(self.step_ref(t.id) for t in ts), reason)}
                                        for (kind, reason), ts in why.items()]})
         fa = [t.id for t in live if t.kind == "FindReplace" and t.ir.get("mode") == "FindAny"]
         if fa:
@@ -1447,9 +1521,46 @@ class Guide:
         if waits:
             items.append({"text": "**Run order:** Block Until Done at steps %s: a rewrite must finish what follows output "
                                   "1 before starting what follows output 2." % ", ".join(self.ref(i) for i in waits)})
-        if self.wf.cyclic:
-            items.append({"text": "**Tools in a loop** (order unknown): " + " ".join("#" + i for i in self.wf.cyclic)})
+        ext = [t.id for t in live if t.kind == "RunCommand"]
+        if ext:
+            items.append({"text": "**%d external program%s to replace** (Run Command): Alteryx starts them; the generated "
+                                  "code only logs them, so write each by hand: %s." % (
+                                      len(ext), "" if len(ext) == 1 else "s", ", ".join(self.step_ref(i) for i in ext))})
+        if self.wf.dropped:
+            items.append({"text": "**Run order: %d Block Until Done preference%s could not be honoured**, because the "
+                                  "connections require the opposite order:" % (len(self.wf.dropped),
+                                                                              "" if len(self.wf.dropped) == 1 else "s"),
+                          "children": [{"text": "could not honour: step %s before step %s" % (self.step_ref(b), self.step_ref(a))}
+                                       for b, a in self.wf.dropped[:50]] +
+                                      ([{"text": "… and %d more" % (len(self.wf.dropped) - 50)}] if len(self.wf.dropped) > 50
+                                       else [])})
+        if self.wf.cycle_edges:
+            items.append({"text": "**The connections form a loop**, which Alteryx would not run; the order of these steps "
+                                  "is a guess:",
+                          "children": [{"text": "step %s → step %s" % (self.step_ref(e[0]), self.step_ref(e[2]))}
+                                       for e in self.wf.cycle_edges]})
+        if self.wf.missing_ends:
+            items.append({"text": "**%d connection%s to a tool that is not in the file** (ignored): %s" % (
+                len(self.wf.missing_ends), "" if len(self.wf.missing_ends) == 1 else "s",
+                ", ".join("#%s → #%s" % (e[0], e[2]) for e in self.wf.missing_ends[:20]))})
+        if self.errors:
+            by = defaultdict(list)
+            for typ, where, i, kind in self.errors:
+                by[(typ, where)].append(i)
+            items.append({"text": "**The converter failed on %d step%s** (please report; each step is still listed, "
+                                  "with its settings):" % (len({e[2] for e in self.errors}),
+                                                          "" if len({e[2] for e in self.errors}) == 1 else "s"),
+                          "children": [{"text": "%s in %s: steps %s" % (typ, where, ", ".join(
+                              self.step_ref(i) for i in dict.fromkeys(ids)))} for (typ, where), ids in by.items()]})
         return [("h", 2, "Before relying on this", "check"), ("steps", items or [{"text": "Nothing to flag."}], False)]
+
+    def step_ref(self, i):
+        """A step number to cite; a file read shown inside a step is cited as that step."""
+        if i in self.fold_of:
+            return "%s (the file it reads)" % self.ref(self.folded[self.fold_of[i]][0])
+        if i not in self.sid:
+            return "#%s" % i
+        return self.ref(i)
 
 
 def _md_plain(text):

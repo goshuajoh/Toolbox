@@ -39,6 +39,10 @@ def main(argv=None):
                     help="also write NAME_test.ipynb, which runs the generated code container by container")
     ap.add_argument("--tool-listing", action="store_true", help="also write every tool's settings, one tool at a time")
     ap.add_argument("--width", type=int, default=150, help="line width of the tool listing")
+    ap.add_argument("--enabled-only", action="store_true",
+                    help="leave out containers disabled in the saved file (by default they are documented and converted)")
+    ap.add_argument("--diagnose", metavar="REPORT.txt", default=None,
+                    help="also write a structure-only report (no rules, names, files or notes) that can be shared")
     ap.add_argument("--and-before-or", action="store_true",
                     help="parse AND before OR instead of Alteryx's documented left-to-right rule")
     a = ap.parse_args(argv)
@@ -46,7 +50,7 @@ def main(argv=None):
         sys.stdout.reconfigure(errors="replace")        # a Windows console may not have every character
     expr.AND_BINDS_TIGHTER = a.and_before_or
     try:
-        wf = workflow.Workflow(a.workflow)
+        wf = workflow.Workflow(a.workflow, enabled_only=a.enabled_only)
     except (workflow.WorkflowError, OSError) as e:
         print("ERROR: %s" % e)
         return 2
@@ -56,7 +60,27 @@ def main(argv=None):
         print("ERROR: choose an output folder other than the workflow's own folder")
         return 2
     os.makedirs(out_dir, exist_ok=True)
+    try:
+        return _write(a, wf, base, out_dir)
+    except Exception as exc:
+        if a.diagnose:
+            _diagnose(a.diagnose, wf, _LAST.get("guide"), "%s in %s" % (type(exc).__name__, guide.where_raised(exc)))
+        raise
+
+
+_LAST = {}
+
+
+def _diagnose(path, wf, g, fatal=None):
+    from . import diagnose
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(diagnose.report(wf, g, fatal)) + "\n")
+    print("wrote %s (structure only: safe to share)" % path)
+
+
+def _write(a, wf, base, out_dir):
     g = guide.Guide(wf)
+    _LAST["guide"] = g
     doc = g.build()
     workflow_dir = os.path.dirname(os.path.abspath(a.workflow))
     files = [(base + "_guide.md", logicdoc.to_markdown(doc), "utf-8"),
@@ -80,6 +104,15 @@ def main(argv=None):
         with open(os.path.join(out_dir, name), "w", encoding=enc, newline="\n") as fh:
             fh.write(text)
         print("wrote %s: %d lines, %d characters" % (os.path.join(out_dir, name), text.count("\n"), len(text)))
+    ext = [i for i in wf.ordered() if wf.tools[i].kind == "RunCommand"]
+    if ext:
+        print("%d external program%s to replace (Run Command; the generated code only logs them): %s" % (
+            len(ext), "" if len(ext) == 1 else "s", ", ".join("#%s" % i for i in ext)))
+    if g.errors:
+        print("the converter failed on %d step%s (listed in the guide's last section)" % (
+            len({e[2] for e in g.errors}), "" if len({e[2] for e in g.errors}) == 1 else "s"))
+    if a.diagnose:
+        _diagnose(a.diagnose, wf, g)
     deep = codegen.deep_tools(wf)
     if deep:
         print("%d tool%s not converted because a rule nests too deeply (see the guide's last section): %s" % (

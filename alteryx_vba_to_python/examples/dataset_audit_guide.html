@@ -66,9 +66,9 @@ def eq(a, b):
     return (fold(a) == fold(b)) | (null(a) &amp; null(b))</pre>
 <h2 id="summary">Summary</h2>
 <ul>
-<li>3 containers, 32 tools that run, 9 branches.
+<li>3 containers, 1 disabled in the saved file (documented anyway), 34 tools, 10 branches.
 </li>
-<li><b>Python:</b> 18 steps convert exactly, 13 with a stated assumption, 1 are not converted.
+<li><b>Python:</b> 19 steps convert exactly, 14 with a stated assumption, 1 are not converted.
 </li>
 <li><b>Before relying on it:</b> see <a href="#check">the last section</a>.
 </li>
@@ -105,7 +105,11 @@ def eq(a, b):
 </li>
 </ul>
 </li>
-<li><a href="#c3">3. Old checks</a> (disabled)
+<li><a href="#c3">3. Old checks</a> (disabled in the saved file)
+<ul>
+<li><a href="#b3-1">Branch 3.1</a> — Read old_rules.csv
+</li>
+</ul>
 </li>
 </ul>
 </div></details>
@@ -113,14 +117,14 @@ def eq(a, b):
 <table><thead><tr><th>Container</th><th>Runs</th><th>Tools</th><th>Branches</th><th>Reads</th><th>Writes</th><th>Fed by</th><th>Feeds</th></tr></thead><tbody>
 <tr><td><a href="#c1">1. Import and consolidate</a></td><td>yes</td><td>4</td><td>1</td><td>datasets_export.csv</td><td>Consolidated Datasets.xlsx · sheet <b>Datasets</b></td><td>—</td><td><a href="#c2">2. Dataset audit</a></td></tr>
 <tr><td><a href="#c2">2. Dataset audit</a></td><td>yes</td><td>28</td><td>8</td><td>folder Output (*.xlsx), files named in [Source]</td><td>Dataset audit.xlsx · sheet <b>Issues</b></td><td><a href="#c1">1. Import and consolidate</a></td><td>—</td></tr>
-<tr><td><a href="#c3">3. Old checks</a></td><td>no (disabled)</td><td>0</td><td>0</td><td>—</td><td>—</td><td>—</td><td>—</td></tr>
+<tr><td><a href="#c3">3. Old checks</a></td><td>no: disabled in the saved file (documented anyway)</td><td>2</td><td>1</td><td>old_rules.csv</td><td>—</td><td>—</td><td>—</td></tr>
 </tbody></table>
 <div class="diagram"><svg xmlns="http://www.w3.org/2000/svg" width="538" height="192" font-family="Segoe UI,Roboto,sans-serif">
 <defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8c959f"/></marker></defs>
 <path d="M141,58 C141,81 269,81 269,102" fill="none" stroke="#8c959f" stroke-width="1.2" marker-end="url(#ah)"/>
 <a href="#c1"><rect x="26" y="16" width="230" height="42" rx="7" fill="#e3eefb" stroke="#8c959f"/><text x="34" y="33" font-size="12.5" font-weight="600" fill="#1f2328">1. Import and consolidate</text><text x="34" y="49" font-size="11.5" fill="#424a53">4 tools</text><title>1. Import and consolidate — 4 tools</title></a>
 <a href="#c2"><rect x="154" y="104" width="230" height="42" rx="7" fill="#e3eefb" stroke="#8c959f"/><text x="162" y="121" font-size="12.5" font-weight="600" fill="#1f2328">2. Dataset audit</text><text x="162" y="137" font-size="11.5" fill="#424a53">28 tools</text><title>2. Dataset audit — 28 tools</title></a>
-<a href="#c3"><rect x="282" y="16" width="230" height="42" rx="7" fill="#fbdada" stroke="#8c959f"/><text x="290" y="33" font-size="12.5" font-weight="600" fill="#1f2328">3. Old checks</text><text x="290" y="49" font-size="11.5" fill="#424a53">disabled</text><title>3. Old checks — disabled</title></a>
+<a href="#c3"><rect x="282" y="16" width="230" height="42" rx="7" fill="#fbdada" stroke="#8c959f"/><text x="290" y="33" font-size="12.5" font-weight="600" fill="#1f2328">3. Old checks</text><text x="290" y="49" font-size="11.5" fill="#424a53">disabled · 2 tools</text><title>3. Old checks — disabled · 2 tools</title></a>
 </svg></div>
 <details class="d2" id="c1"><summary><span class="h2">1. Import and consolidate — 4 tools, 1 branch</span></summary><div class="inner">
 <p><b>Files it opens and saves:</b></p>
@@ -243,7 +247,7 @@ df["Load Date"] = pd.Timestamp.today().normalize()</pre></details>
 <tr id="s2-3"><td><a href="#r2-3">2.3</a></td><td>Sort</td><td>sorts by [CreationTime] Z→A</td><td></td><td><a href="#s2-4">2.4</a></td></tr>
 <tr id="s2-4"><td><a href="#r2-4">2.4</a></td><td>Sample</td><td>keeps the first row</td><td></td><td><a href="#s2-5">2.5</a></td></tr>
 <tr id="s2-5"><td><a href="#r2-5">2.5</a></td><td>Formula</td><td>fills column <b>Source</b> = [FullPath] + "|||Datasets"</td><td><b>Source</b></td><td><a href="#s2-6">2.6</a></td></tr>
-<tr id="s2-6"><td><a href="#r2-6">2.6</a></td><td>Dynamic Input</td><td>opens every file listed in [Source] (each like <code>template.xlsx</code>, sheet <code>Datasets</code>) and stacks them</td><td>9 columns</td><td><a href="#s2-7">2.7</a>, <a href="#s2-10">2.10</a>, <a href="#s2-13">2.13</a>, <a href="#s2-16">2.16</a>, <a href="#s2-19">2.19</a>, <a href="#s2-22">2.22</a></td></tr>
+<tr id="s2-6"><td><a href="#r2-6">2.6</a></td><td>Dynamic Input</td><td>opens every file listed in column [Source] (the column holds the whole path; sheet as in the template <code>template.xlsx</code>, sheet <code>Datasets</code>), and stacks them</td><td>9 columns</td><td><a href="#s2-7">2.7</a>, <a href="#s2-10">2.10</a>, <a href="#s2-13">2.13</a>, <a href="#s2-16">2.16</a>, <a href="#s2-19">2.19</a>, <a href="#s2-22">2.22</a></td></tr>
 </tbody></table>
 <details class="fold"><summary><b>2.1</b> Directory #30 · converted, assuming A2 · <code>t30</code></summary><pre class="rule" id="r2-1"># columns: FullPath, FileName, CreationTime, LastWriteTime
 # pandas:
@@ -263,7 +267,7 @@ df["Source"] = (df["FullPath"] + '|||Datasets')</pre></details>
 <details class="fold"><summary><b>2.6</b> Dynamic Input #36 · converted, assuming A3 · <code>t36</code></summary><pre class="rule" id="r2-6"># columns: Name (V_String), Owner (V_String), CreationMode (V_String), Scenario (V_String), Tags (V_String),
 # columns: DQScore (Double), Virtualizable (V_String), SizeGB (Double), Access (V_String)
 # pandas:
-files = [pd.read_excel(os.path.join(FOLDER, p.split("|||")[0].replace("\\", os.sep)), sheet_name="Datasets") for p in df["Source"]]
+files = [pd.read_excel(os.path.join(FOLDER, p.split("|||")[0].replace("\\", os.sep)), sheet_name="Datasets") for p in df["Source"].dropna()]
 df = pd.concat(files or [pd.read_excel(os.path.join(FOLDER, "Output", "template.xlsx"), sheet_name="Datasets", nrows=0)], ignore_index=True)  # no file listed: the template's columns, no rows</pre></details>
 </div></details>
 <details class="d3" open><summary><span class="h3">Inside Checks</span></summary><div class="inner">
@@ -398,8 +402,46 @@ df["Audit Date"] = pd.Timestamp.today().normalize()</pre></details>
 </tbody></table>
 </div></details>
 </div></details>
-<details class="d2" id="c3"><summary><span class="h2">3. Old checks — disabled</span></summary><div class="inner">
-<p>Disabled in the workflow: its 2 tools do not run, and are not described here. Kinds: Input 1, Formula 1.</p>
+<details class="d2" id="c3"><summary><span class="h2">3. Old checks — disabled in the saved file — 2 tools, 1 branch</span></summary><div class="inner">
+<p><b>Files it opens and saves:</b></p>
+<table><thead><tr><th>Step</th><th></th><th>File</th><th>Sheet</th><th>Cells</th><th>Notes</th></tr></thead><tbody>
+<tr><td><a href="#s3-1">3.1</a></td><td>opens</td><td><code>Input\old_rules.csv</code></td><td>—</td><td>all</td><td></td></tr>
+</tbody></table>
+<ul>
+<li><b>Disabled in the saved file.</b> Alteryx skips this container until someone enables it (teams often run one container at a time this way). It is documented and converted like the others; in the generated code run it with <code>only=3</code>.
+</li>
+<li><b>Fed by:</b> nothing from other containers
+</li>
+<li><b>Feeds:</b> no other container
+</li>
+</ul>
+<section class="stage">
+<h3>Branches</h3>
+<table><thead><tr><th>Branch</th><th>Label</th><th>Steps</th><th>In</th><th>Out</th></tr></thead><tbody>
+<tr><td><a href="#b3-1">3.1</a></td><td>Read old_rules.csv</td><td>3.1–2</td><td>—</td><td>—</td></tr>
+</tbody></table>
+<div class="diagram"><svg xmlns="http://www.w3.org/2000/svg" width="282" height="104" font-family="Segoe UI,Roboto,sans-serif">
+<defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8c959f"/></marker></defs>
+<a href="#b3-1"><rect x="26" y="16" width="230" height="42" rx="7" fill="#dff3e4" stroke="#8c959f"/><text x="34" y="33" font-size="12.5" font-weight="600" fill="#1f2328">Branch 3.1</text><text x="34" y="49" font-size="11.5" fill="#424a53">Read old_rules.csv</text><title>Branch 3.1 — Read old_rules.csv</title></a>
+</svg></div>
+</section>
+<details class="d4" id="b3-1"><summary><span class="h4">Branch 3.1 — Read old_rules.csv · steps 3.1–2</span></summary><div class="inner">
+<p><b>In:</b> — (starts here).  <b>Out:</b> — (ends here).</p>
+<table><thead><tr><th>Step</th><th>Tool</th><th>What it does</th><th>New / changed columns</th><th>Next</th></tr></thead><tbody>
+<tr id="s3-1"><td><a href="#r3-1">3.1</a></td><td>Input Data</td><td>opens <code>old_rules.csv</code></td><td></td><td><a href="#s3-2">3.2</a></td></tr>
+<tr id="s3-2"><td><a href="#r3-2">3.2</a></td><td>Formula</td><td>fills column <b>Old</b> = 1</td><td><b>Old</b></td><td>ends (rows dropped)</td></tr>
+</tbody></table>
+<details class="fold"><summary><b>3.1</b> Input Data #100 · converted, assuming A4; note: the workflow holds no recorded field types for this input · <code>t100</code></summary><pre class="rule" id="r3-1">src_old_rules = pd.read_csv(OLD_RULES_CSV, sep=',', dtype=str, keep_default_na=False).replace("", None)</pre></details>
+<details class="fold"><summary><b>3.2</b> Formula #101 · exact · <code>t101</code></summary><pre class="rule" id="r3-2">Old = 1
+# pandas:
+df["Old"] = 1</pre></details>
+</div></details>
+<details class="d3" id="cols3"><summary><span class="h3">Columns created or changed in container 3 (1)</span></summary><div class="inner">
+<p>Each column this container creates or changes: the type Alteryx gives it, the steps that set it, how, and the later steps (anywhere in the workflow) that use a column of that name.</p>
+<table><thead><tr><th>Column</th><th>Type</th><th>Set at</th><th>How</th><th>Used later by</th></tr></thead><tbody>
+<tr><td><b>Old</b></td><td>V_WString</td><td><a href="#s3-2">3.2</a></td><td>1</td><td>not read by a later step</td></tr>
+</tbody></table>
+</div></details>
 </div></details>
 <h2 id="check">Before relying on this</h2>
 <ul>
@@ -415,7 +457,7 @@ df["Audit Date"] = pd.Timestamp.today().normalize()</pre></details>
 </li>
 <li id="a2"><b>A2</b> — Directory: file times come from the operating system
 </li>
-<li id="a3"><b>A3</b> — DynamicInput: as Input; only 'read a list of data sources' with a full path
+<li id="a3"><b>A3</b> — DynamicInput: as Input; 'read a list of data sources' (whole path, file name, prefix or suffix)
 </li>
 <li id="a4"><b>A4</b> — Input: column types depend on Alteryx's file driver; the types recorded in the workflow are applied when present
 </li>
