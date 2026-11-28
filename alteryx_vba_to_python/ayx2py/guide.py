@@ -2,7 +2,7 @@
 
 Guide numbers the steps (container k, step k.n, in branch order, as the steps notebook uses them), names the files
 each reads and writes, and describes every step: a sentence, the columns it reads and makes, its exact rule and the
-same step in pandas. layout.py arranges these into the page (one story per output). Deterministic; standard library
+same step in pandas. layout.py arranges these into the page (one table per output). Deterministic; standard library
 only.
 """
 import fnmatch
@@ -364,9 +364,6 @@ class Guide:
             return self.read_label(i)
         return "[[s%s|%s]]" % (self.sid[i].replace(".", "-"), self.sid[i])
 
-    def bref(self, s):
-        return "[[b%s|branch %s]]" % (self.bid[s].replace(".", "-"), self.bid[s])
-
     def src(self, e):
         if self.hook is not None:
             return self.hook.src(e)
@@ -386,37 +383,11 @@ class Guide:
             v += "_" + anchor.lower()
         return v
 
-    def ins_text(self, i):
-        ins, kind = self.wf.ins.get(i, []), self.t[i].kind
-        if not ins:
-            return "—" if kind in SOURCES else "nothing connected"
-        if kind in ("Join", "FindReplace", "AppendFields") or kind in BLOCKERS:
-            return "; ".join("%s ← %s" % (e[3], self.src(e)) for e in ins)
-        return ", ".join(self.src(e) for e in ins)
-
     def outs(self, i):
         groups = defaultdict(list)
         for e in self.wf.outs.get(i, []):
             groups[e[1]].append(e[2])
         return groups
-
-    def outs_text(self, i):
-        t, groups = self.t[i], self.outs(i)
-        if t.kind in ("Filter", "Join", "Unique"):
-            names = {"Filter": ("True", "False"), "Join": ("Join", "Left", "Right"), "Unique": ("Unique", "Duplicates")}[t.kind]
-            parts = []
-            for a in names:
-                dst = groups.get(a)
-                parts.append("%s → %s" % (ANCHOR[a], ", ".join(self.ref(d) for d in dst)) if dst else
-                             "%s: not used (these rows are dropped)" % ANCHOR[a])
-            return "; ".join(parts)
-        if len(groups) > 1:
-            return "; ".join("%s → %s" % (re.sub(r"(\D+)(\d+)", r"\1 \2", a).lower(), ", ".join(self.ref(d) for d in v))
-                             for a, v in sorted(groups.items()))
-        dst = [d for v in groups.values() for d in v]
-        if dst:
-            return ", ".join(self.ref(d) for d in dst)
-        return "—" if t.kind in ("Output", "RunCommand", "Message") else "not used (the stream ends here)"
 
     def input_columns(self, i):
         """Column names arriving at the tool's main input, when the workflow recorded them."""
@@ -490,12 +461,6 @@ class Guide:
                             % (designer(t.kind), what),
                     "rule": ["setting: " + x for x in describe(t)], "reads": [], "writes": [],
                     "py": ["# not converted (%s): write this step by hand from its settings" % what], "notes": []}
-
-    def guard(self, i, fn, *args):
-        try:
-            return fn(*args)
-        except Exception as exc:  # noqa: BLE001 - reported in the row and in the last section
-            return "(could not describe: %s)" % self.failed(i, exc)
 
     # ---- one card
     def card(self, i):
@@ -722,7 +687,8 @@ class Guide:
                          "Calculates over all rows: %s." % ", ".join("**%s**" % r for _, _, r, _ in aggs))
             c["reads"] = list(dict.fromkeys([f for f, _ in group] + [f for f, _, _, _ in aggs]))
             for f, a, r, o in aggs:
-                how = 'all [%s] joined with "%s"' % (f, o.get("Separator", "")) if a == "Concat" else \
+                how = 'all [%s] joined with "%s"' % (f, o.get("Separator", "").replace("\n", "\\n").replace(
+                    "\r", "\\r").replace("\t", "\\t")) if a == "Concat" else \
                     AGG_WORDS.get(a, a + " of [%s]") % ((f,) if "%s" in AGG_WORDS.get(a, "%s") else ())
                 c["rule"].append("%s = %s" % (r, how))
                 write(r, None, how)
@@ -1133,28 +1099,6 @@ class Guide:
             ir.get("kind"), "the files given by column [%s] (mode %s/%s, not known to the converter; template %s)"
             % (ir["field"], ir.get("mode"), ir.get("how"), like))
 
-    def new_cols(self, i):
-        w = [x[0] for x in self.cards[i]["writes"]]
-        if self.t[i].kind in SOURCES + ("DynamicInput",):
-            return "%d columns" % len(w) if w else ""
-        return _list(w, 5, True) if w else ""
-
-    def next_text(self, i):
-        t, groups = self.t[i], self.outs(i)
-        if t.kind in ("Filter", "Join", "Unique"):
-            names = {"Filter": ("True", "False"), "Join": ("Join", "Left", "Right"), "Unique": ("Unique", "Duplicates")}[t.kind]
-            short = {"True": "T", "False": "F", "Join": "J", "Left": "L", "Right": "R", "Unique": "U", "Duplicates": "D"}
-            used = ["%s → %s" % (short[a], ", ".join(self.ref(d) for d in groups[a])) for a in names if groups.get(a)]
-            dropped = [short[a] for a in names if not groups.get(a)]
-            return "; ".join(used + (["%s dropped" % ", ".join(dropped)] if dropped else []))
-        if len(groups) > 1:
-            return "; ".join("%s → %s" % (re.sub(r"\D+", "", a) or a, ", ".join(self.ref(d) for d in v))
-                             for a, v in sorted(groups.items()))
-        dst = [d for v in groups.values() for d in v]
-        if dst:
-            return ", ".join(self.ref(d) for d in dst)
-        return "—" if t.kind in ("Output", "RunCommand", "Message") else "ends (rows dropped)"
-
     def status(self, i):
         t = self.t[i]
         if t.status == "stub":
@@ -1214,7 +1158,7 @@ class Guide:
                          how if len(how) <= 120 else how[:118] + "…", shown or "not read by a later step"])
         if not rows:
             return ("p", "")
-        return ("details", 3, "Columns created or changed in container %d (%d)" % (self.cnum[key], len(rows)),
+        return ("details", 3, "Columns created or changed in container %d: %d" % (self.cnum[key], len(rows)),
                 "cols%d" % self.cnum[key],
                 [("p", "Each column this container creates or changes: the type Alteryx gives it, the steps that set it, "
                        "how, and the later steps (anywhere in the workflow) that use a column of that name."),

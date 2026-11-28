@@ -48,21 +48,28 @@ class DatasetAudit(unittest.TestCase):
         self.assertTrue("1. Container 2 runs after container 1: it opens `Consolidated Datasets.xlsx`, which container 1 "
                         "saves." in md)
 
-    def test_one_story_per_output_in_run_order(self):
+    def test_one_table_per_output_with_the_steps_that_change_the_data(self):
         md = self.md
         heads = re.findall(r"^#### (.+)$", md, re.M)
         self.assertEqual(heads, ["Consolidated Datasets.xlsx › Datasets", "Dataset audit.xlsx › Issues"])
         self.assertFalse(re.search(r"Branch \d", md))
         story = md[md.index("#### Dataset audit.xlsx › Issues"):md.index("### Container 3.")]
-        nums = [int(x) for x in re.findall(r"^\*\*(\d+)\. ", story, re.M)]
-        self.assertEqual(nums, list(range(1, 28)))                     # 27 steps, numbered in the order they run
-        self.assertTrue("**15. Filter** “Data Quality” · step 2.16 · tool #44  \nKeeps only the rows where [DQScore] < "
-                        "0.8.  \nTakes: step 6  \nLooks at: [DQScore]" in story, story[:2000])
-        self.assertTrue("**24. Join** · step 2.15 · tool #63  \nMatches its rows with a typed table ([Owner], [Team]; 2 "
-                        "rows) on [Owner].  \nTakes: step 14" in story)                # the typed table is read inside it
-        self.assertTrue("Stacks the tables step 9, step 12, step 24 (matched rows), step 17, step 20, step 23" in story)
-        self.assertTrue('Sets: **Issue** = "Write only" when [Access] is "W", otherwise "Read/write"' in story)
+        nums = re.findall(r"^\| (\d+) \| ", story, re.M)
+        self.assertEqual(nums, [str(n) for n in range(1, 10)])           # 27 steps told in 9 rows, in run order
+        self.assertTrue("| 2 | Keeps only the rows where [FileName] contains \"Consolidated\" and [FileName] does not "
+                        "contain \".bak\". |  | Filter · step 2.2 · tool #31 |" in story)
+        row = next(x for x in story.splitlines() if x.startswith("| 7 | "))
+        self.assertTrue(row.startswith("| 7 | Stacks 6 sets of rows taken from row 6, each chosen and changed as below:<br>"
+                                       "• Where [CreationMode] is \"Manual\" — sets **Issue** = \"Created by hand\"; "
+                                       "keeps only the columns [Name], [Owner], [Issue] (2.7–9)"), row)
+        self.assertTrue("• Where [DQScore] < 0.8 — sets **Issue** = `\"Low data quality: \" + ToString([DQScore], 2)`; "
+                        "applies the pattern" in row)                       # not simple: the rule as written
+        self.assertTrue("keeps the rows that have a match in a typed table ([Owner], [Team]) on [Owner]" in row)
+        self.assertTrue(row.endswith("| [Issue] [Datasets] [Name] −[Access] | Union · step 2.25 · tool #90 “All issues” |"))
         self.assertTrue("**Not used by any output:** 2 steps (Input Data 1, Formula 1)." in md)   # container 3
+        first = md[md.index("#### Consolidated Datasets.xlsx"):md.index("### Container 2.")]
+        self.assertTrue("**Starts from:** `datasets_export.csv`." in first)
+        self.assertTrue("_1 housekeeping step not shown:_ (1.1) Input Data #1: opens what the story starts from" in first)
 
     def test_every_step_once_with_its_rule_and_pandas(self):
         md = self.md
@@ -72,7 +79,6 @@ class DatasetAudit(unittest.TestCase):
         fold = md[md.index("- **2.17** Formula #54"):md.index("- **2.18** ")]
         self.assertTrue('Issue = "Low data quality: " + ToString([DQScore], 2)\n      # pandas:\n      df["Issue"] = ' in fold, fold)
         self.assertTrue("- **2.18** RegEx #64 · **not converted**: tool kind RegEx has no converter" in md)
-        self.assertTrue("**17. RegEx** · step 2.18 · tool #64 · ⚠ not converted: write by hand" in md)
         self.assertTrue("pd.concat([s2_9, s2_12, s2_15_join, s2_18, s2_21, s2_24], ignore_index=True)" in md)
         self.assertTrue('s2_15_join = m[m["_merge"] == "both"]' in md)
 
@@ -91,15 +97,16 @@ class DatasetAudit(unittest.TestCase):
     def test_html(self):
         h = self.html
         self.assertFalse(re.search(r"<script|<link|src=|href=\"http", h))
-        ids = set(re.findall(r'id="([^"]+)"', h))
+        ids = re.findall(r'id="([^"]+)"', h)
+        self.assertEqual(len(ids), len(set(ids)))
         for target in set(re.findall(r'href="#([^"]+)"', h)):
             self.assertTrue(target in ids, target)
         self.assertTrue('<div class="box story" id="o92"><h3><span class="chip o">Dataset audit.xlsx › Issues</span>' in h)
-        self.assertTrue('<li id="s2-16"><div><div class="tool">Filter <i>“Data Quality”</i> <small>· step 2.16 · tool #44'
-                        '</small></div>' in h)
-        self.assertTrue('<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.17</b> Formula #54' in h)
-        self.assertTrue('<pre id="r2-17">' in h)
-        self.assertTrue('Keeps only the rows where <span class="col">DQScore</span> &lt; 0.8.' in h)
+        self.assertTrue('<tr id="s2-2"><td class="n">2</td><td><div class="does">Keeps only the rows where <span '
+                        'class="col">FileName</span> contains "Consolidated"' in h)
+        self.assertTrue('<span id="s2-16"></span>' in h and '<pre id="r2-17">' in h)
+        self.assertTrue('<table class="mini"><thead><tr><th>Rows</th><th>What is done to them</th><th>Steps</th>' in h)
+        self.assertTrue('<details class="hk" id="ho4"><summary>1 housekeeping step not shown</summary>' in h)
 
 
 class Large(unittest.TestCase):
@@ -108,15 +115,16 @@ class Large(unittest.TestCase):
         folds = re.findall(r"^- \*\*(\d+\.\d+)\*\* ", md, re.M)
         self.assertEqual(sorted(folds), sorted(g.sid[i] for i in g.order if i not in g.fold_of))
         outputs = [i for i in g.order if g.t[i].kind == "Output"]
-        heads = re.findall(r"^#### (.+)$", md, re.M)
-        self.assertEqual(len(heads), len(set(heads)))                   # every story and working table has its own name
+        for part in re.split(r"^### Container ", md, flags=re.M)[1:]:       # names are unique in their container
+            heads = re.findall(r"^#### (.+)$", part, re.M)
+            self.assertEqual(len(heads), len(set(heads)), part[:40])
         self.assertEqual(sorted(set(re.findall(r'<div class="box story" id="(o\d+)"', build(synth_recon.big(938))[2]))),
                          sorted("o" + i for i in outputs))
         self.assertEqual(md, build(synth_recon.big(938))[1])            # deterministic
 
     def test_small_recon(self):
         g, md, _ = build(synth_recon.small())
-        self.assertTrue("Matches its rows with" in md and " on [DEAL ID]." in md)
+        self.assertTrue("Keeps the rows that have a match in" in md or "Matches the rows with" in md)
         self.assertFalse(re.search(r"Branch \d", md))
 
 

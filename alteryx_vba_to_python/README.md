@@ -8,7 +8,7 @@ Two command-line tools for any Alteryx workflow and any Excel VBA module:
 Each writes two things:
 
 1. **A document that explains the logic**, written as plain Markdown (readable as text) and as one HTML page for Chrome or any other browser. The page needs no network and runs no scripts; its sections fold open and closed.
-   - For Alteryx it is a **migration guide** for an engineer who has never opened Designer: what each container does and the files (sheet, cells) it opens and saves, then one numbered story per output, from its source files to the saved sheet.
+   - For Alteryx it is a **migration guide** for an engineer who has never opened Designer: what each container does and the files (sheet, cells) it opens and saves, then one compact table per output with the steps that change its rows or values, each with its rule.
    - For VBA it is a step-by-step description of each Sub.
 2. **Python code** that does the same work (pandas for Alteryx, openpyxl for VBA). Every step it could not convert is marked and stops with an error when reached. For Alteryx there is also a **pandas notebook template**: it loads every file the workflow opens and has one cell per branch, with the steps as comments to paste the guide's pandas lines under, so the workflow can be rebuilt and checked step by step.
 
@@ -58,19 +58,22 @@ Options:
 The guide is written for someone who has never opened Designer, and it reads without a legend. A contents list at the top shows the whole shape: the containers, and each container's outputs.
 
 1. **What this workflow does**: one block per container. A one-line summary ("It opens 3 sources, filters rows, matches tables and saves 6 tables, in 319 steps"), then what it **opens**, **saves** and **runs**, one line per file with its sheets after it ("`Breaks.xlsx` › By desk, In USD"), and which containers it uses or feeds (by a connection, or through a file one saves and another opens). A disabled container keeps its badge.
-2. **How each output is made**: one story per output (file › sheet). The story starts at the output tool, walks back along the real connections to the source files, and tells the steps on that path as one numbered list, in the order they run. Each step shows:
-   - the Designer tool's name, small, with its annotation, step number and tool ID (so it can be found in Designer and in the steps notebook);
-   - a plain sentence ("Keeps only the rows where [Status] is "Open"", "Matches its rows with `Config.xlsx › Clients` on [Client Code]");
-   - the columns it looks at, adds, renames or removes, and where its rows come from when that is not the step above ("Takes: step 1 (rows only in the first input)");
-   - for a split, where each part goes ("rows that pass → step 4 · rows that fail → dropped"; a join's "matched rows", "rows only in the first input", "rows only in the second input");
+2. **How each output is made**: one compact table per output (file › sheet), read from the files it starts from to the save, in run order. **A row is shown only for a step that changes which rows or which values reach the output**: a filter, a rule that sets columns, data cleansing, a match or lookup with another table, stacking, totals, duplicates removed, a sample, a reshape, a Select that renames or removes columns, a sort that the result depends on, a row number that is used, a Run Command, and the save. Each row gives:
+   - what happens, with the rule: in words where that is safe ("the last 2 characters of [A] equal [B]", "[A] with ".xlsx" removed"), otherwise the Alteryx rule as written (a long one shows its start; all of it is under **Rule and pandas**);
+   - the columns it sets, renames (→) or removes (−);
+   - in small print, the Designer tool, its step number and tool ID (to find it in Designer and in the steps notebook);
+   - for a split, where each part goes ("rows that pass → row 4 · rows that fail → **Table B**"; for a join, "matched rows", "rows only in the first input", "rows only in the second input");
    - **Rule and pandas**, folded: the exact rule, the same step in pandas, and whether the generated Python converts it exactly.
 
-   Simple rules are said in words (`Right([A], 2) = [B]` is "the last 2 characters of [A] equal [B]"; `Replace([A], ".xlsx", "")` is "[A] with ".xlsx" removed"). A rule that is not simple says "worked out from [A], [B]" and leaves the rule to the fold-out; nothing is guessed.
+   **Presumed, never a row of their own:** opening the file a table starts from (it is named at the top: "Starts from: `Trades.csv`", or "every file in `Input` named `*.csv`, each read like `template.csv`"); a Select that only keeps, reorders or retypes nothing; Block Until Done (see Run order); a sort nothing depends on; a row number nobody uses; a lookup's own file and filters (said in the step that uses it: "Matches the rows with `Rates.xlsx › Rates`, prepared in rows 1a–1b (only rows where [Rate] is not empty) on [Ccy]"); a settings value attached to every row by Append Fields (named where it is used: "the setting [T-1 Sheet] (`Settings.xlsx › Settings`)"). Nothing disappears: each table ends with a folded "N housekeeping steps not shown" that lists them with their pandas.
 
-   At the size of a real workflow (300 tools and 200 branches in one container), three rules keep this readable:
-   - **Shared work is told once**, as a **working table**: steps whose rows go to several outputs. It is named after a tool's annotation, or else its source and last real step ("Clean trades, with Age calculated"). The stories that use it start from it by name.
-   - **A lookup** (the second input of a Join, the Source of a Find Replace or Append Fields) is described in the step that uses it. If the lookup has preparation steps of its own, they sit just before that step, folded and named ("How Usable rates is prepared (4 steps)").
-   - **Other places are named, not numbered**: an output, a working table, a lookup. A step number appears only in small print.
+   To keep a 300-tool container readable:
+   - **Neighbours of one kind are one row**: Formulas in a row ("Sets 3 columns", one line each), Selects in a row, filters in a row ("and").
+   - **Parallel paths stacked by a Union are one row**, with a small table, one line per path (which rows, what is done to them). Fifty filter-and-label checks are one row, not 150.
+   - **Shared work is told once** as **Table A, B…** (per container), with a line on where it comes from and its last action (or the annotation a person wrote). The tables that use it start from it.
+   - **Repeated saves to one sheet** are one block: "Saved 10 times in this container. Each save replaces the last, so all but the last are most likely there only to control the run order."
+   - **A Run Command** is described from its own settings: the program and arguments, or, when it writes its incoming rows to a file and runs that, "Writes the text in [Script] to `run_import.bat` and runs it".
+   - **Other places are named, not numbered**: an output, Table A, a lookup's file; inside a table, "row 3". A step number appears only in small print.
 
    Steps that feed no output get one line at the end of their container, with the steps folded under it.
 3. **Run order**: which container must run after which (and why), what a Block Until Done tool forces, programs run after a save, and the disabled containers.
@@ -105,14 +108,14 @@ Measured on a synthetic 930-tool workflow with a production workflow's mix of to
 
 | File | Lines | Characters |
 |---|---|---|
-| migration guide (`.md`) | 11,389 | 593,000 |
-| migration guide (`.html`) | 8,745 | 1,011,000 |
+| migration guide (`.md`) | 8,378 | 528,000 |
+| migration guide (`.html`) | 4,887 | 858,000 |
 | pandas notebook | 560 cells (298 code) | |
 | stage summary (`--brief`) | 3,612 | 157,000 |
 | tool listing (`--tool-listing`) | 1,100 | |
 | generated code | 7,858 | 299,000 |
 
-The guide shows 868 steps in 45 stories and working tables (four files that only feed a Join are shown inside it): every step once, in the story it belongs to. Each copy of the repeated 47-tool scenario tree is told in its own output's story. On screen, use the HTML page: the rules, pandas and Detail start folded, and the contents list links to every output.
+The guide tells 868 steps in 452 rows over 45 tables (outputs and working tables); every step appears once, as a row or in its table's housekeeping list. Each copy of the repeated 47-tool scenario tree is told in its own output's table. On screen, use the HTML page: the pandas and Detail start folded, and the contents list links to every output.
 
 ### Rebuilding it in pandas, step by step
 
@@ -243,7 +246,7 @@ print(app.log)
 | `logicdoc.py` | Writes the documents (Markdown, HTML with folding sections, diagrams) | yes |
 | `examples/` | Two workflows and a macro, with their documents, and a pandas notebook template | no |
 | `probe/` | The workflow that checks the assumed Alteryx behaviours | once |
-| `tests/`, `run_tests.py` | 118 tests on synthetic input | optional |
+| `tests/`, `run_tests.py` | 123 tests on synthetic input | optional |
 | `REPORT.md` | Feasibility report | no |
 
 The tools use the standard library only (written and tested on Python 3.12). The code they generate needs pandas (Alteryx side) and openpyxl (VBA side, and Excel files on the Alteryx side).
@@ -254,4 +257,4 @@ The tools use the standard library only (written and tested on Python 3.12). The
 python run_tests.py
 ```
 
-118 tests, about 6 seconds. They need pandas and openpyxl, and no real data. `python examples/make_examples.py` and `python probe/make_probe.py` re-create the example and probe files; the tests check that they are current.
+123 tests, about 6 seconds. They need pandas and openpyxl, and no real data. `python examples/make_examples.py` and `python probe/make_probe.py` re-create the example and probe files; the tests check that they are current.

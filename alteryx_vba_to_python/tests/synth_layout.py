@@ -110,6 +110,41 @@ def stress():
     look = wb.formula(nid(), [("Look", '"x"')], box=b)
     wb.conn(base, smp); wb.conn(smp, look); wb.conn(look, wb.browse(nid(), box=b))
 
+    # output 7: a settings sheet attached to every row (a short preparation), used in a rule; formulas in a row
+    cfg = wb.input(nid(), "Config\\Settings.xlsx|||`Settings$`", {"Name": "V_String", "T-1 Sheet": "V_String"}, box=b)
+    cf = wb.filter(nid(), '[Name] = "Daily"', box=b)
+    cs = wb.select(nid(), [("T-1 Sheet", True), ("*Unknown", False)], box=b)
+    ap = wb.append_fields(nid(), box=b)
+    ks = wb.filter(nid(), 'Right([Book], 2) = [T-1 Sheet]', box=b)
+    f1 = wb.formula(nid(), [("Day", '"T-1"')], box=b)
+    f2 = wb.formula(nid(), [("Label", '[Desk] + " " + [Day]')], box=b)
+    f3 = wb.formula(nid(), [("Size", 'IF [Amount] > 1000 THEN "Large" ELSE "Small" ENDIF')], box=b)
+    out7 = wb.output(nid(), "Output\\Settings check.xlsx|||Sheets", box=b, OutputOption="Overwrite")
+    wb.conn(cfg, cf); wb.conn(cf, cs, sa="True"); wb.conn(cs, ap, da="Source"); wb.conn(base, ap, da="Targets")
+    wb.conn(ap, ks); wb.conn(ks, f1, sa="True"); wb.conn(f1, f2); wb.conn(f2, f3); wb.conn(f3, out7)
+
+    # ten saves to one dummy sheet, each released by a Block Until Done: only there to control the run order
+    prev = base
+    for n in range(10):
+        bud = wb.node(nid(), "BlockUntilDone", "", b)
+        wb.conn(prev, bud, sa="Output" if n == 0 else "Output2")
+        wb.conn(bud, wb.output(nid(), "Output\\Dummy.xlsx|||Order", box=b, OutputOption="Overwrite"), sa="Output1")
+        prev = bud
+
+    # a script built as text, joined into one value, written to a file and run by Run Command (no command of its own)
+    sc = wb.formula(nid(), [("Script", '"call import " + [Desk]')], box=b)
+    cat = wb.summarize(nid(), [("Script", "Concat", "Script", "\n")], box=b)
+    rc = wb.node(nid(), "RunCommand", '<WriteSource><Configuration><File FileFormat="19">Scripts\\run_import.bat</File>'
+                 '</Configuration></WriteSource><Command /><CommandArguments /><WorkingDirectory />', b)
+    wb.conn(base, sc); wb.conn(sc, cat); wb.conn(cat, rc)
+
+    # every file in a folder, read with one template, then saved together
+    dr = wb.directory(nid(), "Input\\Daily", "*.csv", box=b)
+    dy = wb.dynamic_input(nid(), "Input\\Daily\\template.csv", "FullPath", {"Desk": "V_String", "Amount": "Double"}, box=b)
+    df = wb.formula(nid(), [("Source", '"daily"')], box=b)
+    wb.conn(dr, dy); wb.conn(dy, df); wb.conn(df, wb.output(nid(), "Output\\Daily.xlsx|||All", box=b,
+                                                           OutputOption="Overwrite"))
+
     # the disabled container: an older version of the recon, kept but switched off
     o = OLD
     old_in = wb.input(nid(), "Output\\Exceptions.xlsx|||`Exceptions$`", box=o)

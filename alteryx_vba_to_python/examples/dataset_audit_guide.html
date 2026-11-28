@@ -65,7 +65,16 @@ section.stage{border-left:3px solid var(--line);padding:0 0 0 14px;margin:1em 0}
 :target{outline:2px solid var(--accent);outline-offset:2px}tr:target{background:var(--box)}
 details.fold{margin:.15em 0}details.fold>summary{padding:2px 6px;font-size:14px}
 details.fold>pre{margin:.2em 0 .6em 1.2em}div.fold{padding:2px 6px 2px 22px;font-size:14px}
-@media (max-width:600px){.meta{grid-template-columns:1fr}ol.steps>li.side{padding-left:0}}
+table.acts{display:table;width:100%;margin:8px 0}table.acts td{border-bottom:1px solid var(--line)}
+table.acts td.n{font-weight:650;color:var(--muted);width:2.2em;white-space:nowrap}
+table.acts td.cols{width:16%;font-size:12.5px}table.acts td.tl{width:15%;font-size:12px;color:var(--muted)}
+table.acts tr.sub td{background:var(--soft);font-size:13.5px}table.acts tr.sub td.n{padding-left:16px}
+table.acts .ln{margin:1px 0 1px 10px;overflow-wrap:anywhere}table.acts .does{overflow-wrap:anywhere}
+table.mini{display:table;width:100%;font-size:12.5px;margin:4px 0}table.mini td:first-child{width:48%}table.mini td:last-child{width:5.5em;color:var(--muted)}table.mini td,table.mini th{padding:3px 6px}
+details.hk{font-size:13px;margin:6px 0 0}details.hk ul{margin:4px 0;padding-left:1.2em}
+@media (max-width:600px){.meta{grid-template-columns:1fr}table.acts,table.acts tbody,table.acts tr,table.acts td{display:block;
+width:auto!important}table.acts thead{display:none}table.acts tr{border-top:1px solid var(--line);padding:6px 0}
+table.acts td{border:0;padding:2px 4px}table.mini{display:block;overflow-x:auto}}
 </style></head><body><main>
 <h1 id="top">How dataset_audit.yxmd works</h1>
 <p>Made by ayx2py from <code>dataset_audit.yxmd</code>, for someone who has never opened Alteryx Designer. 3 containers, 1 disabled in the saved file (documented anyway), 34 tools, 2 outputs.</p>
@@ -116,239 +125,96 @@ details.fold>pre{margin:.2em 0 .6em 1.2em}div.fold{padding:2px 6px 2px 22px;font
 <div class="meta"><b>Opens</b><span><span class="chip f">old_rules.csv</span></span><b>Saves</b><span>—</span></div>
 </div>
 <h2 id="made">2. How each output is made</h2>
-<p>One story per output: only the steps on its path, in the order they run, from the files it starts from to the saved sheet. Work that several outputs share is told once as a working table, and the stories start from it by name. Click <b>Rule and pandas</b> under a step for its exact rule and the same step in pandas.</p>
+<p>One table per output: the steps that decide which rows and which values reach it, in the order they run, each with its rule. Steps that only open files, keep or retype columns, or set the run order are presumed; each table lists them, folded, at its end. Work that several outputs share is told once as Table A, B…, and the tables that use it start from it. Open <b>Rule and pandas</b> on a row for its exact rule and the same step in pandas.</p>
 <section class="stage" id="m1">
 <h3>Container 1. Import and consolidate</h3>
-<div class="box story" id="o4"><h3><span class="chip o">Consolidated Datasets.xlsx › Datasets</span></h3><p class="sub">4 steps, from datasets_export.csv.</p><ol class="steps">
-<li id="s1-1"><div><div class="tool">Input Data <small>· step 1.1 · tool #1</small></div>
-<div class="does">Opens <span class="chip f">datasets_export.csv</span>.</div>
-<div class="meta"><b>Columns</b><span><span class="col">Name</span> <span class="col">Owner</span> <span class="col">CreationMode</span> <span class="col">Scenario</span> <span class="col">Tags</span> <span class="col">DQScore</span> +3 more</span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>1.1</b> Input Data #1 · converted, assuming A4 · <code>t1</code></div><pre id="r1-1"># columns: Name (V_String), Owner (V_String), CreationMode (V_String), Scenario (V_String), Tags (V_String),
+<div class="box story" id="o4"><h3><span class="chip o">Consolidated Datasets.xlsx › Datasets</span></h3>
+<p class="sub"><b>Starts from:</b> <span class="chip f">datasets_export.csv</span>.</p>
+<table class="acts"><thead><tr><th>#</th><th>What happens</th><th>Columns</th><th>Tool</th></tr></thead><tbody>
+<tr id="s1-2"><td class="n">1</td><td><div class="does">Cleans the columns <span class="col">Name</span>, <span class="col">Owner</span>, <span class="col">Tags</span>: remove leading and trailing spaces.</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>1.2</b> Data Cleansing #2 · converted, assuming A1 · <code>t2</code></div><pre id="r1-2"># note: Options read from the macro's numbered check boxes: confirm them in the tool's settings.
+# pandas:
+cols = ["Name", "Owner", "Tags"]
+df[cols] = df[cols].apply(lambda s: s.str.strip())</pre></details></td><td class="cols"><span class="col">Name</span> <span class="col">Owner</span> <span class="col">Tags</span></td><td class="tl"><small>Data Cleansing · step 1.2 · tool #2</small></td></tr>
+<tr id="s1-3"><td class="n">2</td><td><div class="does">Sets 1 column:</div><div class="ln"><b>Load Date</b> = today's date</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>1.3</b> Formula #3 · converted; note: <span class="col">Load Date</span> uses datetimetoday(): the result depends on the run date · <code>t3</code></div><pre id="r1-3">Load Date = DateTimeToday()
+# pandas:
+df["Load Date"] = pd.Timestamp.today().normalize()</pre></details></td><td class="cols"><span class="col">Load Date</span></td><td class="tl"><small>Formula · step 1.3 · tool #3</small></td></tr>
+<tr id="s1-4"><td class="n">3</td><td><div class="does">Saves the table to <span class="chip o">Consolidated Datasets.xlsx › Datasets</span> (replaces the sheet).</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>1.4</b> Output Data #4 · converted, assuming A6 · <code>t4</code> · <code>s1_4 = df  # the rows this step saves; the notebook's last cell writes them to OUT</code></div><span id="r1-4"></span></details></td><td class="cols"></td><td class="tl"><small>Output Data · step 1.4 · tool #4</small></td></tr>
+</tbody></table>
+<details class="hk" id="ho4"><summary>1 housekeeping step not shown</summary><ul><li id="s1-1"><small class="sid">1.1</small> Input Data #1: opens what the story starts from (named at the top)</li></ul><details class="rule"><summary>Their rule and pandas</summary><div class="fs"><b>1.1</b> Input Data #1 · converted, assuming A4 · <code>t1</code></div><pre id="r1-1"># columns: Name (V_String), Owner (V_String), CreationMode (V_String), Scenario (V_String), Tags (V_String),
 # columns: DQScore (Double), Virtualizable (V_String), SizeGB (Double), Access (V_String)
 # note: Read as: UTF-8.
 # pandas:
-src_datasets_export = pd.read_csv(DATASETS_EXPORT_CSV, sep=',', encoding="utf-8-sig", dtype=str, keep_default_na=False).replace("", None).astype({"DQScore": float, "SizeGB": float})</pre></details>
-</div></li>
-<li id="s1-2"><div><div class="tool">Data Cleansing <small>· step 1.2 · tool #2</small></div>
-<div class="does">Cleans the columns <span class="col">Name</span>, <span class="col">Owner</span>, <span class="col">Tags</span>: remove leading and trailing spaces.</div>
-<div class="meta"><b>Looks at</b><span><span class="col">Name</span> <span class="col">Owner</span> <span class="col">Tags</span></span><b>Adds</b><span><span class="col">Name</span> <span class="col">Owner</span> <span class="col">Tags</span></span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>1.2</b> Data Cleansing #2 · converted, assuming A1 · <code>t2</code></div><pre id="r1-2"># note: Options read from the macro's numbered check boxes: confirm them in the tool's settings.
-# pandas:
-cols = ["Name", "Owner", "Tags"]
-df[cols] = df[cols].apply(lambda s: s.str.strip())</pre></details>
-</div></li>
-<li id="s1-3"><div><div class="tool">Formula <small>· step 1.3 · tool #3</small></div>
-<div class="does">Sets 1 column.</div>
-<div class="meta"><b>Sets</b><span><b>Load Date</b> = today's date</span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>1.3</b> Formula #3 · converted; note: <span class="col">Load Date</span> uses datetimetoday(): the result depends on the run date · <code>t3</code></div><pre id="r1-3">Load Date = DateTimeToday()
-# pandas:
-df["Load Date"] = pd.Timestamp.today().normalize()</pre></details>
-</div></li>
-<li id="s1-4"><div><div class="tool">Output Data <small>· step 1.4 · tool #4</small></div>
-<div class="does">Saves the table to <span class="chip o">Consolidated Datasets.xlsx › Datasets</span> (replaces the sheet).</div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>1.4</b> Output Data #4 · converted, assuming A6 · <code>t4</code> · <code>s1_4 = df  # the rows this step saves; the notebook's last cell writes them to OUT</code></div><span id="r1-4"></span></details>
-</div></li>
-</ol></div>
+src_datasets_export = pd.read_csv(DATASETS_EXPORT_CSV, sep=',', encoding="utf-8-sig", dtype=str, keep_default_na=False).replace("", None).astype({"DQScore": float, "SizeGB": float})</pre></details></details>
+</div>
 </section>
 <section class="stage" id="m2">
 <h3>Container 2. Dataset audit</h3>
-<div class="box story" id="o92"><h3><span class="chip o">Dataset audit.xlsx › Issues</span></h3><p class="sub">27 steps, from the file list of Output, the files listed in <span class="col">Source</span>, a typed table (<span class="col">Owner</span>, <span class="col">Team</span>; 2 rows).</p><ol class="steps">
-<li id="s2-1"><div><div class="tool">Directory <i>“Newest consolidated file”</i> <small>· step 2.1 · tool #30</small></div>
-<div class="does">Lists the files in folder <code>Output</code> named <code>*.xlsx</code>.</div>
-<div class="meta"><b>Columns</b><span><span class="col">FullPath</span> <span class="col">FileName</span> <span class="col">CreationTime</span> <span class="col">LastWriteTime</span></span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.1</b> Directory #30 · converted, assuming A2 · <code>t30</code></div><pre id="r2-1"># columns: FullPath, FileName, CreationTime, LastWriteTime
+<div class="box story" id="o92"><h3><span class="chip o">Dataset audit.xlsx › Issues</span></h3>
+<table class="acts"><thead><tr><th>#</th><th>What happens</th><th>Columns</th><th>Tool</th></tr></thead><tbody>
+<tr id="s2-1"><td class="n">1</td><td><div class="does">Lists the files in folder <code>Output</code> named <code>*.xlsx</code>.</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.1</b> Directory #30 · converted, assuming A2 · <code>t30</code></div><pre id="r2-1"># columns: FullPath, FileName, CreationTime, LastWriteTime
 # pandas:
 files = sorted(glob.glob(os.path.join(FOLDER, "Output", "*.xlsx")))
 df = pd.DataFrame({"Directory": [os.path.dirname(f) for f in files], "FileName": [os.path.basename(f) for f in files], "FullPath": files,
                    "CreationTime": [pd.Timestamp.fromtimestamp(os.path.getctime(f)) for f in files],
                    "LastWriteTime": [pd.Timestamp.fromtimestamp(os.path.getmtime(f)) for f in files],
-                   "Size": [os.path.getsize(f) for f in files]})</pre></details>
-</div></li>
-<li id="s2-2"><div><div class="tool">Filter <small>· step 2.2 · tool #31</small></div>
-<div class="does">Keeps only the rows where <span class="col">FileName</span> contains "Consolidated" and <span class="col">FileName</span> does not contain ".bak".</div>
-<div class="meta"><b>Looks at</b><span><span class="col">FileName</span></span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.2</b> Filter #31 · exact · <code>t31</code></div><pre id="r2-2">[FileName] contains "Consolidated" and [FileName] does not contain ".bak"
+                   "Size": [os.path.getsize(f) for f in files]})</pre></details></td><td class="cols"><span class="col">FullPath</span> <span class="col">FileName</span> <span class="col">CreationTime</span> <span class="col">LastWriteTime</span></td><td class="tl"><small>Directory · step 2.1 · tool #30</small><br><i>“Newest consolidated file”</i></td></tr>
+<tr id="s2-2"><td class="n">2</td><td><div class="does">Keeps only the rows where <span class="col">FileName</span> contains "Consolidated" and <span class="col">FileName</span> does not contain ".bak".</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.2</b> Filter #31 · exact · <code>t31</code></div><pre id="r2-2">[FileName] contains "Consolidated" and [FileName] does not contain ".bak"
 # pandas:
-df = df[(df["FileName"].str.contains('Consolidated', case=False, regex=False, na=False) &amp; ~(df["FileName"].str.contains('.bak', case=False, regex=False, na=False)))]</pre></details>
-</div></li>
-<li id="s2-3"><div><div class="tool">Sort <small>· step 2.3 · tool #32</small></div>
-<div class="does">Sorts by <span class="col">CreationTime</span> Z→A.</div>
-<div class="meta"><b>Looks at</b><span><span class="col">CreationTime</span></span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.3</b> Sort #32 · converted, assuming A7 · <code>t32</code> · <code>df = df.sort_values(["CreationTime"], ascending=[False], kind="stable", na_position="first")</code></div><span id="r2-3"></span></details>
-</div></li>
-<li id="s2-4"><div><div class="tool">Sample <small>· step 2.4 · tool #33</small></div>
-<div class="does">Keeps the first row.</div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.4</b> Sample #33 · exact · <code>t33</code> · <code>df = df.head(1)</code></div><span id="r2-4"></span></details>
-</div></li>
-<li id="s2-5"><div><div class="tool">Formula <small>· step 2.5 · tool #34</small></div>
-<div class="does">Sets 1 column.</div>
-<div class="meta"><b>Sets</b><span><b>Source</b> = <span class="col">FullPath</span> + "|||Datasets"</span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.5</b> Formula #34 · exact · <code>t34</code></div><pre id="r2-5">Source = [FullPath] + "|||Datasets"
+df = df[(df["FileName"].str.contains('Consolidated', case=False, regex=False, na=False) &amp; ~(df["FileName"].str.contains('.bak', case=False, regex=False, na=False)))]</pre></details></td><td class="cols"></td><td class="tl"><small>Filter · step 2.2 · tool #31</small></td></tr>
+<tr id="s2-3"><td class="n">3</td><td><div class="does">Sorts by <span class="col">CreationTime</span> Z→A.</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.3</b> Sort #32 · converted, assuming A7 · <code>t32</code> · <code>df = df.sort_values(["CreationTime"], ascending=[False], kind="stable", na_position="first")</code></div><span id="r2-3"></span></details></td><td class="cols"></td><td class="tl"><small>Sort · step 2.3 · tool #32</small></td></tr>
+<tr id="s2-4"><td class="n">4</td><td><div class="does">Keeps the first row.</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.4</b> Sample #33 · exact · <code>t33</code> · <code>df = df.head(1)</code></div><span id="r2-4"></span></details></td><td class="cols"></td><td class="tl"><small>Sample · step 2.4 · tool #33</small></td></tr>
+<tr id="s2-5"><td class="n">5</td><td><div class="does">Sets 1 column:</div><div class="ln"><b>Source</b> = <span class="col">FullPath</span> + "|||Datasets"</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.5</b> Formula #34 · exact · <code>t34</code></div><pre id="r2-5">Source = [FullPath] + "|||Datasets"
 # pandas:
-df["Source"] = (df["FullPath"] + '|||Datasets')</pre></details>
-</div></li>
-<li id="s2-6"><div><div class="tool">Dynamic Input <small>· step 2.6 · tool #36</small></div>
-<div class="does">Opens every file listed in column <span class="col">Source</span> (the column holds the whole path; sheet as in the template <code>template.xlsx</code>, sheet <code>Datasets</code>), and stacks them.</div>
-<div class="meta"><b>Columns</b><span><span class="col">Name</span> <span class="col">Owner</span> <span class="col">CreationMode</span> <span class="col">Scenario</span> <span class="col">Tags</span> <span class="col">DQScore</span> +3 more</span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.6</b> Dynamic Input #36 · converted, assuming A3 · <code>t36</code></div><pre id="r2-6"># columns: Name (V_String), Owner (V_String), CreationMode (V_String), Scenario (V_String), Tags (V_String),
+df["Source"] = (df["FullPath"] + '|||Datasets')</pre></details></td><td class="cols"><span class="col">Source</span></td><td class="tl"><small>Formula · step 2.5 · tool #34</small></td></tr>
+<tr id="s2-6"><td class="n">6</td><td><div class="does">Opens every file listed in column <span class="col">Source</span> (the column holds the whole path; sheet as in the template <code>template.xlsx</code>, sheet <code>Datasets</code>), and stacks them.</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.6</b> Dynamic Input #36 · converted, assuming A3 · <code>t36</code></div><pre id="r2-6"># columns: Name (V_String), Owner (V_String), CreationMode (V_String), Scenario (V_String), Tags (V_String),
 # columns: DQScore (Double), Virtualizable (V_String), SizeGB (Double), Access (V_String)
 # pandas:
 files = [pd.read_excel(os.path.join(FOLDER, p.split("|||")[0].replace("\\", os.sep)), sheet_name="Datasets") for p in df["Source"].dropna()]
-df = pd.concat(files or [pd.read_excel(os.path.join(FOLDER, "Output", "template.xlsx"), sheet_name="Datasets", nrows=0)], ignore_index=True)  # no file listed: the template's columns, no rows</pre></details>
-</div></li>
-<li id="s2-7"><div><div class="tool">Filter <i>“CreationMode”</i> <small>· step 2.7 · tool #41</small></div>
-<div class="does">Keeps only the rows where <span class="col">CreationMode</span> is "Manual".</div>
-<div class="meta"><b>Looks at</b><span><span class="col">CreationMode</span></span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.7</b> Filter #41 · exact · <code>t41</code> · <code>df = df[eq(df["CreationMode"], 'Manual')]</code></div><span id="r2-7"></span></details>
-</div></li>
-<li id="s2-8"><div><div class="tool">Formula <small>· step 2.8 · tool #51</small></div>
-<div class="does">Sets 1 column.</div>
-<div class="meta"><b>Sets</b><span><b>Issue</b> = "Created by hand"</span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.8</b> Formula #51 · exact · <code>t51</code></div><pre id="r2-8">Issue = "Created by hand"
+df = pd.concat(files or [pd.read_excel(os.path.join(FOLDER, "Output", "template.xlsx"), sheet_name="Datasets", nrows=0)], ignore_index=True)  # no file listed: the template's columns, no rows</pre></details></td><td class="cols"></td><td class="tl"><small>Dynamic Input · step 2.6 · tool #36</small></td></tr>
+<tr id="s2-25"><td class="n">7</td><td><span id="s2-7"></span><span id="s2-8"></span><span id="s2-9"></span><span id="s2-10"></span><span id="s2-11"></span><span id="s2-12"></span><span id="s2-13"></span><span id="s2-14"></span><span id="s2-16"></span><span id="s2-17"></span><span id="s2-18"></span><span id="s2-19"></span><span id="s2-20"></span><span id="s2-21"></span><span id="s2-22"></span><span id="s2-23"></span><span id="s2-24"></span><span id="s2-15"></span><div class="does">Stacks 6 sets of rows taken from <a href="#s2-6">row 6</a>, each chosen and changed as below:</div><table class="mini"><thead><tr><th>Rows</th><th>What is done to them</th><th>Steps</th></tr></thead><tbody><tr><td>Where <span class="col">CreationMode</span> is "Manual"</td><td>sets <b>Issue</b> = "Created by hand"; keeps only the columns <span class="col">Name</span>, <span class="col">Owner</span>, <span class="col">Issue</span></td><td><small class="sid">2.7–9</small></td></tr><tr><td>Where <span class="col">Scenario</span> is empty</td><td>sets <b>Issue</b> = "No scenario"; groups the rows by <span class="col">Owner</span>, <span class="col">Issue</span>; for each group <b>Datasets</b> = number of rows; <b>Name</b> = all <span class="col">Name</span> joined with ", "</td><td><small class="sid">2.10–12</small></td></tr><tr><td>Where <span class="col">Tags</span> does not contain "certified"</td><td>sets <b>Issue</b> = "Draft tag" when <span class="col">Tags</span> contains "draft", otherwise "Not certified"; keeps the rows that have a match in a typed table (<span class="col">Owner</span>, <span class="col">Team</span>) on <span class="col">Owner</span>, and adds its columns</td><td><small class="sid">2.13–15</small></td></tr><tr><td>Where <span class="col">DQScore</span> &lt; 0.8</td><td>sets <b>Issue</b> = <code>"Low data quality: " + ToString([DQScore], 2)</code>; applies the pattern <code>(\w+)_v\d+</code> to <span class="col">Name</span> (ParseSimple)</td><td><small class="sid">2.16–18</small></td></tr><tr><td>Where <span class="col">Virtualizable</span> is "N" and <span class="col">SizeGB</span> &gt; 100</td><td>sets <b>Issue</b> = "Large and not virtualizable"; sorts by <span class="col">SizeGB</span> Z→A</td><td><small class="sid">2.19–21</small></td></tr><tr><td>Where <span class="col">Access</span> is one of "RW", "W"</td><td>sets <b>Issue</b> = "Write only" when <span class="col">Access</span> is "W", otherwise "Read/write"; removes the columns <span class="col">Access</span></td><td><small class="sid">2.22–24</small></td></tr></tbody></table><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.25</b> Union #90 · converted, assuming A9 · <code>t90</code> · <code>df = pd.concat([s2_9, s2_12, s2_15_join, s2_18, s2_21, s2_24], ignore_index=True)</code></div><span id="r2-25"></span><div class="fs"><b>2.7</b> Filter #41 · exact · <code>t41</code> · <code>df = df[eq(df["CreationMode"], 'Manual')]</code></div><span id="r2-7"></span><div class="fs"><b>2.8</b> Formula #51 · exact · <code>t51</code></div><pre id="r2-8">Issue = "Created by hand"
 # pandas:
-df["Issue"] = 'Created by hand'</pre></details>
-</div></li>
-<li id="s2-9"><div><div class="tool">Select <small>· step 2.9 · tool #61</small></div>
-<div class="does">Keeps only 3 columns.</div>
-<div class="meta"><b>Keeps</b><span><span class="col">Name</span> <span class="col">Owner</span> <span class="col">Issue</span></span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.9</b> Select #61 · exact · <code>t61</code></div><pre id="r2-9">keep only these columns, in this order: Name, Owner, Issue
+df["Issue"] = 'Created by hand'</pre><div class="fs"><b>2.9</b> Select #61 · exact · <code>t61</code></div><pre id="r2-9">keep only these columns, in this order: Name, Owner, Issue
 # pandas:
-df = df[["Name", "Owner", "Issue"]]</pre></details>
-</div></li>
-<li id="s2-10"><div><div class="tool">Filter <i>“Scenario”</i> <small>· step 2.10 · tool #42</small></div>
-<div class="does">Keeps only the rows where <span class="col">Scenario</span> is empty.</div>
-<div class="meta"><b>Takes</b><span><a href="#s2-6">step 6</a></span><b>Looks at</b><span><span class="col">Scenario</span></span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.10</b> Filter #42 · exact · <code>t42</code> · <code>df = df[(empty(df["Scenario"]))]</code></div><span id="r2-10"></span></details>
-</div></li>
-<li id="s2-11"><div><div class="tool">Formula <small>· step 2.11 · tool #52</small></div>
-<div class="does">Sets 1 column.</div>
-<div class="meta"><b>Sets</b><span><b>Issue</b> = "No scenario"</span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.11</b> Formula #52 · exact · <code>t52</code></div><pre id="r2-11">Issue = "No scenario"
+df = df[["Name", "Owner", "Issue"]]</pre><div class="fs"><b>2.10</b> Filter #42 · exact · <code>t42</code> · <code>df = df[(empty(df["Scenario"]))]</code></div><span id="r2-10"></span><div class="fs"><b>2.11</b> Formula #52 · exact · <code>t52</code></div><pre id="r2-11">Issue = "No scenario"
 # pandas:
-df["Issue"] = 'No scenario'</pre></details>
-</div></li>
-<li id="s2-12"><div><div class="tool">Summarize <small>· step 2.12 · tool #62</small></div>
-<div class="does">Groups the rows by <span class="col">Owner</span>, <span class="col">Issue</span> and calculates <b>Datasets</b>, <b>Name</b> (like a pivot table).</div>
-<div class="meta"><b>Looks at</b><span><span class="col">Owner</span> <span class="col">Issue</span> <span class="col">Name</span></span><b>Adds</b><span><span class="col">Datasets</span> <span class="col">Name</span></span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.12</b> Summarize #62 · converted, assuming A8 · <code>t62</code></div><pre id="r2-12">Datasets = number of rows
+df["Issue"] = 'No scenario'</pre><div class="fs"><b>2.12</b> Summarize #62 · converted, assuming A8 · <code>t62</code></div><pre id="r2-12">Datasets = number of rows
 Name = all [Name] joined with ", "
 # pandas:
-df = df.groupby(["Owner", "Issue"], sort=True, dropna=False).agg(**{"Datasets": ("Name", "size"), "Name": ("Name", lambda s: ', '.join(s.fillna("").astype(str)))}).reset_index()</pre></details>
-</div></li>
-<li id="s2-13"><div><div class="tool">Filter <i>“Tags”</i> <small>· step 2.13 · tool #43</small></div>
-<div class="does">Keeps only the rows where <span class="col">Tags</span> does not contain "certified".</div>
-<div class="meta"><b>Takes</b><span><a href="#s2-6">step 6</a></span><b>Looks at</b><span><span class="col">Tags</span></span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.13</b> Filter #43 · exact · <code>t43</code> · <code>df = df[~(df["Tags"].str.contains('certified', case=False, regex=False, na=False))]</code></div><span id="r2-13"></span></details>
-</div></li>
-<li id="s2-14"><div><div class="tool">Formula <small>· step 2.14 · tool #53</small></div>
-<div class="does">Sets 1 column.</div>
-<div class="meta"><b>Sets</b><span><b>Issue</b> = "Draft tag" when <span class="col">Tags</span> contains "draft", otherwise "Not certified"</span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.14</b> Formula #53 · exact · <code>t53</code></div><pre id="r2-14">Issue = "Draft tag" when [Tags] contains "draft", otherwise "Not certified"
+df = df.groupby(["Owner", "Issue"], sort=True, dropna=False).agg(**{"Datasets": ("Name", "size"), "Name": ("Name", lambda s: ', '.join(s.fillna("").astype(str)))}).reset_index()</pre><div class="fs"><b>2.13</b> Filter #43 · exact · <code>t43</code> · <code>df = df[~(df["Tags"].str.contains('certified', case=False, regex=False, na=False))]</code></div><span id="r2-13"></span><div class="fs"><b>2.14</b> Formula #53 · exact · <code>t53</code></div><pre id="r2-14">Issue = "Draft tag" when [Tags] contains "draft", otherwise "Not certified"
 # pandas:
-df["Issue"] = np.select([df["Tags"].str.contains('draft', case=False, regex=False, na=False)], ['Draft tag'], default='Not certified')</pre></details>
-</div></li>
-<li id="s2-16"><div><div class="tool">Filter <i>“Data Quality”</i> <small>· step 2.16 · tool #44</small></div>
-<div class="does">Keeps only the rows where <span class="col">DQScore</span> &lt; 0.8.</div>
-<div class="meta"><b>Takes</b><span><a href="#s2-6">step 6</a></span><b>Looks at</b><span><span class="col">DQScore</span></span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.16</b> Filter #44 · exact · <code>t44</code> · <code>df = df[(df["DQScore"] &lt; 0.8)]</code></div><span id="r2-16"></span></details>
-</div></li>
-<li id="s2-17"><div><div class="tool">Formula <small>· step 2.17 · tool #54</small></div>
-<div class="does">Sets 1 column.</div>
-<div class="meta"><b>Sets</b><span><b>Issue</b>: worked out from <span class="col">DQScore</span> (rule in the details)</span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.17</b> Formula #54 · exact · <code>t54</code></div><pre id="r2-17">Issue = "Low data quality: " + ToString([DQScore], 2)
+df["Issue"] = np.select([df["Tags"].str.contains('draft', case=False, regex=False, na=False)], ['Draft tag'], default='Not certified')</pre><div class="fs"><b>2.16</b> Filter #44 · exact · <code>t44</code> · <code>df = df[(df["DQScore"] &lt; 0.8)]</code></div><span id="r2-16"></span><div class="fs"><b>2.17</b> Formula #54 · exact · <code>t54</code></div><pre id="r2-17">Issue = "Low data quality: " + ToString([DQScore], 2)
 # pandas:
-df["Issue"] = ('Low data quality: ' + df["DQScore"].map(lambda v: f"{v:.2f}"))</pre></details>
-</div></li>
-<li id="s2-18"><div><div class="tool">RegEx <small>· step 2.18 · tool #64</small> <span class="hand">not converted: write by hand</span></div>
-<div class="does">Applies the pattern <code>(\w+)_v\d+</code> to <span class="col">Name</span> (ParseSimple).</div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.18</b> RegEx #64 · <b>not converted</b>: tool kind RegEx has no converter · <code>t64</code></div><pre id="r2-18">Field=Name; RegExExpression(value=(\w+)_v\d+); Method=ParseSimple
+df["Issue"] = ('Low data quality: ' + df["DQScore"].map(lambda v: f"{v:.2f}"))</pre><div class="fs"><b>2.18</b> RegEx #64 · <b>not converted</b>: tool kind RegEx has no converter · <code>t64</code></div><pre id="r2-18">Field=Name; RegExExpression(value=(\w+)_v\d+); Method=ParseSimple
 # pandas:
-# no pandas form; write this step by hand</pre></details>
-</div></li>
-<li id="s2-19"><div><div class="tool">Filter <i>“Virtualizable”</i> <small>· step 2.19 · tool #45</small></div>
-<div class="does">Keeps only the rows where <span class="col">Virtualizable</span> is "N" and <span class="col">SizeGB</span> &gt; 100.</div>
-<div class="meta"><b>Takes</b><span><a href="#s2-6">step 6</a></span><b>Looks at</b><span><span class="col">Virtualizable</span> <span class="col">SizeGB</span></span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.19</b> Filter #45 · exact · <code>t45</code> · <code>df = df[(eq(df["Virtualizable"], 'N') &amp; (df["SizeGB"] &gt; 100))]</code></div><span id="r2-19"></span></details>
-</div></li>
-<li id="s2-20"><div><div class="tool">Formula <small>· step 2.20 · tool #55</small></div>
-<div class="does">Sets 1 column.</div>
-<div class="meta"><b>Sets</b><span><b>Issue</b> = "Large and not virtualizable"</span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.20</b> Formula #55 · exact · <code>t55</code></div><pre id="r2-20">Issue = "Large and not virtualizable"
+# no pandas form; write this step by hand</pre><div class="fs"><b>2.19</b> Filter #45 · exact · <code>t45</code> · <code>df = df[(eq(df["Virtualizable"], 'N') &amp; (df["SizeGB"] &gt; 100))]</code></div><span id="r2-19"></span><div class="fs"><b>2.20</b> Formula #55 · exact · <code>t55</code></div><pre id="r2-20">Issue = "Large and not virtualizable"
 # pandas:
-df["Issue"] = 'Large and not virtualizable'</pre></details>
-</div></li>
-<li id="s2-21"><div><div class="tool">Sort <small>· step 2.21 · tool #65</small></div>
-<div class="does">Sorts by <span class="col">SizeGB</span> Z→A.</div>
-<div class="meta"><b>Looks at</b><span><span class="col">SizeGB</span></span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.21</b> Sort #65 · converted, assuming A7 · <code>t65</code> · <code>df = df.sort_values(["SizeGB"], ascending=[False], kind="stable", na_position="first")</code></div><span id="r2-21"></span></details>
-</div></li>
-<li id="s2-22"><div><div class="tool">Filter <i>“Read/Write”</i> <small>· step 2.22 · tool #46</small></div>
-<div class="does">Keeps only the rows where <span class="col">Access</span> is one of "RW", "W".</div>
-<div class="meta"><b>Takes</b><span><a href="#s2-6">step 6</a></span><b>Looks at</b><span><span class="col">Access</span></span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.22</b> Filter #46 · exact · <code>t46</code> · <code>df = df[df["Access"].isin(['RW', 'W'])]</code></div><span id="r2-22"></span></details>
-</div></li>
-<li id="s2-23"><div><div class="tool">Formula <small>· step 2.23 · tool #56</small></div>
-<div class="does">Sets 1 column.</div>
-<div class="meta"><b>Sets</b><span><b>Issue</b> = "Write only" when <span class="col">Access</span> is "W", otherwise "Read/write"</span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.23</b> Formula #56 · exact · <code>t56</code></div><pre id="r2-23">Issue = "Write only" when [Access] = "W", otherwise "Read/write"
+df["Issue"] = 'Large and not virtualizable'</pre><div class="fs"><b>2.21</b> Sort #65 · converted, assuming A7 · <code>t65</code> · <code>df = df.sort_values(["SizeGB"], ascending=[False], kind="stable", na_position="first")</code></div><span id="r2-21"></span><div class="fs"><b>2.22</b> Filter #46 · exact · <code>t46</code> · <code>df = df[df["Access"].isin(['RW', 'W'])]</code></div><span id="r2-22"></span><div class="fs"><b>2.23</b> Formula #56 · exact · <code>t56</code></div><pre id="r2-23">Issue = "Write only" when [Access] = "W", otherwise "Read/write"
 # pandas:
-df["Issue"] = np.select([eq(df["Access"], 'W')], ['Write only'], default='Read/write')</pre></details>
-</div></li>
-<li id="s2-24"><div><div class="tool">Select <small>· step 2.24 · tool #66</small></div>
-<div class="does">Deletes the columns <span class="col">Access</span>.</div>
-<div class="meta"><b>Removes</b><span><span class="col">Access</span></span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.24</b> Select #66 · exact · <code>t66</code></div><pre id="r2-24">drop Access
+df["Issue"] = np.select([eq(df["Access"], 'W')], ['Write only'], default='Read/write')</pre><div class="fs"><b>2.24</b> Select #66 · exact · <code>t66</code></div><pre id="r2-24">drop Access
 # pandas:
-df = df.drop(columns=["Access"])</pre></details>
-</div></li>
-<li id="s2-15"><div><div class="tool">Join <small>· step 2.15 · tool #63</small></div>
-<div class="does">Matches its rows with a typed table (<span class="col">Owner</span>, <span class="col">Team</span>; 2 rows) on <span class="col">Owner</span>.</div>
-<div class="meta"><b>Takes</b><span><a href="#s2-14">step 14</a></span><b>Looks at</b><span><span class="col">Owner</span></span></div>
-<div class="split">↳ <b>matched rows</b> → <a href="#s2-25">step 25</a> · <b>rows only in the first input</b> → dropped · <b>rows only in the second input</b> → dropped</div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.15</b> Join #63 · converted, assuming A5 · <code>t63</code></div><pre id="r2-15">keys: left [Owner] = right [Owner]
+df = df.drop(columns=["Access"])</pre><div class="fs"><b>2.15</b> Join #63 · converted, assuming A5 · <code>t63</code></div><pre id="r2-15">keys: left [Owner] = right [Owner]
 drop Right_Owner
 # pandas:
 right = src_typed_owner_team.rename(columns=lambda c: "Right_" + c if c in df.columns else c)  # as Alteryx: only clashing names get Right_
 m = df.merge(right, how="outer", left_on=["Owner"], right_on=[c if c in right.columns else "Right_" + c for c in ["Owner"]], indicator=True)
 m = m.drop(columns=["Right_Owner"], errors="ignore")
-s2_15_join = m[m["_merge"] == "both"].drop(columns="_merge")</pre></details>
-</div></li>
-<li id="s2-25"><div><div class="tool">Union <i>“All issues”</i> <small>· step 2.25 · tool #90</small></div>
-<div class="does">Stacks the tables <a href="#s2-9">step 9</a>, <a href="#s2-12">step 12</a>, <a href="#s2-15">step 24</a> (matched rows), <a href="#s2-18">step 17</a>, <a href="#s2-21">step 20</a>, <a href="#s2-24">step 23</a> (columns matched by name).</div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.25</b> Union #90 · converted, assuming A9 · <code>t90</code> · <code>df = pd.concat([s2_9, s2_12, s2_15_join, s2_18, s2_21, s2_24], ignore_index=True)</code></div><span id="r2-25"></span></details>
-</div></li>
-<li id="s2-26"><div><div class="tool">Formula <small>· step 2.26 · tool #91</small></div>
-<div class="does">Sets 1 column.</div>
-<div class="meta"><b>Sets</b><span><b>Audit Date</b> = today's date</span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.26</b> Formula #91 · converted; note: <span class="col">Audit Date</span> uses datetimetoday(): the result depends on the run date · <code>t91</code></div><pre id="r2-26">Audit Date = DateTimeToday()
+s2_15_join = m[m["_merge"] == "both"].drop(columns="_merge")</pre></details></td><td class="cols"><span class="col">Issue</span> <span class="col">Datasets</span> <span class="col">Name</span> −<span class="col">Access</span></td><td class="tl"><small>Union · step 2.25 · tool #90</small><br><i>“All issues”</i></td></tr>
+<tr id="s2-26"><td class="n">8</td><td><div class="does">Sets 1 column:</div><div class="ln"><b>Audit Date</b> = today's date</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.26</b> Formula #91 · converted; note: <span class="col">Audit Date</span> uses datetimetoday(): the result depends on the run date · <code>t91</code></div><pre id="r2-26">Audit Date = DateTimeToday()
 # pandas:
-df["Audit Date"] = pd.Timestamp.today().normalize()</pre></details>
-</div></li>
-<li id="s2-27"><div><div class="tool">Output Data <small>· step 2.27 · tool #92</small></div>
-<div class="does">Saves the table to <span class="chip o">Dataset audit.xlsx › Issues</span> (replaces the sheet).</div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.27</b> Output Data #92 · converted, assuming A6 · <code>t92</code> · <code>s2_27 = df  # the rows this step saves; the notebook's last cell writes them to OUT</code></div><span id="r2-27"></span></details>
-</div></li>
-</ol></div>
+df["Audit Date"] = pd.Timestamp.today().normalize()</pre></details></td><td class="cols"><span class="col">Audit Date</span></td><td class="tl"><small>Formula · step 2.26 · tool #91</small></td></tr>
+<tr id="s2-27"><td class="n">9</td><td><div class="does">Saves the table to <span class="chip o">Dataset audit.xlsx › Issues</span> (replaces the sheet).</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.27</b> Output Data #92 · converted, assuming A6 · <code>t92</code> · <code>s2_27 = df  # the rows this step saves; the notebook's last cell writes them to OUT</code></div><span id="r2-27"></span></details></td><td class="cols"></td><td class="tl"><small>Output Data · step 2.27 · tool #92</small></td></tr>
+</tbody></table>
+</div>
 </section>
 <section class="stage" id="m3">
 <h3>Container 3. Old checks <span class="badge">disabled in the saved file</span></h3>
 <p><b>Not used by any output:</b> 2 steps (Input Data 1, Formula 1). They run, but nothing they make is saved.</p>
-<details class="side" id="u3"><summary>The 2 steps</summary><ol class="steps">
-<li id="s3-1"><div><div class="tool">Input Data <small>· step 3.1 · tool #100</small></div>
-<div class="does">Opens <span class="chip f">old_rules.csv</span>.</div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>3.1</b> Input Data #100 · converted, assuming A4; note: the workflow holds no recorded field types for this input · <code>t100</code></div><pre id="r3-1">src_old_rules = pd.read_csv(OLD_RULES_CSV, sep=',', dtype=str, keep_default_na=False).replace("", None)</pre></details>
-</div></li>
-<li id="s3-2"><div><div class="tool">Formula <small>· step 3.2 · tool #101</small></div>
-<div class="does">Sets 1 column.</div>
-<div class="meta"><b>Sets</b><span><b>Old</b> = 1</span></div>
-<details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>3.2</b> Formula #101 · exact · <code>t101</code></div><pre id="r3-2">Old = 1
+<details class="hk" id="u3"><summary>The 2 steps</summary><ul><li id="s3-1"><small class="sid">3.1</small> Input Data #100: Opens <code>old_rules.csv</code>.</li><li id="s3-2"><small class="sid">3.2</small> Formula #101: Sets 1 column: <b>Old</b> = 1</li></ul><details class="rule"><summary>Their rule and pandas</summary><div class="fs"><b>3.1</b> Input Data #100 · converted, assuming A4; note: the workflow holds no recorded field types for this input · <code>t100</code></div><pre id="r3-1">src_old_rules = pd.read_csv(OLD_RULES_CSV, sep=',', dtype=str, keep_default_na=False).replace("", None)</pre><div class="fs"><b>3.2</b> Formula #101 · exact · <code>t101</code></div><pre id="r3-2">Old = 1
 # pandas:
-df["Old"] = 1</pre></details>
-</div></li>
-</ol></details>
+df["Old"] = 1</pre></details></details>
 </section>
 <h2 id="order">3. Run order</h2>
-<p>Inside a story, steps run in the order shown. What must finish before what:</p>
+<p>Inside a table, the rows run in the order shown. What must finish before what:</p>
 <ol>
 <li>Container 2 runs after container 1: it opens <code>Consolidated Datasets.xlsx</code>, which container 1 saves.
 </li>
@@ -367,9 +233,11 @@ df["Old"] = 1</pre></details>
 <h2 id="detail">5. Detail</h2>
 <details class="d3" id="legend"><summary><span class="h3">How to read the pandas</span></summary><div class="inner">
 <ul>
-<li><b>Rule and pandas</b>, under each step, holds the step's exact rule (<code>when … → …</code> lines are read top down; the first true condition gives the value) and the same step in pandas, to paste into the steps notebook. Its first line gives the step number, the Designer tool and its ID, and whether the generated Python converts it exactly.
+<li><b>Rule and pandas</b>, on each row, holds the step's exact rule (<code>when … → …</code> lines are read top down; the first true condition gives the value) and the same step in pandas, to paste into the steps notebook. Its first line gives the step number, the Designer tool and its ID, and whether the generated Python converts it exactly.
 </li>
 <li>In the pandas, <code>df</code> is the table flowing through the step; <code>s2_7</code> is step 2.7's output and <code>s2_7_true</code> its rows that pass; <code>src_…</code> is a file as loaded in the notebook's Load cell, and <code>FOLDER</code> is the workflow's folder. The steps notebook is laid out by Designer's branches; find a step here by its number (the index below lists them all).
+</li>
+<li>Rows show only the steps that change which rows or which values reach the output. The others (opening a file, a Select that only keeps or retypes columns, Block Until Done, a lookup's preparation, a settings value attached to every row) are listed under <b>housekeeping steps not shown</b> at the end of each table, with their pandas.
 </li>
 <li><b>A1, A2…</b> in a status are Alteryx behaviours the Python assumes; they are listed in what to check.
 </li>
@@ -424,7 +292,7 @@ def eq(a, b):
 </li>
 </ul>
 </div></details>
-<details class="d3" id="cols1"><summary><span class="h3">Columns created or changed in container 1 (10)</span></summary><div class="inner">
+<details class="d3" id="cols1"><summary><span class="h3">Columns created or changed in container 1: 10</span></summary><div class="inner">
 <p>Each column this container creates or changes: the type Alteryx gives it, the steps that set it, how, and the later steps (anywhere in the workflow) that use a column of that name.</p>
 <table><thead><tr><th>Column</th><th>Type</th><th>Set at</th><th>How</th><th>Used later by</th></tr></thead><tbody>
 <tr><td><b>Name</b></td><td>V_String</td><td><a href="#s1-1">1.1</a>, <a href="#s1-2">1.2</a></td><td>read from the file / cleaned: remove leading and trailing spaces</td><td><a href="#s1-2">1.2</a>, <a href="#s2-12">2.12</a></td></tr>
@@ -439,7 +307,7 @@ def eq(a, b):
 <tr><td><b>Load Date</b></td><td>Date</td><td><a href="#s1-3">1.3</a></td><td>DateTimeToday()</td><td>not read by a later step</td></tr>
 </tbody></table>
 </div></details>
-<details class="d3" id="cols2"><summary><span class="h3">Columns created or changed in container 2 (18)</span></summary><div class="inner">
+<details class="d3" id="cols2"><summary><span class="h3">Columns created or changed in container 2: 18</span></summary><div class="inner">
 <p>Each column this container creates or changes: the type Alteryx gives it, the steps that set it, how, and the later steps (anywhere in the workflow) that use a column of that name.</p>
 <table><thead><tr><th>Column</th><th>Type</th><th>Set at</th><th>How</th><th>Used later by</th></tr></thead><tbody>
 <tr><td><b>FullPath</b></td><td></td><td><a href="#s2-1">2.1</a></td><td>file details</td><td><a href="#s2-5">2.5</a></td></tr>
@@ -462,13 +330,13 @@ def eq(a, b):
 <tr><td><b>Audit Date</b></td><td>Date</td><td><a href="#s2-26">2.26</a></td><td>DateTimeToday()</td><td>not read by a later step</td></tr>
 </tbody></table>
 </div></details>
-<details class="d3" id="cols3"><summary><span class="h3">Columns created or changed in container 3 (1)</span></summary><div class="inner">
+<details class="d3" id="cols3"><summary><span class="h3">Columns created or changed in container 3: 1</span></summary><div class="inner">
 <p>Each column this container creates or changes: the type Alteryx gives it, the steps that set it, how, and the later steps (anywhere in the workflow) that use a column of that name.</p>
 <table><thead><tr><th>Column</th><th>Type</th><th>Set at</th><th>How</th><th>Used later by</th></tr></thead><tbody>
 <tr><td><b>Old</b></td><td>V_WString</td><td><a href="#s3-2">3.2</a></td><td>1</td><td>not read by a later step</td></tr>
 </tbody></table>
 </div></details>
-<details class="d3" id="index"><summary><span class="h3">Every step by number (33)</span></summary><div class="inner">
+<details class="d3" id="index"><summary><span class="h3">Every step by number: 33</span></summary><div class="inner">
 <table><thead><tr><th>Step</th><th>Tool</th><th>Told in</th><th>Tool ID</th></tr></thead><tbody>
 <tr><td><a href="#s1-1">1.1</a></td><td>Input Data</td><td><a href="#o4">Consolidated Datasets.xlsx › Datasets</a></td><td>#1</td></tr>
 <tr><td><a href="#s1-2">1.2</a></td><td>Data Cleansing</td><td><a href="#o4">Consolidated Datasets.xlsx › Datasets</a></td><td>#2</td></tr>

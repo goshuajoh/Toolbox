@@ -16,11 +16,11 @@ Blocks:
     ("nav", items)                      contents list (items as for "steps")
     ("box", anchor, title, badge, paragraphs, meta)
                                         a summary card; meta = [(label, text or [lines])]
-    ("story", anchor, kind, title, badge, intro, items)
-                                        numbered steps; kind: output / table; item = a step or a side
-    ("side", side)                      folded numbered steps: {"anchor", "title", "steps"}
-A step is {"anchor", "tool", "note", "small", "text", "meta": [(label, text)], "split", "hand", "fold"}, fold as in
-"folds"; a side is {"side": True, "anchor", "title", "steps"}.
+    ("acts", anchor, kind, title, badge, intro, rows, housekeeping, extra anchors)
+                                        a table of actions; kind: output / table; intro: lines
+    ("hk", housekeeping)                a folded list: {"anchor", "title", "items", "anchors", "folds"}
+A row is {"num", "anchor", "anchors", "text", "lines", "table": {"head", "rows"}, "cols", "small", "note", "hand",
+"split", "folds", "sub"}; folds as in "folds".
 Inline text may use **bold**, `code`, [[anchor|label]] links, and chips: {{f|file}}, {{o|saved file}}, {{s|small}},
 {{b|badge}}. In HTML a [Column] outside code is drawn as a column chip.
 """
@@ -88,17 +88,10 @@ def _md_blocks(blocks):
             for label, text in b[5]:
                 out.append("- **%s:** %s" % (label, _md_inline("; ".join(text) if isinstance(text, list) else text)))
             out.append("")
-        elif k == "story":
-            out += ["", "#### " + _md_inline(b[3]) + (" _(%s)_" % b[4] if b[4] else ""), "", _md_inline(b[5]), ""]
-            n = 0
-            for it in b[6]:
-                if it.get("side"):
-                    out += _md_side(it)
-                else:
-                    n += 1
-                    out += _md_step(it, n)
-        elif k == "side":
-            out += _md_side(b[1])
+        elif k == "acts":
+            out += _md_acts(b)
+        elif k == "hk":
+            out += _md_hk(b[1])
         elif k == "card":
             out += ["", "#" * 5 + " " + _md_inline(b[2]), ""]
             for label, text, pre in b[3]:
@@ -109,28 +102,47 @@ def _md_blocks(blocks):
     return out
 
 
-def _md_step(it, n, lead=""):
-    head = "%s**%s. %s**%s · %s%s" % (lead, n, it["tool"], " “%s”" % it["note"] if it.get("note") else "", it["small"],
-                                     " · ⚠ " + it["hand"] if it.get("hand") else "")
-    out = [head + "  ", lead + _md_inline(it["text"]) + "  "]
-    out += [lead + ("%s: " % label if label else "") + _md_inline(text) + "  " for label, text in it.get("meta", [])]
-    if it.get("split"):
-        out.append(lead + "↳ " + _md_inline(it["split"]) + "  ")
+def _md_cell(text):
+    return _md_inline(text).replace("|", "\\|").replace("\n", " ")
+
+
+def _md_acts(b):
+    out = ["", "#### " + ("Working table: " if b[2] == "table" else "") + _md_inline(b[3]) +
+           (" _(%s)_" % b[4] if b[4] else ""), ""]
+    out += [_md_inline(x) + "\n" for x in b[5] if x]
+    out += ["| # | What happens | Columns | Tool |", "|---|---|---|---|"]
+    folds = []
+    for r in b[6]:
+        cell = [r["text"]] + list(r.get("lines") or [])
+        if r.get("table"):
+            cell += ["• %s — %s %s" % tuple(row) for row in r["table"]["rows"]]
+        if r.get("split"):
+            cell.append("↳ " + r["split"])
+        out.append("| %s | %s | %s | %s |" % (r["num"], "<br>".join(_md_cell(x) for x in cell), _md_cell(r.get("cols") or ""),
+                                              _md_cell(r["small"] + (" “%s”" % r["note"] if r.get("note") else "") +
+                                                       (" ⚠ " + r["hand"] if r.get("hand") else ""))))
+        folds += r.get("folds") or []
     out.append("")
-    f = it.get("fold")
-    if f:
-        out.append("- " + _md_inline(f["summary"]))
-        if f.get("lines"):
-            out += [""] + ["      " + line for line in f["lines"]]
-        out.append("")
+    if b[7]:
+        out += ["_%s:_ %s" % (b[7]["title"], "; ".join(_md_inline(x) for x in b[7]["items"])), ""]
+        folds += b[7]["folds"]
+    if folds:
+        out += ["Rule and pandas:", ""] + _md_folds(folds)
     return out
 
 
-def _md_side(side):
-    out = ["", "> **%s**" % _md_inline(side["title"]), ""]
-    for n, it in enumerate(side["steps"], 1):
-        out += _md_step(it, n, "> ")
-    return out
+def _md_hk(h):
+    out = ["_%s:_" % h["title"], ""] + ["- " + _md_inline(x) for x in h["items"]] + [""]
+    return out + ["Rule and pandas:", ""] + _md_folds(h["folds"])
+
+
+def _md_folds(items):
+    out = []
+    for it in items:
+        out.append("- " + _md_inline(it["summary"]))
+        if it.get("lines"):
+            out += [""] + ["      " + line for line in it["lines"]] + [""]
+    return out + [""]
 
 
 def to_markdown(blocks):
@@ -230,7 +242,16 @@ section.stage{border-left:3px solid var(--line);padding:0 0 0 14px;margin:1em 0}
 :target{outline:2px solid var(--accent);outline-offset:2px}tr:target{background:var(--box)}
 details.fold{margin:.15em 0}details.fold>summary{padding:2px 6px;font-size:14px}
 details.fold>pre{margin:.2em 0 .6em 1.2em}div.fold{padding:2px 6px 2px 22px;font-size:14px}
-@media (max-width:600px){.meta{grid-template-columns:1fr}ol.steps>li.side{padding-left:0}}
+table.acts{display:table;width:100%;margin:8px 0}table.acts td{border-bottom:1px solid var(--line)}
+table.acts td.n{font-weight:650;color:var(--muted);width:2.2em;white-space:nowrap}
+table.acts td.cols{width:16%;font-size:12.5px}table.acts td.tl{width:15%;font-size:12px;color:var(--muted)}
+table.acts tr.sub td{background:var(--soft);font-size:13.5px}table.acts tr.sub td.n{padding-left:16px}
+table.acts .ln{margin:1px 0 1px 10px;overflow-wrap:anywhere}table.acts .does{overflow-wrap:anywhere}
+table.mini{display:table;width:100%;font-size:12.5px;margin:4px 0}table.mini td:first-child{width:48%}table.mini td:last-child{width:5.5em;color:var(--muted)}table.mini td,table.mini th{padding:3px 6px}
+details.hk{font-size:13px;margin:6px 0 0}details.hk ul{margin:4px 0;padding-left:1.2em}
+@media (max-width:600px){.meta{grid-template-columns:1fr}table.acts,table.acts tbody,table.acts tr,table.acts td{display:block;
+width:auto!important}table.acts thead{display:none}table.acts tr{border-top:1px solid var(--line);padding:6px 0}
+table.acts td{border:0;padding:2px 4px}table.mini{display:block;overflow-x:auto}}
 """
 
 
@@ -352,16 +373,10 @@ def _h_blocks(blocks):
                     "<b>%s</b><span>%s</span>" % (html.escape(label), "<br>".join(_h_inline(x) for x in text)
                                                   if isinstance(text, list) else _h_inline(text)) for label, text in b[5]))
             out.append("</div>")
-        elif k == "story":
-            chip = '<span class="chip %s">%s</span>' % ("o" if b[2] == "output" else "w", _h_inline(b[3]))
-            out.append('<div class="box story"%s><h3>%s%s%s</h3><p class="sub">%s</p><ol class="steps">' % (
-                ' id="%s"' % b[1] if b[1] else "", '<span class="kind">working table</span> ' if b[2] == "table" else "",
-                chip, ' <span class="badge">%s</span>' % html.escape(b[4]) if b[4] else "", _h_inline(b[5])))
-            for it in b[6]:
-                out += _h_side(it, True) if it.get("side") else _h_step(it)
-            out.append("</ol></div>")
-        elif k == "side":
-            out += _h_side(b[1], False)
+        elif k == "acts":
+            out += _h_acts(b)
+        elif k == "hk":
+            out += _h_hk(b[1])
         elif k == "card":
             out.append('<div class="card"%s><div class="card-h">%s</div><dl>' % (
                 ' id="%s"' % b[1] if b[1] else "", _h_inline(b[2])))
@@ -374,34 +389,57 @@ def _h_blocks(blocks):
     return out
 
 
-def _h_step(it):
-    note = ' <i>“%s”</i>' % html.escape(it["note"]) if it.get("note") else ""
-    out = ['<li%s><div><div class="tool">%s%s <small>· %s</small>%s</div>' % (
-        ' id="%s"' % it["anchor"] if it.get("anchor") else "", html.escape(it["tool"]), note, html.escape(it["small"]),
-        ' <span class="hand">%s</span>' % html.escape(it["hand"]) if it.get("hand") else ""),
-        '<div class="does">%s</div>' % _h_inline(it["text"])]
-    if it.get("meta"):
-        out.append('<div class="meta">%s</div>' % "".join(
-            "<b>%s</b><span>%s</span>" % (html.escape(label), _h_inline(text)) for label, text in it["meta"]))
-    if it.get("split"):
-        out.append('<div class="split">↳ %s</div>' % _h_inline(it["split"]))
-    f = it.get("fold")
-    if f:
-        out.append('<details class="rule"><summary>Rule and pandas</summary><div class="fs">%s</div>%s</details>' % (
-            _h_inline(f["summary"]), '<pre%s>%s</pre>' % (' id="%s"' % f["anchor"] if f.get("anchor") else "",
-                                                          html.escape("\n".join(f["lines"]), quote=False))
-            if f.get("lines") else '<span%s></span>' % (' id="%s"' % f["anchor"] if f.get("anchor") else "")))
-    return out + ["</div></li>"]
+def _h_folds(folds):
+    out = []
+    for f in folds:
+        out.append('<div class="fs">%s</div>' % _h_inline(f["summary"]))
+        anchor = ' id="%s"' % f["anchor"] if f.get("anchor") else ""
+        out.append('<pre%s>%s</pre>' % (anchor, html.escape("\n".join(f["lines"]), quote=False)) if f.get("lines") else
+                   "<span%s></span>" % anchor)
+    return "".join(out)
 
 
-def _h_side(side, in_list):
-    out = ['<li class="side">'] if in_list else []
-    out.append('<details class="side"%s><summary>%s</summary><ol class="steps">' % (
-        ' id="%s"' % side["anchor"] if side.get("anchor") else "", _h_inline(side["title"])))
-    for it in side["steps"]:
-        out += _h_step(it)
-    out.append("</ol></details>")
-    return out + (["</li>"] if in_list else [])
+def _h_acts(b):
+    chip = '<span class="chip %s">%s</span>' % ("o" if b[2] == "output" else "w", _h_inline(b[3]))
+    out = ['<div class="box story"%s>%s<h3>%s%s%s</h3>' % (
+        ' id="%s"' % b[1] if b[1] else "", "".join('<span id="%s"></span>' % a for a in b[8] or []),
+        '<span class="kind">working table</span> ' if b[2] == "table" else "", chip,
+        ' <span class="badge">%s</span>' % html.escape(b[4]) if b[4] else "")]
+    out += ['<p class="sub">%s</p>' % _h_inline(x) for x in b[5] if x]
+    out.append('<table class="acts"><thead><tr><th>#</th><th>What happens</th><th>Columns</th><th>Tool</th></tr></thead>'
+               '<tbody>')
+    for r in b[6]:
+        cell = ["".join('<span id="%s"></span>' % a for a in r.get("anchors") or []),
+                '<div class="does">%s</div>' % _h_inline(r["text"])]
+        cell += ['<div class="ln">%s</div>' % _h_inline(x) for x in r.get("lines") or []]
+        if r.get("table"):
+            t = r["table"]
+            cell.append('<table class="mini"><thead><tr>%s</tr></thead><tbody>%s</tbody></table>' % (
+                "".join("<th>%s</th>" % html.escape(h) for h in t["head"]),
+                "".join("<tr>%s</tr>" % "".join("<td>%s</td>" % _h_inline(c) for c in row) for row in t["rows"])))
+        if r.get("split"):
+            cell.append('<div class="split">↳ %s</div>' % _h_inline(r["split"]))
+        if r.get("folds"):
+            cell.append('<details class="rule"><summary>Rule and pandas</summary>%s</details>' % _h_folds(r["folds"]))
+        tool = '<small>%s</small>%s%s' % (html.escape(r["small"]), '<br><i>“%s”</i>' % html.escape(r["note"])
+                                           if r.get("note") else "",
+                                           '<br><span class="hand">%s</span>' % html.escape(r["hand"]) if r.get("hand") else "")
+        out.append('<tr%s%s><td class="n">%s</td><td>%s</td><td class="cols">%s</td><td class="tl">%s</td></tr>' % (
+            ' id="%s"' % r["anchor"] if r.get("anchor") else "", ' class="sub"' if r.get("sub") else "",
+            html.escape(r["num"]), "".join(cell), _h_inline(r.get("cols") or ""), tool))
+    out.append("</tbody></table>")
+    if b[7]:
+        out += _h_hk(b[7])
+    return out + ["</div>"]
+
+
+def _h_hk(h):
+    items = "".join('<li%s>%s</li>' % (' id="%s"' % a if a else "", _h_inline(x))
+                    for x, a in zip(h["items"], (h.get("anchors") or []) + [None] * len(h["items"])))
+    return ['<details class="hk"%s><summary>%s</summary><ul>%s</ul>%s</details>' % (
+        ' id="%s"' % h["anchor"] if h.get("anchor") else "", html.escape(h["title"]), items,
+        '<details class="rule"><summary>Their rule and pandas</summary>%s</details>' % _h_folds(h["folds"])
+        if h.get("folds") else "")]
 
 
 def to_html(blocks, title):

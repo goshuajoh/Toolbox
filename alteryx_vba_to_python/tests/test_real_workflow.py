@@ -77,8 +77,8 @@ class DisabledContainers(unittest.TestCase):
             self.assertTrue("### %d. %s _(disabled in the saved file)_" % (n, name) in md, name)
             self.assertTrue("in the generated code run it with `only=%d`" % n in md, name)
         self.assertTrue("#### recon.csv _(container 3 · disabled in the saved file)_" in md)
-        self.assertTrue('Sets: **Reconciled** = "Y"' in md)                                     # explained all the same
-        self.assertTrue("It takes rows from **a typed table, with Checked calculated** (container 1); it opens "
+        self.assertTrue('| 2 | Sets 1 column:<br>**Reconciled** = "Y" |' in md)                                     # explained all the same
+        self.assertTrue("It takes rows from **Table A** (container 1); it opens "
                         "`keys.csv`, which container 2 saves." in md)                         # links still shown
         self.assertEqual(g.errors, [])
         # generated code: the saved file's behaviour by default, any container on request
@@ -233,7 +233,8 @@ class RunCommand(unittest.TestCase):
         wb.formula(5, [("After", "'done'")]); wb.conn(4, 5)
         d, path = save(wb)
         wf, g, md = guide_md(path)
-        self.assertTrue("Runs `cscript.exe ImportAll.vbs Configuration.xlsm` outside Alteryx: write this step by hand." in md)
+        self.assertTrue("| Runs `cscript.exe ImportAll.vbs Configuration.xlsm` outside Alteryx. |  | Run Command · step 1.4 · tool #4 ⚠ "
+                        "outside Alteryx: write by hand |" in md)
         self.assertTrue("**1 external program to replace** (Run Command)" in last_section(md))
         self.assertFalse("Not converted" in last_section(md))
         mod = convert(wb, d)[1]
@@ -286,8 +287,7 @@ class Failures(unittest.TestCase):
         finally:
             guide.Guide.card = real
         self.assertEqual(g.errors, [("ValueError", "guide.safe_card", "2", "Formula")])
-        self.assertTrue("> **2. Formula** · step 1.2 · tool #2 · ⚠ not converted: write by hand  \n> Sets 1 column.  \n> "
-                        'Sets: **B** = [A] + "x"' in md, md)
+        self.assertTrue('- (1.2) Formula #2: Sets 1 column: **B** = [A] + "x" · ⚠ not converted: write by hand' in md, md)
         self.assertTrue("- **1.2** Formula #2 · **not converted**: the converter failed on this step (ValueError in "
                         "guide.safe_card)" in md)
         self.assertTrue("      setting: B [V_WString] = [A] + 'x'" in md)                       # its settings, from the XML
@@ -306,7 +306,7 @@ class Failures(unittest.TestCase):
         d, path = save(wb)
         wf, g, md = guide_md(path)
         self.assertEqual(g.errors, [])
-        self.assertTrue("Matches its rows with `clients.xlsx › DAC Client` on [Key]." in md)
+        self.assertTrue("Matches the rows with `clients.xlsx › DAC Client` on [Key]." in md)
         self.assertTrue("src_clients_dac_client_1_2b = src_clients_dac_client.copy()" in md)
         self.assertTrue('src_clients_dac_client_1_2b = src_clients_dac_client_1_2b.rename(columns={"Name": "Client"})' in md)
 

@@ -2,10 +2,13 @@
 
 1. What this workflow does: one block per container (a short summary, then the files it opens and saves, and the
    programs it runs), with a contents list above it.
-2. How each output is made: one numbered story per output, from its source files to the saved sheet, in run order.
-   Work that several outputs share is told once, as a named working table, and each story links to it by name. A
-   lookup brought into the main flow is described in the step that uses it; its own preparation sits folded just
-   before that step. Steps that feed no output get one line at the end of their container.
+2. How each output is made: one compact table per output, from its source files to the saved sheet, in run order.
+   A row is shown only for a step that changes which rows or which values end up in the output (a filter, a rule
+   that sets columns, a match with another table, a total, the save...), with its rule. Everything else is presumed:
+   opening the file the story starts from, a Select that only keeps or retypes columns, Block Until Done, a lookup's
+   own preparation, a settings value attached to every row. Those are listed, folded, at the end of the story.
+   Neighbouring steps of one kind are one row; parallel paths stacked by a Union are one row with a small table.
+   Work that several outputs share is told once, as Table A, B..., and the stories start from it.
 3. Run order: what must finish before what.
 4. Files, sheets and scripts: one table.
 5. Detail (folded): how to read the pandas, the helper code, what to check before relying on the Python, the
@@ -19,20 +22,34 @@ import re
 from collections import Counter, defaultdict
 
 from . import expr
-from .guide import BLOCKERS, HELPERS, OUT_MODE, SOURCES, _list, _md_plain, designer, file_text, place
+from .guide import BLOCKERS, HELPERS, OUT_MODE, SOURCES, _list, _md_plain, designer, file_text, place, simple_words
 
 SIDE = {"Join": "R", "FindReplace": "S", "AppendFields": "S"}       # inputs that bring a lookup into the main flow
 OUTS = {"Filter": ("True", "False"), "Join": ("Join", "Left", "Right"), "Unique": ("Unique", "Duplicates")}
 PLAIN = {"True": "rows that pass", "False": "rows that fail", "Join": "matched rows",
          "Left": "rows only in the first input", "Right": "rows only in the second input",
-         "Unique": "first row of each", "Duplicates": "duplicate rows"}
+         "Unique": "unique rows", "Duplicates": "duplicate rows"}
 ENDS = ("Output",)                                   # what a story is told for
 ATTACH = ("RunCommand", "Message")                    # joins the story whose rows it shares, or is a story itself
-PLUMBING = ("Select", "Sort", "BlockUntilDone", "ParallelBlockUntilDone", "RecordID", "Cleanse")
+SETS = ("Formula", "MultiFieldFormula")
+REORDER = ("Sort", "Summarize", "CrossTab")           # a sort before these is not seen in the result
+NEEDS_ORDER = ("Sample", "Unique", "MultiRowFormula", "RecordID", "Output", "RunCommand", "Message")
+INLINE = 160                                          # a rule longer than this shows its start; the rest is folded
+ORDINAL = ["first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth"]
 VERB = [("Filter", "filters rows"), ("Join", "matches tables"), ("FindReplace", "looks values up"),
         ("AppendFields", "matches tables"), ("Summarize", "totals rows"), ("Formula", "calculates columns"),
         ("MultiFieldFormula", "calculates columns"), ("Union", "stacks tables"), ("Unique", "removes duplicates"),
         ("Transpose", "reshapes tables"), ("CrossTab", "reshapes tables")]
+WHY = {"source": "opens what the story starts from (named at the top)",
+       "dir": "lists the files the story starts from (named at the top)",
+       "order": "only sets the run order (see Run order)",
+       "select": "only keeps, reorders or retypes columns",
+       "sort": "sorts, but nothing after it depends on the order",
+       "rid": "numbers the rows, but the number is not used or saved",
+       "setting": "attaches a settings value to every row (named where it is used)",
+       "settingprep": "prepares a settings value",
+       "lookup": "prepares a lookup (said in the step that uses it)"}
+
 
 
 # ----------------------------------------------------------------------------- rules in words
@@ -131,10 +148,17 @@ def _no():
     raise _NoWords()
 
 
-def worked_from(node, text=""):
-    cols = expr.fields(node) if node is not None else re.findall(r"\[([^\[\]]+)\]", text)
-    cols = list(dict.fromkeys(c for c in cols if c.lower() != "_currentfield_"))
-    return "worked out from %s (rule in the details)" % _list(cols, 4) if cols else "a fixed value (rule in the details)"
+def rule_text(e):
+    """(inline text, cut) for an expression: plain words when safe, else the Alteryx rule as written."""
+    if e is None:
+        return "?", False
+    said = words(e["ast"]) if e.get("ast") is not None else None
+    if said:
+        return said, False
+    text = re.sub(r"\s+", " ", e.get("text") or "").strip()
+    if len(text) <= INLINE:
+        return "`%s`" % text.replace("`", "'"), False
+    return "`%s …`" % text[:INLINE - 10].rstrip().replace("`", "'"), True
 
 
 # ----------------------------------------------------------------------------- groups of steps
@@ -145,35 +169,52 @@ class Group:
         self.kind, self.key = kind, key              # kind: "story", "table" or "unused"; key: top container
         self.tools = sorted(tools, key=rank)
         self.ends, self.main, self.sides, self.side_of = [], [], {}, {}
-        self.title, self.anchor, self.num = "", "", {}
+        self.title, self.anchor, self.about, self.letter = "", "", "", ""
+        self.rows, self.hidden, self.row_of = [], [], {}
+        self.extra = []                              # more output anchors, when several saves are told as one
 
 
 class Side:
     def __init__(self, tools, target):
         self.tools, self.target = tools, target
-        self.title, self.anchor, self.num = "", "", {}
 
 
 class Layout:
     def __init__(self, g):
         self.g, self.wf, self.t = g, g.wf, g.t
         self.rk = lambda i: (self.wf.rank.get(i, 10 ** 9), g.pos.get(i, 0))
-        self.ctx = None                                  # (group, side or None) whose step numbers are local
-        self.groups, self.group_of, self.names = [], {}, Counter()
+        self.ctx = None                                  # the group whose rows are referred to as "row 3"
+        self.groups, self.group_of = [], {}
         for key in g.tops:
             self.split(key)
         for grp in self.groups:
             self.shape(grp)
-        for grp in sorted(self.groups, key=lambda x: self.rk(x.tools[-1]) if x.tools else (0, 0)):
+        self.settings = self.find_settings()            # Append Fields id -> (columns, source text, descendants)
+        for grp in self.groups:
+            self.hidden_of(grp)
+            if grp.kind == "table" and all(i in grp.why for i in grp.tools):
+                grp.kind = "pass"                        # shared, but nothing in it changes the data: not a table
+        for key in g.tops:
+            tables = sorted((x for x in self.groups if x.key == key and x.kind == "table"), key=lambda x: self.rk(x.tools[-1]))
+            for n, grp in enumerate(tables):
+                grp.letter = _letters(n)
+        for grp in self.groups:
             self.name(grp)
+        g.hook = self
+        try:
+            for grp in sorted(self.groups, key=lambda x: self.rk(x.tools[-1])):
+                self.ctx = grp
+                grp.rows = self.make_rows(grp)
+            self.ctx = None
+            for grp in self.groups:
+                grp.about = grp.about or self.describe(grp)
+        finally:
+            g.hook = None
 
     # ---- which steps go into which story
     def steps_of(self, key):
         g = self.g
         return [i for i in g.order if g.top_of[i] == key and i not in g.fold_of]
-
-    def same(self, i, j):
-        return self.g.top_of.get(i) == self.g.top_of.get(j)
 
     def ancestors(self, i, inside):
         seen, todo = set(), [i]
@@ -193,18 +234,27 @@ class Layout:
         anc = {o: self.ancestors(o, inside) for o in token}
         for m in (i for i in tools if t[i].kind in ATTACH):
             a = self.ancestors(m, inside)
-            best = max(anc, key=lambda o: (len(a & anc[o]), -self.rk(o)[0]), default=None)
-            token[m] = best if best is not None and a & anc[best] else m
-        sig = {}
-        for i in sorted(tools, key=self.rk, reverse=True):
-            s = {token[i]} if i in token else set()
-            for e in self.wf.outs.get(i, []):
-                c = e[2]
-                if c in inside:
-                    s |= sig.get(c, set())
-                elif c in g.top_of and c not in g.fold_of:
-                    s.add(("exit", g.top_of[c]))
-            sig[i] = frozenset(s)
+            down = [o for o in anc if m in anc[o]]
+            if down:                                   # it feeds an output: it is a step of that output's story
+                continue
+            waits = {x for x in a if t[x].kind in BLOCKERS}   # run after a save by Block Until Done: part of its story
+            tied = [o for o in anc if waits & anc[o]]
+            best = max(tied, key=lambda o: (len(a & anc[o]), -self.rk(o)[0]), default=None)
+            token[m] = best if best is not None else m
+        sig = {i: frozenset([token[i]] if i in token else []) for i in tools}
+        changed = True
+        while changed:                                 # to a fixed point: right whatever order the tools come in
+            changed = False
+            for i in sorted(tools, key=self.rk, reverse=True):
+                s = set(sig[i])
+                for e in self.wf.outs.get(i, []):
+                    c = e[2]
+                    if c in inside:
+                        s |= sig[c]
+                    elif c in g.top_of and c not in g.fold_of:
+                        s.add(("exit", g.top_of[c]))
+                if s != sig[i]:
+                    sig[i], changed = frozenset(s), True
         stories = defaultdict(list)
         rest = []
         for i in tools:
@@ -224,13 +274,13 @@ class Layout:
                 comp.append(x)
                 for e in self.wf.ins.get(x, []) + self.wf.outs.get(x, []):
                     y = e[2] if e[0] == x else e[0]
-                    if y in inside and y not in seen and y in sig and sig[y] == sig[i] and y not in stories.get(y, ()):
-                        if y in rest:
-                            seen.add(y)
-                            todo.append(y)
+                    if y in inside and y not in seen and y in rest and sig[y] == sig[i]:
+                        seen.add(y)
+                        todo.append(y)
             tables.append(comp)
-        made = [Group("story", key, ids, self.rk) for _, ids in sorted(stories.items(), key=lambda kv: self.rk(kv[0]))]
-        for grp, (end, _) in zip(made, sorted(stories.items(), key=lambda kv: self.rk(kv[0]))):
+        order = sorted(stories.items(), key=lambda kv: self.rk(kv[0]))
+        made = [Group("story", key, ids, self.rk) for _, ids in order]
+        for grp, (end, _) in zip(made, order):
             grp.ends = [i for i in grp.tools if token.get(i) == end and (i == end or t[i].kind in ATTACH)]
         made += [Group("table", key, ids, self.rk) for ids in tables]
         if unused:
@@ -240,21 +290,25 @@ class Layout:
                 self.group_of[i] = grp
         self.groups += made
 
+    def side_edge(self, i, e):
+        letter = SIDE.get(self.t[i].kind)
+        if self.t[i].kind == "JoinMultiple":
+            return e[3] not in ("#1", "Input1", "Input")
+        return bool(letter and e[3][:1].upper() == letter)
+
     def shape(self, grp):
         """Main steps (on the way to the result) and side preparations (a lookup's own steps), in run order."""
-        t, mem = self.t, set(grp.tools)
+        mem = set(grp.tools)
         if grp.kind == "unused":
             grp.main = list(grp.tools)
-            grp.num = {i: n for n, i in enumerate(grp.main, 1)}
             return
         if grp.kind == "table":
             grp.ends = [i for i in grp.tools if any(e[2] not in mem for e in self.wf.outs.get(i, []))] or grp.tools[-1:]
         main, todo = set(grp.ends), list(grp.ends)
         while todo:
             x = todo.pop()
-            letter = SIDE.get(t[x].kind)
             for e in self.wf.ins.get(x, []):
-                if e[0] in mem and e[0] not in main and not (letter and e[3][:1].upper() == letter):
+                if e[0] in mem and e[0] not in main and not self.side_edge(x, e):
                     main.add(e[0])
                     todo.append(e[0])
         grp.main = [i for i in grp.tools if i in main]
@@ -271,106 +325,217 @@ class Layout:
             grp.sides[m] = side
             for i in side.tools:
                 grp.side_of[i] = side
-        grp.num = {i: n for n, i in enumerate(grp.main, 1)}
-        for side in grp.sides.values():
-            side.num = {i: n for n, i in enumerate(side.tools, 1)}
+
+    # ---- settings attached to every row
+    def chain_of(self, i, e):
+        """The tools that make the table arriving on edge e of tool i: its side preparation and any file read in it."""
+        g, grp = self.g, self.group_of.get(i)
+        out = []
+        if e[0] in g.fold_of:
+            out = list(g.L.stages[g.fold_of[e[0]]])
+        side = grp.sides.get(i) if grp else None
+        if side is not None:
+            for x in side.tools:
+                out.append(x)
+                for f in self.wf.ins.get(x, []):
+                    if f[0] in g.fold_of:
+                        out += [y for y in g.L.stages[g.fold_of[f[0]]] if y not in out]
+        return out
+
+    def find_settings(self):
+        g, out = self.g, {}
+        for grp in self.groups:
+            for i in grp.main:
+                if self.t[i].kind != "AppendFields":
+                    continue
+                src = [e for e in self.wf.ins.get(i, []) if self.side_edge(i, e)]
+                if len(src) != 1:
+                    continue
+                chain = self.chain_of(i, src[0])
+                one = any((self.t[x].kind == "TextInput" and len(self.t[x].ir.get("rows", [])) <= 1) or
+                          (self.t[x].kind == "Sample" and str(self.t[x].ir.get("n")) == "1") or
+                          (self.t[x].kind == "Summarize" and not any(a == "GroupBy" for _, a, _, _ in self.t[x].ir["fields"]))
+                          or self.t[x].kind == "Filter" for x in chain)
+                named = any(self.t[x].kind == "Input" and re.search(r"setting|config|param|control", self.t[x].ir["file"], re.I)
+                            for x in chain)
+                if not chain or not (one or named):
+                    continue
+                cols = self.made_cols(chain)
+                first = next((x for x in chain if self.t[x].kind in ("Input", "TextInput")), None)
+                srct = self.file_chip(first) if first is not None and self.t[first].kind == "Input" else "a typed table"
+                down, todo = set(), [i]
+                while todo:
+                    x = todo.pop()
+                    for e in self.wf.outs.get(x, []):
+                        if e[2] not in down:
+                            down.add(e[2])
+                            todo.append(e[2])
+                out[i] = (cols, srct, down)
+        return out
+
+    def made_cols(self, chain):
+        t, cols = self.t, []
+        for x in chain:
+            k, ir = t[x].kind, t[x].ir
+            if k == "TextInput":
+                cols += ir["columns"]
+            elif k == "Input":
+                cols += list(ir.get("types", {}))
+            elif k in SETS:
+                cols += [f[0] for f in ir.get("fields", [])] if k == "Formula" else []
+            elif k == "Summarize":
+                cols += [r or "%s_%s" % (a, f) for f, a, r, _ in ir["fields"] if a != "GroupBy"]
+            elif k == "Select" and not ir["unknown"]:
+                cols = [r or f for f, sel, r, _, _ in ir["fields"] if sel and f != "*Unknown"]
+        return list(dict.fromkeys(cols))
+
+    def with_settings(self, text, i):
+        """Name a settings column where a rule uses it: the setting [T-1 Sheet] (Config.xlsx › Settings)."""
+        for a, (cols, src, down) in self.settings.items():
+            if i not in down:
+                continue
+            for c in cols:
+                text = re.sub(r"(?<!setting )\[%s\]" % re.escape(c), lambda m: "the setting %s (%s)" % (m.group(0), src),
+                              text, count=1)
+        return text
+
+    # ---- what is shown, and what is presumed
+    def hidden_of(self, grp):
+        grp.why = {}
+        for i in grp.tools:
+            why = self.why_hidden(i, grp)
+            if why:
+                grp.why[i] = why
+
+    def why_hidden(self, i, grp):
+        t, g = self.t[i], self.g
+        k, ir = t.kind, t.ir
+        if grp.kind == "unused":
+            return None
+        if i in grp.side_of:
+            side = grp.side_of[i]
+            if side.target in self.settings:
+                return "settingprep"
+            if k in SOURCES or k == "Select" and not self.renames(i) or k in BLOCKERS:
+                return "lookup"
+            if k == "Filter" and set(g.outs(i)) == {"True"}:
+                return "lookup"
+        if k in ("Input", "TextInput"):
+            return "source"
+        if k == "Directory" and all(self.t[e[2]].kind == "DynamicInput" for e in self.wf.outs.get(i, [])):
+            return "dir"
+        if k == "DynamicInput" and self.direct_dyn(i):
+            return "source"
+        if k in BLOCKERS:
+            return "order"
+        if k == "Select" and self.select_quiet(i):
+            return "select"
+        if k == "Sort" and not self.order_matters(i):
+            return "sort"
+        if k == "RecordID" and not self.id_used(i):
+            return "rid"
+        if k == "AppendFields" and i in self.settings:
+            return "setting"
+        return None
+
+    def renames(self, i):
+        return [(f, r) for f, sel, r, _, _ in self.t[i].ir["fields"] if f != "*Unknown" and sel and r and r != f]
+
+    def select_quiet(self, i):
+        ir = self.t[i].ir
+        real = [f for f in ir["fields"] if f[0] != "*Unknown"]
+        if self.renames(i) or any(not sel for _, sel, *_ in real) or any(sel and typ for _, sel, _, typ, _ in real):
+            return False
+        if ir["unknown"]:
+            return True
+        have = self.g.input_columns(i)
+        keep = {(r or f).lower() for f, sel, r, _, _ in real if sel}
+        return have is not None and have <= keep
+
+    def direct_dyn(self, i):
+        ins = self.wf.ins.get(i, [])
+        return len(ins) == 1 and self.t[ins[0][0]].kind == "Directory"
+
+    def order_matters(self, i):
+        x, seen = i, 0
+        while seen < 1000:
+            seen += 1
+            outs = self.wf.outs.get(x, [])
+            if len(outs) != 1:
+                return True                              # ends here, or splits: assume it matters
+            x = outs[0][2]
+            k = self.t[x].kind
+            if k in REORDER:
+                return False
+            if k in NEEDS_ORDER:
+                return True
+        return True
+
+    def id_used(self, i):
+        name = (self.t[i].ir.get("name") or "").lower()
+        after = [j for j in self.g.order if self.g.pos[j] > self.g.pos[i]]
+        if any(name in [r.lower() for r in self.g.cards[j]["reads"]] for j in after):
+            return True
+        x = i
+        for _ in range(1000):
+            outs = self.wf.outs.get(x, [])
+            if len(outs) != 1:
+                return True
+            x = outs[0][2]
+            if self.t[x].kind == "Select":
+                ir = self.t[x].ir
+                listed = {f.lower(): sel for f, sel, *_ in ir["fields"]}
+                if listed.get(name) is False or (name not in listed and not ir["unknown"]):
+                    return False
+            if self.t[x].kind == "Output":
+                return True
+        return True
 
     # ---- names
-    def unique(self, text):
-        self.names[text] += 1
-        return text if self.names[text] == 1 else "%s (%d)" % (text, self.names[text])
+    def file_chip(self, i):
+        t = self.t[i]
+        return "{{f|%s}}" % file_text(t.ir["file"], t.ir["options"]).replace("`", "").replace(" › sheet ", " › ")
 
-    def source_name(self, i, seen=None):
-        """What a chain starts from, in a few words."""
-        t, g = self.t[i], self.g
-        if t.kind == "Input":
-            return file_text(t.ir["file"], t.ir["options"]).replace("`", "").replace(" › sheet ", " › ").split(" › from row")[0]
-        if t.kind == "TextInput":
-            return "a typed table"
-        if t.kind == "Directory":
-            return "the file list of %s" % t.ir["dir"]
-        if t.kind == "DynamicInput":
-            return "the files listed in [%s]" % t.ir["field"]
-        e = g.L.primary(i) or (self.wf.ins.get(i) or [None])[0]
-        if e is None:
-            return designer(t.kind)
-        if e[0] in g.fold_of:
-            return _md_plain(g.read_label(e[0]))
-        other = self.group_of.get(e[0])
-        if other is not None and other is not self.group_of.get(i) and other.title:
-            return other.title
-        seen = seen or set()
-        if e[0] in seen or len(seen) > 400:
-            return designer(t.kind)
-        seen.add(e[0])
-        return self.source_name(e[0], seen)
-
-    def phrase(self, i):
-        t, ir = self.t[i], self.t[i].ir
-        c = self.g.cards.get(i, {})
-        cols = lambda xs: _list(xs, 2).replace("[", "").replace("]", "")       # names carry no [column] marks
-        k = t.kind
-        try:
-            if k == "Filter":
-                return "split on " + (cols(c.get("reads", [])) or "a test")
-            if k == "Join":
-                return "matched on " + cols(ir["left"])
-            if k == "Summarize":
-                group = [f for f, a, _, _ in ir["fields"] if a == "GroupBy"]
-                return "totals by " + cols(group) if group else "totals"
-            if k == "Union":
-                return "stacked"
-            if k == "Unique":
-                return "duplicates removed on " + cols(ir["fields"])
-            if k in ("Formula", "MultiFieldFormula"):
-                return "with " + cols([w[0] for w in c.get("writes", [])]) + " calculated"
-            if k == "FindReplace":
-                return "with " + cols(ir.get("append") or [ir["find"]]) + " looked up"
-            if k == "AppendFields":
-                return "with columns added"
-            if k in ("Transpose", "CrossTab"):
-                return "reshaped"
-            if k == "Sample":
-                return "first rows only"
-        except (KeyError, TypeError):
-            pass
-        return designer(k).lower()
-
-    def derived(self, ids, last):
-        first = next((i for i in ids if not any(e[0] in ids for e in self.wf.ins.get(i, []))), ids[0])
-        base = self.source_name(first)
-        mean = next((i for i in reversed(ids) if self.t[i].kind not in PLUMBING and self.t[i].kind not in SOURCES), None)
-        text = base if mean is None or self.t[mean].kind in SOURCES else "%s, %s" % (base, self.phrase(mean))
-        return text if len(text) <= 80 else text[:78].rstrip() + "…"
+    def out_place(self, i):
+        t = self.t[i]
+        path, sheet, cells, _ = place(t.ir["file"], t.ir["options"])
+        base = os.path.basename(path.replace("\\", "/")) or path
+        return base + (" › " + sheet if sheet else "") + (" › " + cells.upper() if cells else "")
 
     def name(self, grp):
         t = self.t
         if grp.kind == "unused":
             grp.title, grp.anchor = "Steps that feed no output", "u%d" % self.g.cnum[grp.key]
+        elif grp.kind == "pass":
+            grp.title, grp.anchor = "shared housekeeping", "x%d" % self.g.cnum[grp.key]
         elif grp.kind == "story":
             end = grp.ends[0] if grp.ends else grp.tools[-1]
             grp.anchor = "o%s" % end
             if t[end].kind == "Output":
-                path, sheet, cells, _ = place(t[end].ir["file"], t[end].ir["options"])
-                base = os.path.basename(path.replace("\\", "/")) or path
-                title = base + (" › " + sheet if sheet else "") + (" › " + cells.upper() if cells else "")
+                grp.title = self.out_place(end)
             elif t[end].kind == "RunCommand":
-                title = "Runs " + os.path.basename((t[end].ir.get("command") or "a program").replace("\\", "/"))
+                grp.title = "Runs " + self.program(end)[1]
             else:
-                title = "Check: " + self.derived(grp.tools, end)
-            grp.title = self.unique(title)
+                grp.title = "Check: " + _plain(self.g.short(end))[:70]
         else:
-            note = next((t[i].note for i in reversed(grp.ends + grp.tools) if t[i].note), "")
             grp.anchor = "w%s" % grp.tools[-1]
-            grp.title = self.unique(note if note and len(note) <= 80 else note[:78] + "…" if note else
-                                    self.derived(grp.tools, grp.tools[-1]))
-        for side in grp.sides.values():
-            last = side.tools[-1]
-            note = next((t[i].note for i in reversed(side.tools) if t[i].note), "")
-            side.anchor = "p%s" % last
-            side.title = self.unique(note if note else "%s, prepared" % self.derived(side.tools, last).split(", ")[0])
+            grp.title = "Table %s" % grp.letter
+            note = next((t[i].note for i in reversed(grp.ends + grp.tools) if t[i].note), "")
+            grp.about = note
 
-    # ---- how one step refers to another (the Guide calls these while hook is set)
+    def describe(self, grp):
+        """One line on a working table: its source and its last action."""
+        if grp.kind != "table":
+            return ""
+        srcs = self.sources(grp)
+        last = next((r for r in reversed(grp.rows) if not r.get("sub")), None)
+        text = "From %s" % (_and(srcs) or "earlier steps")
+        if last is not None:
+            text += "; last, " + _lower(_plain(last["text"]).rstrip(".:")) + (
+                ": " + _plain(last["lines"][0]) if last.get("lines") else "")
+        return text if len(text) <= 160 else text[:158].rstrip() + "…"
+
+    # ---- how a step refers to another (the Guide calls these while hook is set)
     def where(self, i):
         """(text, anchor) naming the place a step is told."""
         g = self.g
@@ -379,25 +544,93 @@ class Layout:
         grp = self.group_of.get(i)
         if grp is None:
             return "#%s" % i, None
-        cgrp, cside = self.ctx if self.ctx else (None, None)
-        side = grp.side_of.get(i)
-        if grp is cgrp:
-            if side is None:
-                return "step %d%s" % (grp.num[i], " of the story" if cside else ""), "s" + g.sid[i].replace(".", "-")
-            if side is cside:
-                return "step %d" % side.num[i], "s" + g.sid[i].replace(".", "-")
-            return "**%s**" % side.title, side.anchor
+        if grp is self.ctx and grp.kind == "unused":           # a folded list numbered by step, not by row
+            return "step %s" % g.sid[i], "s" + g.sid[i].replace(".", "-")
+        if grp is self.ctx:
+            if i in grp.side_of and grp.side_of[i].target not in self.settings:
+                return self.lookup_text(grp, grp.side_of[i]), None
+            row = grp.row_of.get(i)
+            if row is None:
+                return "the rows it starts from", None
+            return "row %s" % row["num"], row["anchor"]
         if grp.kind == "unused":
-            return "steps that feed no output (container %d)" % g.cnum[grp.key], grp.anchor
-        far = "" if cgrp is None or cgrp.key == grp.key else " (container %d)" % g.cnum[grp.key]
+            return "steps that feed no output", grp.anchor
+        if grp.kind == "pass":
+            return self.through(i)
+        far = "" if self.ctx is None or self.ctx.key == grp.key else " (container %d)" % g.cnum[grp.key]
         return "**%s**%s" % (grp.title, far), grp.anchor
+
+    def users(self, i, grp):
+        """The other tables and outputs that take rows from step i, seen through presumed shared steps."""
+        out, todo, seen = [], [e[2] for e in self.wf.outs.get(i, [])], set()
+        while todo:
+            d = todo.pop(0)
+            if d in seen:
+                continue
+            seen.add(d)
+            o = self.group_of.get(d)
+            if o is not None and o.kind == "pass":
+                todo += [e[2] for e in self.wf.outs.get(d, [])]
+            elif o is not None and o is not grp and o.kind != "unused":
+                first = self.first_of(o)                 # several saves to one sheet are told as one
+                if first not in out:
+                    out.append(first)
+        return out
+
+    def first_of(self, o):
+        if o.kind != "story":
+            return o
+        return next(x for x in self.groups if x.kind == "story" and x.title == o.title and x.key == o.key)
+
+    def through(self, i):
+        """(text, anchor) for a presumed shared step: the place its rows come from."""
+        x, n = i, 0
+        while self.group_of.get(x) is not None and self.group_of[x].kind == "pass" and n < 1000:
+            t = self.t[x]
+            if t.kind == "Input":
+                return self.file_chip(x), None
+            if t.kind == "TextInput":
+                return "a typed table (%s)" % _list(t.ir["columns"], 3), None
+            ins = [f for f in self.wf.ins.get(x, []) if not self.side_edge(x, f)]
+            if not ins:
+                break
+            x, n = ins[0][0], n + 1
+        if self.group_of.get(x) is not None and self.group_of[x].kind == "pass":
+            return designer(self.t[x].kind), None
+        return self.where(x)
 
     def read_chip(self, i):
         """A file read inside the step that uses it, as a file chip: {{f|Config.xlsx › Clients}}."""
         first = self.t[self.g.L.stages[self.g.fold_of[i]][0]]
         if first.kind == "TextInput":
-            return _md_plain(self.g.read_label(i))
-        return "{{f|%s}}" % file_text(first.ir["file"], first.ir["options"]).replace("`", "").replace(" › sheet ", " › ")
+            return "a typed table (%s)" % _list(first.ir["columns"], 3)
+        return self.file_chip(first.id)
+
+    def side_sources(self, grp, side):
+        g = self.g
+        mem = set(side.tools)
+        srcs = []
+        for x in side.tools:
+            if self.t[x].kind == "Input":
+                srcs.append(self.file_chip(x))
+            elif self.t[x].kind == "TextInput":
+                srcs.append("a typed table (%s)" % _list(self.t[x].ir["columns"], 3))
+            for e in self.wf.ins.get(x, []):
+                if e[0] not in mem:
+                    srcs.append(self.where(e[0])[0] if e[0] in g.fold_of or self.group_of.get(e[0]) is not grp else "")
+        return _and([s for s in dict.fromkeys(srcs) if s]) or "a lookup"
+
+    def lookup_text(self, grp, side):
+        """A lookup prepared by its own steps: its source, the rows that prepare it, and the filters folded into it."""
+        conds = [self.cond(x) for x in side.tools if self.t[x].kind == "Filter" and grp.why.get(x) == "lookup"]
+        shown = [grp.row_of[x]["num"] for x in side.tools if x in grp.row_of and grp.row_of[x].get("sub")]
+        text = self.side_sources(grp, side)
+        if shown:
+            text += ", prepared in row%s %s" % ("s" if len(shown) > 1 else "", "–".join(
+                dict.fromkeys([shown[0], shown[-1]])))
+        if conds:
+            text += " (only rows where %s)" % " and ".join(conds)
+        return text
 
     def ref(self, i):
         text, anchor = self.where(i)
@@ -408,218 +641,514 @@ class Layout:
 
     def src(self, e):
         text, kind = self.ref(e[0]), self.t[e[0]].kind
+        if e[0] in self.g.fold_of or (self.ctx is not None and e[0] in self.ctx.side_of):
+            return text
         if kind in OUTS and e[1] in PLAIN:
-            return "%s (%s)" % (text, PLAIN[e[1]])
-        if kind in BLOCKERS:
-            return "%s (%s)" % (text, re.sub(r"(\D+)(\d+)", r"\1 \2", e[1]).lower())
+            return "the %s %s" % (PLAIN[e[1]], ("of " if e[1] not in ("True", "False") else "") + text)
         return text
 
-    # ---- one step, as the reader sees it
-    def step(self, i, prev=None):
-        try:
-            return self._step(i, prev)
-        except Exception as exc:  # noqa: BLE001 - one step must not stop the page; reported in Detail
-            g, t = self.g, self.t[i]
-            return {"anchor": "s" + g.sid[i].replace(".", "-"), "tool": designer(t.kind), "note": t.note,
-                    "small": "step %s · tool #%s" % (g.sid[i], i), "meta": [], "split": "", "hand": "",
-                    "text": "Runs %s (could not describe: %s; its settings are in the details)." % (
-                        designer(t.kind), g.failed(i, exc)), "fold": g.safe_fold(i)}
+    def visible_source(self, e):
+        """The edge, walked back through presumed steps, to the shown step (or other table) its rows come from."""
+        x, a, n = e[0], e[1], 0
+        grp = self.ctx
+        while grp is not None and x in grp.why and grp.why[x] not in ("source", "dir") and n < 1000:
+            ins = [f for f in self.wf.ins.get(x, []) if not self.side_edge(x, f)]
+            if len(ins) != 1:
+                break
+            x, a, n = ins[0][0], ins[0][1], n + 1
+        return (x, a) + tuple(e[2:])
 
-    def _step(self, i, prev=None):
-        g, t = self.g, self.t[i]
-        c = g.cards[i]
-        try:
-            text, meta = self.say(i)
-        except Exception as exc:  # noqa: BLE001 - one step must not stop the page; reported in Detail
-            text, meta = "Runs %s (could not describe: %s; its settings are in the details)." % (
-                designer(t.kind), g.failed(i, exc)), []
-        grp, side = self.ctx
-        mem = set(side.tools if side else grp.main)
-        e = g.L.primary(i) or ((self.wf.ins.get(i) or [None])[0] if t.kind != "Union" and len(self.wf.ins.get(i, [])) == 1
-                               else None)
-        if e is not None and t.kind not in SOURCES and e[0] not in g.fold_of:
-            if e[0] not in mem:
-                meta.insert(0, ("Starts from", self.src(e)))
-            elif e[0] != prev or (self.t[e[0]].kind in OUTS and len(set(x[1] for x in self.wf.outs.get(e[0], []))) > 1):
-                meta.insert(0, ("Takes", self.src(e)))
-        split = self.split_line(i, mem)
-        hand = "outside Alteryx: write by hand" if t.kind == "RunCommand" else \
-            "not converted: write by hand" if t.status == "stub" else ""
-        return {"anchor": "s" + g.sid[i].replace(".", "-"), "tool": designer(t.kind), "note": t.note,
-                "small": "step %s · tool #%s" % (g.sid[i], i), "text": text, "meta": meta, "split": split,
-                "hand": hand, "fold": g.safe_fold(i), "warn": bool(c.get("notes")) and t.kind == "FindReplace"}
+    # ---- sentences
+    def cond(self, i):
+        t = self.t[i]
+        if t.ir["mode"] == "simple":
+            return simple_words(t.ir)
+        return rule_text(t.ir["expr"])[0]
 
-    def split_line(self, i, mem):
-        g, t = self.g, self.t[i]
-        groups = g.outs(i)
-        side = self.ctx[1] if self.ctx else None
-        if side is not None:                             # the step a side feeds is the one right after the fold-out
-            groups = {a: [d for d in v if d != side.target] for a, v in groups.items()}
-            groups = {a: v for a, v in groups.items() if v}
-        if len(groups) == 1 and all(d in mem for v in groups.values() for d in v) and (
-                t.kind == "Filter" or t.kind not in OUTS):
-            return ""                                    # the sentence says it: keeps only these rows, for the next step
-        if t.kind in OUTS and len(groups):
-            parts = []
-            for a in OUTS[t.kind]:
-                dst = list(dict.fromkeys(self.ref(d) for d in groups.get(a, [])))
-                parts.append("**%s** → %s" % (PLAIN[a], ", ".join(dst) if dst else "dropped"))
-            return " · ".join(parts)
-        far = list(dict.fromkeys(self.ref(d) for v in groups.values() for d in v if d not in mem))
-        if far and t.kind not in ("Output",):
-            near = [d for v in groups.values() for d in v if d in mem]
-            return ("also used by " if near else "used by ") + ", ".join(far)
-        return ""
+    def program(self, i):
+        """(sentence, short name) for a Run Command, from its own settings."""
+        ir = self.t[i].ir
+        prog = " ".join(x for x in (ir.get("program") or ir.get("command"), ir.get("args")) if x).strip()
+        write = ir.get("write") or ""
+        wname = os.path.basename(write.replace("\\", "/"))
+        script = next((w for w in prog.split() if re.search(r"\.(vbs|bat|cmd|ps1|py|js)$", w.strip('"'), re.I)), "")
+        short = os.path.basename((script or prog.split()[0] if prog else wname or "a program").strip('"').replace("\\", "/"))
+        if write and (not prog or os.path.basename(prog.split()[0].strip('"').replace("\\", "/")).lower() == wname.lower()):
+            col = self.incoming_text_col(i)
+            return ("Writes %s to `%s` and runs it outside Alteryx" % (
+                "the text in [%s]" % col if col else "its incoming rows", wname or write), wname or "a script")
+        if write:
+            return "Writes its rows to `%s`, then runs `%s` outside Alteryx" % (wname, prog), short
+        if prog:
+            return "Runs `%s` outside Alteryx" % prog, short
+        return "Runs a program outside Alteryx; its settings name none that the converter could read (see Rule and " \
+               "pandas)", "a program"
+
+    def incoming_text_col(self, i):
+        ins = self.wf.ins.get(i, [])
+        if len(ins) != 1:
+            return None
+        src = self.t[ins[0][0]]
+        if src.kind == "Summarize":
+            made = [r or "%s_%s" % (a, f) for f, a, r, _ in src.ir["fields"] if a != "GroupBy"]
+            return made[0] if len(made) == 1 else None
+        made = [w[0] for w in self.g.cards.get(src.id, {}).get("writes", [])]
+        return made[0] if len(made) == 1 else None
+
+    def sets_lines(self, i):
+        out = []
+        for name, _, _, e in self.t[i].ir["fields"]:
+            text, _ = rule_text(e)
+            out.append("**%s** = %s" % (name, text))
+        return out
 
     def say(self, i):
-        """(sentence, [(label, text)]) for a step in the main view."""
-        g, t, ir, k = self.g, self.t[i], self.t[i].ir, self.t[i].kind
-        c = g.cards[i]
-        meta = []
-        cols = lambda xs, n=8: " ".join("[%s]" % x for x in list(dict.fromkeys(xs))[:n]) + (
-            " +%d more" % (len(set(xs)) - n) if len(set(xs)) > n else "")
-        if k == "Input":
-            path, sheet, cells, line = place(ir["file"], ir["options"])
-            chip = file_text(ir["file"], ir["options"]).replace("`", "").replace(" › sheet ", " › ")
-            text = "Opens {{f|%s}}." % chip
-            names = [w[0] for w in c["writes"]]
-            if names:
-                meta.append(("Columns", cols(names, 6)))
-        elif k == "Output":
-            mode = OUT_MODE.get(ir["options"].get("OutputOption", ""), "")
-            chip = file_text(ir["file"], ir["options"]).replace("`", "").replace(" › sheet ", " › ")
-            text = "Saves the table to {{o|%s}}%s." % (chip, " (%s)" % mode if mode else "")
-        elif k == "Formula":
-            have = g.input_columns(i)
-            adds = []
-            for name, _, _, e in ir["fields"]:
-                said = words(e["ast"]) if e["ast"] is not None else None
-                adds.append("**%s** = %s" % (name, said) if said else "**%s**: %s" % (name, worked_from(e["ast"], e["text"])))
-            new = [f[0] for f in ir["fields"] if have is None or f[0].lower() not in have]
-            old = [f[0] for f in ir["fields"] if have is not None and f[0].lower() in have]
-            text = "Adds %s%s." % ("%d column%s" % (len(new), "" if len(new) == 1 else "s") if new else "",
-                                   (" and changes %d" % len(old) if new else "Changes %d column%s" % (
-                                       len(old), "" if len(old) == 1 else "s")) if old else "")
-            if not new:
-                text = text.replace("Adds ", "", 1)
-            if have is None:
-                text = "Sets %d column%s." % (len(adds), "" if len(adds) == 1 else "s")
-            meta += [("Sets" if n == 0 else "", a) for n, a in enumerate(adds[:8])]
-            if len(adds) > 8:
-                meta.append(("", "+%d more columns (in the details)" % (len(adds) - 8)))
-        elif k == "Filter":
-            if ir["mode"] == "simple":
-                cond = re.sub(r"\] is ", "] is ", g.cond_text(t))
-            else:
-                e = ir["expr"]
-                cond = words(e["ast"]) if e["ast"] is not None else None
-                cond = cond or "a test on %s holds (rule in the details)" % (_list(c["reads"], 4) or "the row")
+        """(sentence, [lines], [columns]) for a shown step: what happens to the data, with the rule."""
+        g, t = self.g, self.t[i]
+        k, ir, c = t.kind, t.ir, g.cards[i]
+        made = [w[0] for w in c["writes"]]
+        if k == "Formula":
+            n = len(ir["fields"])
+            return "Sets %d column%s:" % (n, "" if n == 1 else "s"), self.sets_lines(i), [f[0] for f in ir["fields"]]
+        if k == "MultiFieldFormula":
+            return "Applies one rule to each of %s: %s." % (_list(ir["fields"], 6), rule_text(ir["expr"])[0]), [], made
+        if k == "Filter":
             used = set(g.outs(i))
+            cond = self.cond(i)
             if used >= {"True", "False"}:
-                text = "Splits the rows: those where %s pass, the others fail." % cond
-            elif used == {"False"}:
-                text = "Removes the rows where %s." % cond
-            else:
-                text = "Keeps only the rows where %s." % cond
-            if c["reads"]:
-                meta.append(("Looks at", cols(c["reads"])))
-        elif k == "Select":
+                return "Splits the rows on: %s." % cond, [], []
+            if used == {"False"}:
+                return "Removes the rows where %s." % cond, [], []
+            return "Keeps only the rows where %s." % cond, [], []
+        if k == "Select":
             real = [f for f in ir["fields"] if f[0] != "*Unknown"]
-            ren = [(f, r) for f, sel, r, _, _ in real if sel and r and r != f]
+            ren = self.renames(i)
             drop = [f for f, sel, *_ in real if not sel]
             keep = [r or f for f, sel, r, _, _ in real if sel]
-            text = g.short(i)[0].upper() + g.short(i)[1:] + "."
-            if ren:
-                meta.append(("Renames", ", ".join("[%s] → [%s]" % p for p in ren[:6]) + (" +%d more" % (len(ren) - 6)
-                                                                                       if len(ren) > 6 else "")))
-            if drop and ir["unknown"]:
-                meta.append(("Removes", cols(drop)))
+            parts = []
             if not ir["unknown"]:
-                text = "Keeps only %d column%s%s." % (len(keep), "" if len(keep) == 1 else "s",
-                                                      ", renaming %d" % len(ren) if ren else "")
-                meta.append(("Keeps", cols(keep)))
-        else:
-            s = g.short(i)
-            text = s[0].upper() + s[1:] + ("" if s.endswith(".") else ".")
-            if c["reads"] and k not in ("DynamicInput", "Directory", "TextInput", "Message", "RunCommand"):
-                meta.append(("Looks at", cols(c["reads"])))
-            new = [w[0] for w in c["writes"]]
-            if new and k not in ("DynamicInput", "Directory", "TextInput", "Join", "AppendFields"):
-                meta.append(("Adds", cols(new)))
-            elif new and k in ("Join", "AppendFields"):
-                meta.append(("Renames", cols(new)))
-            elif new:
-                meta.append(("Columns", cols(new, 6)))
-        if c.get("notes") and k == "FindReplace":
-            meta.append(("Note", c["notes"][0]))
-        return text, meta
+                parts.append("keeps only the columns %s" % _list(keep, 8))
+            elif drop:
+                parts.append("removes the columns %s" % _list(drop, 8))
+            if ren:
+                parts.append("renames " + ", ".join("[%s] to [%s]" % p for p in ren[:6]) + (
+                    " +%d more" % (len(ren) - 6) if len(ren) > 6 else ""))
+            retype = [(r or f, typ + ("(%s)" % size if size and "String" in typ else "")) for f, sel, r, typ, size in real
+                      if sel and typ]
+            if retype:
+                parts.append("sets the type of " + ", ".join("[%s] to %s" % p for p in retype[:6]) + (
+                    " +%d more" % (len(retype) - 6) if len(retype) > 6 else ""))
+            cols = [b for _, b in ren] + (["−" + d for d in drop] if ir["unknown"] else [])
+            return _cap("; ".join(parts) or "keeps the columns") + ".", [], cols
+        if k == "Join":
+            right = [e for e in self.wf.ins.get(i, []) if self.side_edge(i, e)]
+            other = self.src(right[0]) if right else "nothing connected"
+            keys = ", ".join("[%s]" % a if a == b else "[%s] = [%s]" % (a, b) for a, b in zip(ir["left"], ir["right"]))
+            used = set(g.outs(i))
+            if used == {"Join"}:
+                return "Keeps the rows that have a match in %s on %s, and adds its columns." % (other, keys), [], made
+            if used == {"Left"}:
+                return "Keeps the rows that have no match in %s on %s." % (other, keys), [], made
+            return "Matches the rows with %s on %s." % (other, keys), [], made
+        if k == "Union":
+            srcs = [self.src(self.visible_source(e)) for e in self.wf.ins.get(i, [])]
+            srcs = [x if x.startswith("the ") else "the rows of " + x for x in dict.fromkeys(srcs)]
+            return "Stacks %s into one table." % _and(srcs), [], []
+        if k == "RunCommand":
+            return self.program(i)[0] + ".", [], []
+        if k == "Output":
+            mode = OUT_MODE.get(ir["options"].get("OutputOption", ""), "")
+            return "Saves the table to {{o|%s}}%s." % (self.out_place(i), " (%s)" % mode if mode else ""), [], []
+        if k == "DynamicInput":
+            return _cap(g.short(i)) + ".", [], []
+        s = g.short(i)
+        if s == "settings in the step's details":
+            s = "runs %s; its settings are under Rule and pandas" % designer(k)
+        if k == "Summarize":
+            made = [r or "%s_%s" % (a, f) for f, a, r, _ in ir["fields"] if a != "GroupBy"]
+            group = [f for f, a, _, _ in ir["fields"] if a == "GroupBy"]
+            lines = ["**%s** = %s" % tuple(x.replace("\n", "\\n").replace("\t", "\\t").split(" = ", 1))
+                     for x in c["rule"] if " = " in x]
+            head = "Groups the rows by %s; for each group:" % _list(group, 6) if group else "Makes one row:"
+            return head, lines, made
+        return _cap(s) + ("" if s.endswith(".") else "."), [], made
+
+    def brief(self, i):
+        """A step as part of one path in a stacked row: short, with its rule."""
+        k = self.t[i].kind
+        if k == "Formula":
+            return "sets " + "; ".join(self.sets_lines(i))
+        text, lines, _ = self.say(i)
+        return _lower(text.rstrip(".:")) + (" " + "; ".join(lines) if lines else "")
+
+    # ---- rows
+    def make_rows(self, grp):
+        if grp.kind == "unused":
+            rows = [self.row([i]) for i in grp.main]
+            for n, r in enumerate(rows, 1):
+                r["num"] = str(n)
+            for r in rows:
+                for x in r["tools"]:
+                    grp.row_of[x] = r
+            for r in rows:
+                self.fill(r, grp, rows)
+            return rows
+        why = grp.why
+        stacks, used = {}, set()
+        for u in grp.main:
+            if self.t[u].kind == "Union" and u not in why:
+                paths = self.stack_paths(u, grp)
+                if len(paths) >= 3:
+                    stacks[u] = paths
+                    used |= {x for p in paths for x in p["tools"]}
+        rows = []
+        for i in grp.main:
+            if i in used or i in why:
+                continue
+            side = grp.sides.get(i)
+            if side is not None and i not in self.settings:
+                subs = [x for x in side.tools if x not in why and x not in used]
+                for x in subs:
+                    r = self.row([x])
+                    r["sub"] = True
+                    rows.append(r)
+            if i in stacks:
+                rows.append(self.stack_row(i, stacks[i]))
+                continue
+            prev = rows[-1] if rows else None
+            if prev is not None and self.can_merge(prev, i, grp):
+                self.merge(prev, i)
+            else:
+                rows.append(self.row([i]))
+        n, letter = 0, 0
+        for r in rows:
+            if r.get("sub"):
+                letter += 1
+                r["num"] = "%d%s" % (n + 1, "abcdefghijklmnopqrstuvwxyz"[(letter - 1) % 26])
+            else:
+                n, letter = n + 1, 0
+                r["num"] = str(n)
+        for r in rows:
+            for x in r["tools"]:
+                grp.row_of[x] = r
+        for r in rows:                                   # sentences need every row's number, so they come last
+            self.fill(r, grp, rows)
+        return rows
+
+    def row(self, ids):
+        return {"tools": list(ids), "kind": self.t[ids[-1]].kind, "anchor": "s" + self.g.sid[ids[0]].replace(".", "-")}
+
+    def klass(self, i):
+        k = self.t[i].kind
+        if k in SETS:
+            return "sets"
+        if k == "Filter" and set(self.g.outs(i)) == {"True"}:
+            return "keep"
+        if k == "Select":
+            return "select"
+        return None
+
+    def can_merge(self, prev, i, grp):
+        if prev.get("sub") or prev.get("stack") or self.klass(i) is None:
+            return False
+        last = prev["tools"][-1]
+        if self.klass(last) != self.klass(i):
+            return False
+        ins = [e for e in self.wf.ins.get(i, []) if not self.side_edge(i, e)]
+        if len(ins) != 1:
+            return False
+        src = self.visible_source(ins[0])
+        if src[0] != last or len(self.wf.outs.get(last, [])) != 1:
+            return False
+        x = ins[0][0]                                    # the presumed steps in between have one consumer each
+        while x != last:
+            if len(self.wf.outs.get(x, [])) != 1:
+                return False
+            x = [e for e in self.wf.ins.get(x, []) if not self.side_edge(x, e)][0][0]
+        return True
+
+    def merge(self, prev, i):
+        prev["tools"].append(i)
+
+    def fill(self, r, grp, rows):
+        """The row's sentence, lines, columns and small print, now that every row has its number."""
+        g = self.g
+        self.ctx = grp
+        ids = r["tools"]
+        try:
+            if r.get("stack"):
+                self.fill_stack(r)
+            elif r["kind"] in SETS and len(ids) > 1:
+                lines = [x for i in ids for x in (self.sets_lines(i) if self.t[i].kind == "Formula" else [self.say(i)[0]])]
+                r["text"], r["lines"] = "Sets %d columns:" % len(lines), lines
+                r["cols"] = [w for i in ids for w in self.say(i)[2]]
+            elif self.klass(ids[0]) == "keep" and len(ids) > 1:
+                r["text"], r["lines"], r["cols"] = "Keeps only the rows where %s." % " and ".join(
+                    self.cond(i) for i in ids), [], []
+            elif r["kind"] == "Select" and len(ids) > 1:
+                parts = [self.say(i) for i in ids]
+                r["text"] = " ".join(p[0] for p in parts)
+                r["lines"], r["cols"] = [], [c for p in parts for c in p[2]]
+            else:
+                r["text"], r["lines"], r["cols"] = self.say(ids[0])
+        except Exception as exc:  # noqa: BLE001 - one step must not stop the page; reported in Detail
+            r["text"], r["lines"], r["cols"] = "Runs %s (could not describe: %s; see Rule and pandas)." % (
+                designer(self.t[ids[0]].kind), g.failed(ids[0], exc)), [], []
+        first = ids[0]
+        if not r.get("stack"):
+            r["text"] = self.lead(r, grp, rows) + r["text"]
+            r["split"] = self.split_line(ids[-1], grp, rows, r)
+        r["text"] = self.with_settings(r["text"], first)
+        r["lines"] = [self.with_settings(x, first) for x in r.get("lines", [])]
+        if r.get("stack"):
+            ids = [r["out"]]                             # the paths' own steps are listed in the row's table
+        kinds = list(dict.fromkeys(designer(self.t[i].kind) for i in ids))
+        r["small"] = "%s · step %s · tool %s" % (", ".join(kinds[:3]) + (" …" if len(kinds) > 3 else ""),
+                                                 _span([g.sid[i] for i in ids]), ", ".join("#%s" % i for i in ids[:6]) + (
+                                                     " +%d" % (len(ids) - 6) if len(ids) > 6 else ""))
+        notes = [self.t[i].note for i in ids if self.t[i].note]
+        r["note"] = notes[0] if len(notes) == 1 else ""
+        r["hand"] = "outside Alteryx: write by hand" if any(self.t[i].kind == "RunCommand" for i in ids) else \
+            "not converted: write by hand" if any(self.t[i].status == "stub" for i in ids) else ""
+        ids = r["tools"]
+        r["folds"] = [g.safe_fold(i) for i in ids]
+        r["anchors"] = ["s" + g.sid[i].replace(".", "-") for i in ids[1:]]
+        cols = list(dict.fromkeys(r.get("cols") or []))
+        r["cols"] = " ".join("[%s]" % c if not c.startswith("−") else "−[%s]" % c[1:] for c in cols[:8]) + (
+            " +%d more" % (len(cols) - 8) if len(cols) > 8 else "")
+
+    def lead(self, r, grp, rows):
+        """'From Table A: ' or 'On the rows that fail row 3: ' when a row does not simply go on from the row above."""
+        i = r["tools"][0]
+        k = self.t[i].kind
+        if k in ("Union", "RunCommand", "Message") or k in SOURCES:
+            return ""
+        ins = [e for e in self.wf.ins.get(i, []) if not self.side_edge(i, e)]
+        if len(ins) != 1 or ins[0][0] in self.g.fold_of:
+            return ""
+        x, a = self.visible_source(ins[0])[:2]
+        pos = rows.index(r)
+        above = next((p for p in reversed(rows[:pos]) if not p.get("sub")), None) if not r.get("sub") else \
+            (rows[pos - 1] if pos and rows[pos - 1].get("sub") else None)
+        mine = self.group_of.get(x) is grp and x not in grp.why
+        plain = self.t[x].kind not in OUTS or len(self.g.outs(x)) == 1
+        if above is not None and mine and x == above.get("out", above["tools"][-1]) and plain:
+            return ""
+        if not mine and r is next((p for p in rows if not p.get("sub")), None) and not r.get("sub"):
+            return ""                                    # the story's header says where it starts
+        if r.get("sub") and not mine:
+            return "To prepare the lookup from %s: " % self.side_sources(grp, grp.side_of[i])
+        return "On %s: " % self.src((x, a)) if self.t[x].kind in OUTS and a in PLAIN else "From %s: " % self.src((x, a))
+
+    def split_line(self, i, grp, rows, r):
+        g, t = self.g, self.t[i]
+        groups = g.outs(i)
+        if t.kind not in OUTS or not groups:
+            far = ["**[[%s|%s]]**%s" % (o.anchor, o.title, "" if o.key == grp.key else " (container %d)" % g.cnum[o.key])
+                   for o in self.users(i, grp)]
+            return ("also used by " + _and(far)) if far and t.kind != "Output" else ""
+        if len(groups) == 1 and t.kind == "Filter":
+            dst = groups[next(iter(groups))]
+            nxt = rows[rows.index(r) + 1] if rows.index(r) + 1 < len(rows) else None
+            if all(self.group_of.get(d) is grp for d in dst) and (nxt is None or any(
+                    grp.row_of.get(d) is nxt for d in dst)):
+                return ""
+        if t.kind == "Join" and set(groups) == {"Join"}:
+            return ""
+        parts = []
+        for a in OUTS[t.kind]:
+            dst = list(dict.fromkeys(self.dest(d) for d in groups.get(a, [])))
+            parts.append("**%s** → %s" % (PLAIN[a], _and(dst) if dst else "dropped"))
+        return " · ".join(parts)
+
+    def dest(self, d):
+        grp = self.group_of.get(d)
+        if grp is not None and grp.kind == "unused":
+            return "not used by any output"
+        if grp is self.ctx and d in grp.why:
+            row = grp.row_of.get(d) or next((grp.row_of[x] for x in self.downstream(d) if x in grp.row_of), None)
+            return "[[%s|row %s]]" % (row["anchor"], row["num"]) if row else "the save"
+        return self.ref(d)
+
+    def downstream(self, i):
+        out, todo = [], [i]
+        while todo and len(out) < 1000:
+            x = todo.pop(0)
+            for e in self.wf.outs.get(x, []):
+                out.append(e[2])
+                todo.append(e[2])
+        return out
+
+    # ---- parallel paths stacked by a Union
+    def stack_paths(self, u, grp):
+        main = set(grp.main)
+        lanes = []
+        for e in self.wf.ins.get(u, []):
+            tools, x, a = [], e[0], e[1]
+            while x in main and len(self.wf.outs.get(x, [])) == 1 and self.t[x].kind != "Union":
+                prim = [f for f in self.wf.ins.get(x, []) if not self.side_edge(x, f)]
+                tools.insert(0, x)
+                if len(prim) != 1:
+                    x = None
+                    break
+                x, a = prim[0][0], prim[0][1]
+            lanes.append({"tools": tools, "root": x, "anchor": a, "edge": e})
+        by = defaultdict(list)
+        for ln in lanes:
+            by[ln["root"]].append(ln)
+        paths = []
+        for root, lns in by.items():
+            outs = self.wf.outs.get(root, []) if root is not None else []
+            starts = {(ln["tools"][0] if ln["tools"] else u) for ln in lns}
+            if root in main and self.t[root].kind in OUTS and len(lns) > 1 and all(e[2] in starts for e in outs) \
+                    and len({ln["anchor"] for ln in lns}) == len(lns) \
+                    and len([f for f in self.wf.ins.get(root, []) if not self.side_edge(root, f)]) == 1:
+                paths.append({"split": root, "lanes": lns, "tools": [root] + [x for ln in lns for x in ln["tools"]]})
+            else:
+                paths += [{"split": None, "lanes": [ln], "tools": list(ln["tools"])} for ln in lns]
+        for p in paths:                                  # a lookup's preparation goes with the step that uses it
+            for x in list(p["tools"]):
+                side = grp.sides.get(x)
+                if side is not None:
+                    p["tools"] += [y for y in side.tools if y not in p["tools"]]
+        return paths
+
+    def stack_row(self, u, paths):
+        r = self.row([u])
+        r["stack"], r["paths"], r["out"] = True, paths, u
+        r["tools"] = [u] + sorted({x for p in paths for x in p["tools"]}, key=self.rk)
+        r["anchor"] = "s" + self.g.sid[u].replace(".", "-")
+        return r
+
+    def fill_stack(self, r):
+        g, grp = self.g, self.ctx
+        u, paths = r["tools"][0], r["paths"]
+        why = grp.why
+        roots, table, cols = [], [], []
+        for p in paths:
+            if p["split"] is not None:
+                root = p["split"]
+                prim = [f for f in self.wf.ins.get(root, []) if not self.side_edge(root, f)][0]
+                roots.append(self.src(self.visible_source(prim)))
+                what = []
+                for ln in p["lanes"]:
+                    acts = [self.brief(x) for x in ln["tools"] if x not in why and x not in grp.side_of]
+                    what.append("%s: %s" % (PLAIN.get(ln["anchor"], ln["anchor"]).replace("rows that ", ""),
+                                            "; ".join(acts) or "as they are"))
+                    cols += [c for x in ln["tools"] if x not in why and x not in grp.side_of for c in self.say(x)[2]]
+                cond = "where %s" % self.cond(root) if self.t[root].kind == "Filter" else self.brief(root)
+            else:
+                ln = p["lanes"][0]
+                if ln["root"] is not None:
+                    roots.append(self.src(self.visible_source((ln["root"], ln["anchor"], None, None, None))))
+                conds = [("where " if set(g.outs(x)) == {"True"} else "where not: ") + self.cond(x)
+                         for x in ln["tools"] if self.t[x].kind == "Filter" and x not in why]
+                acts = [self.brief(x) for x in ln["tools"] if self.t[x].kind != "Filter" and x not in why
+                        and x not in grp.side_of]
+                cond = " and ".join(conds) or "all of them"
+                what = ["; ".join(acts) or "as they are"]
+                cols += [c for x in ln["tools"] if x not in why and x not in grp.side_of for c in self.say(x)[2]]
+            table.append([_cap(cond), what, "{{s|%s}}" % _span([g.sid[x] for x in p["tools"]])])
+        common = [a for a in table[0][1][0].split("; ")] if table and all(len(row[1]) == 1 for row in table) else []
+        common = [a for a in common if a != "as they are" and all(a in row[1][0].split("; ") for row in table)]
+        tail = common if common and common == table[0][1][0].split("; ")[-len(common):] else []
+        for row in table:
+            parts = row[1][0].split("; ") if len(row[1]) == 1 else None
+            row[1] = "; ".join(parts[:len(parts) - len(tail)] or ["(only the common step)"]) if parts and tail else \
+                "; ".join(row[1])
+        roots = list(dict.fromkeys(roots))
+        r["text"] = "Stacks %d sets of rows%s, each chosen and changed as below%s:" % (
+            len(paths), " taken from " + _and(roots) if roots and len(roots) <= 3 else "",
+            "; each set then %s" % "; ".join(tail) if tail else "")
+        r["table"] = {"head": ["Rows", "What is done to them", "Steps"], "rows": table}
+        r["lines"], r["cols"], r["split"] = [], cols, ""
 
     # ---- blocks
-    def story(self, grp):
-        g = self.g
-        items, prev = [], None
+    def sources(self, grp):
+        """What a story or table starts from: files and folders (as chips), typed tables, other tables."""
+        out = []
         for i in grp.main:
-            side = grp.sides.get(i)
-            if side is not None:
-                self.ctx = (grp, side)
-                steps, p = [], None
-                for x in side.tools:
-                    steps.append(self.step(x, p))
-                    p = x
-                items.append({"side": True, "anchor": side.anchor, "title": "How %s is prepared (%d step%s)" % (
-                    side.title, len(side.tools), "" if len(side.tools) == 1 else "s"), "steps": steps})
-            self.ctx = (grp, None)
-            items.append(self.step(i, prev))
-            prev = i
-        self.ctx = None
-        intro = self.intro(grp)
-        badge = "container %d · disabled in the saved file" % g.cnum[grp.key] if grp.key in g.off else ""
-        kind = {"story": "output", "table": "table", "unused": "unused"}[grp.kind]
-        return ("story", grp.anchor, kind, grp.title, badge, intro, items)
+            t = self.t[i]
+            if t.kind == "Input":
+                out.append(self.file_chip(i))
+            elif t.kind == "TextInput":
+                out.append("a typed table (%s)" % _list(t.ir["columns"], 3))
+            elif t.kind == "Directory" and grp.why.get(i) == "dir":
+                dyn = [e[2] for e in self.wf.outs.get(i, []) if grp.why.get(e[2]) == "source"]
+                like = ", each read like {{f|%s}}" % file_text(self.t[dyn[0]].ir["file"], self.t[dyn[0]].ir["options"]).replace(
+                    "`", "").replace(" › sheet ", " › ") if dyn else ""
+                out.append("every file in `%s` named `%s`%s" % (t.ir["dir"], t.ir["spec"], like))
+            for e in self.wf.ins.get(i, []):
+                if self.side_edge(i, e) or e[0] in self.g.fold_of:
+                    continue
+                o = self.group_of.get(e[0])
+                if o is not None and o.kind == "pass":
+                    out.append(self.ref(e[0]))
+                elif o is not None and o is not grp and o.kind != "unused":
+                    ctx, self.ctx = self.ctx, grp
+                    out.append(self.src(self.visible_source(e)) if self.t[e[0]].kind in OUTS or o.kind == "pass"
+                               else self.ref(e[0]))
+                    self.ctx = ctx
+        return list(dict.fromkeys(out))
 
-    def intro(self, grp):
+    def housekeeping(self, grp):
+        g = self.g
+        shown = {x for r in grp.rows for x in r["tools"]}
+        hidden = [i for i in grp.tools if i not in shown]
+        items = ["{{s|%s}} %s #%s: %s" % (g.sid[i], designer(self.t[i].kind), i, WHY.get(grp.why.get(i), "presumed"))
+                 for i in hidden]
+        return {"anchor": "h" + grp.anchor, "title": "%d housekeeping step%s not shown" % (
+            len(hidden), "" if len(hidden) == 1 else "s"), "items": items,
+                "anchors": ["s" + g.sid[i].replace(".", "-") for i in hidden],
+                "folds": [g.safe_fold(i) for i in hidden]} if hidden else None
+
+    def story(self, grp, title=None):
+        g = self.g
+        intro = []
         if grp.kind == "table":
             users = []
             for i in grp.tools:
-                for e in self.wf.outs.get(i, []):
-                    other = self.group_of.get(e[2])
-                    if other is not None and other is not grp and other not in users:
-                        users.append(other)
-            names = ", ".join("**[[%s|%s]]**%s" % (u.anchor, u.title, "" if u.key == grp.key else
-                                                   " (container %d)" % self.g.cnum[u.key]) for u in users)
-            return "A working table: its rows are used by %s. Told once here; those stories start from it." % (
-                names or "later steps")
-        if grp.kind == "unused":
-            return "These steps run, but nothing they make reaches a saved file."
-        srcs = []
-        for i in grp.tools:
-            t = self.t[i]
-            if t.kind in SOURCES or t.kind == "DynamicInput":
-                srcs.append(self.source_name(i))
-            for e in self.wf.ins.get(i, []):
-                if e[0] in self.g.fold_of:
-                    srcs.append(self.read_chip(e[0]))
-                elif self.group_of.get(e[0]) not in (grp, None):
-                    o = self.group_of[e[0]]
-                    srcs.append("[[%s|%s]]" % (o.anchor, o.title))
-        srcs = list(dict.fromkeys(srcs))
-        n = len(grp.main) + sum(len(s.tools) for s in grp.sides.values())
-        return "%d step%s, from %s." % (n, "" if n == 1 else "s", ", ".join(srcs[:6]) + (" and %d more" % (len(srcs) - 6)
-                                                                                     if len(srcs) > 6 else "") or "—")
+                users += [o for o in self.users(i, grp) if o not in users]
+            intro.append(grp.about)
+            intro.append("Used by %s." % _and(["**[[%s|%s]]**%s" % (u.anchor, u.title, "" if u.key == grp.key else
+                                                                    " (container %d)" % g.cnum[u.key]) for u in users]
+                                               or ["later steps"]))
+        else:
+            srcs = self.sources(grp)
+            if srcs:
+                intro.append("**Starts from:** " + _and(srcs) + ".")
+        sets = [(cols, src) for a, (cols, src, down) in self.settings.items() if any(i in down for i in grp.tools)
+                and not any(a == i for i in grp.tools if self.group_of.get(i) is not grp)]
+        for cols, src in dict.fromkeys((tuple(c), s) for c, s in sets):
+            intro.append("**Uses settings** from %s%s." % (src, ": " + _list(cols, 6) if cols else ""))
+        badge = "container %d · disabled in the saved file" % g.cnum[grp.key] if grp.key in g.off else ""
+        kind = "output" if grp.kind == "story" else "table"
+        return ("acts", grp.anchor, kind, title or grp.title, badge, intro, self.row_blocks(grp.rows),
+                self.housekeeping(grp), grp.extra)
+
+    def row_blocks(self, rows):
+        out = []
+        for r in rows:
+            out.append({k: r.get(k) for k in ("num", "anchor", "anchors", "text", "lines", "table", "cols", "small",
+                                               "note", "hand", "split", "folds", "sub")})
+        return out
 
     def unused_block(self, grp):
+        g = self.g
         kinds = Counter(designer(self.t[i].kind) for i in grp.tools)
-        self.ctx = (grp, None)
-        steps, prev = [], None
-        for i in grp.main:
-            steps.append(self.step(i, prev))
-            prev = i
+        self.ctx = grp
+        items, folds = [], []
+        for r in grp.rows:
+            items.append("{{s|%s}} %s #%s: %s" % (g.sid[r["tools"][0]], designer(self.t[r["tools"][0]].kind),
+                                                  r["tools"][0], " ".join([r["text"]] + r.get("lines", [])) +
+                                                  (" · ⚠ " + r["hand"] if r.get("hand") else "")))
+            folds += r["folds"]
         self.ctx = None
         line = "**Not used by any output:** %d step%s (%s). They run, but nothing they make is saved." % (
             len(grp.tools), "" if len(grp.tools) == 1 else "s", ", ".join("%s %d" % kv for kv in kinds.most_common(6)))
-        return [("p", line), ("side", {"anchor": grp.anchor, "title": "The %d step%s" % (
-            len(grp.tools), "" if len(grp.tools) == 1 else "s"), "steps": steps})]
-
+        return [("p", line), ("hk", {"anchor": grp.anchor, "title": "The %d step%s" % (
+            len(grp.tools), "" if len(grp.tools) == 1 else "s"), "items": items,
+            "anchors": ["s" + g.sid[i].replace(".", "-") for r in grp.rows for i in r["tools"]], "folds": folds})]
     # ---- files
     def file_uses(self, key=None):
         """[(kind, path, sheet, cells, how, tool)] for the files the workflow opens and saves."""
@@ -636,8 +1165,10 @@ class Layout:
             elif t.kind == "Directory":
                 out.append(("Directory", t.ir["dir"], "", "", "files named %s listed" % t.ir["spec"], i, None))
             elif t.kind == "RunCommand":
-                out.append(("RunCommand", " ".join(x for x in (t.ir.get("command"), t.ir.get("args")) if x), "", "",
-                            "program run", i, None))
+                ir = t.ir
+                prog = " ".join(x for x in (ir.get("program") or ir.get("command"), ir.get("args")) if x).strip()
+                out.append(("RunCommand", prog or ir.get("write") or "(no program named)", "", "",
+                            "written, then run" if ir.get("write") else "program run", i, None))
         return out
 
     def file_lines(self, uses, saved):
@@ -680,6 +1211,7 @@ class Layout:
         live = [self.t[i] for i in g.order]
         status = Counter(t.status for t in live)
         outputs = [x for x in self.groups if x.kind == "story"]
+        shown = [x for x in outputs if not getattr(x, "merged", False)]
         off = g.off & set(g.tops)
         blocks = [("h", 1, "How %s works" % name, "top"),
                   ("p", "Made by ayx2py from `%s` (sha256 %s…), for someone who has never opened Alteryx Designer. "
@@ -694,7 +1226,7 @@ class Layout:
                    for k in g.tops]},
                {"text": "[[made|2. How each output is made]]", "children": [
                    {"text": "Container %d: %s" % (g.cnum[k], ", ".join("[[%s|%s]]" % (x.anchor, x.title)
-                                                                      for x in outputs if x.key == k) or "no output") +
+                                                                      for x in shown if x.key == k) or "no output") +
                     self.table_count(k)} for k in g.tops]},
                {"text": "[[order|3. Run order]]"}, {"text": "[[files|4. Files, sheets and scripts]]"},
                {"text": "[[detail|5. Detail]]: how to read the pandas, what to check, columns, every step by number"}]
@@ -776,24 +1308,83 @@ class Layout:
     def section_made(self):
         g = self.g
         blocks = [("h", 2, "2. How each output is made", "made"),
-                  ("p", "One story per output: only the steps on its path, in the order they run, from the files it "
-                        "starts from to the saved sheet. Work that several outputs share is told once as a working "
-                        "table, and the stories start from it by name. Click **Rule and pandas** under a step for its "
-                        "exact rule and the same step in pandas.")]
+                  ("p", "One table per output: the steps that decide which rows and which values reach it, in the "
+                        "order they run, each with its rule. Steps that only open files, keep or retype columns, or set "
+                        "the run order are presumed; each table lists them, folded, at its end. Work that several "
+                        "outputs share is told once as Table A, B…, and the tables that use it start from it. Open "
+                        "**Rule and pandas** on a row for its exact rule and the same step in pandas.")]
         for key in g.tops:
             grps = sorted((x for x in self.groups if x.key == key), key=lambda x: self.rk(x.tools[-1]))
             if not grps:
                 continue
             badge = " {{b|disabled in the saved file}}" if key in g.off else ""
             blocks.append(("h", 3, "Container %d. %s%s" % (g.cnum[key], g.cname(key), badge), "m%d" % g.cnum[key]))
+            by_place = defaultdict(list)
             for grp in grps:
-                if grp.kind == "unused":
+                if grp.kind == "story" and grp.ends and self.t[grp.ends[0]].kind == "Output":
+                    by_place[grp.title].append(grp)
+            done = set()
+            for grp in grps:
+                if grp.kind in ("unused", "pass") or id(grp) in done:
                     continue
-                blocks.append(self.story(grp))
+                same = by_place.get(grp.title, [grp]) if grp.kind == "story" else [grp]
+                if len(same) > 1:
+                    done |= {id(x) for x in same}
+                    blocks += self.saves(same)
+                else:
+                    blocks.append(self.story(grp))
+            shared = [i for grp in grps if grp.kind == "pass" for i in grp.tools]
+            if shared:
+                blocks.append(("p", "**Shared housekeeping:** %d step%s that several outputs pass through without any "
+                                    "change to the data." % (len(shared), "" if len(shared) == 1 else "s")))
+                blocks.append(("hk", {"anchor": "x%d" % g.cnum[key], "title": "The %d step%s" % (
+                    len(shared), "" if len(shared) == 1 else "s"), "items": [
+                    "{{s|%s}} %s #%s: %s" % (g.sid[i], designer(self.t[i].kind), i,
+                                             WHY.get(self.group_of[i].why.get(i), "presumed")) for i in shared],
+                    "anchors": ["s" + g.sid[i].replace(".", "-") for i in shared],
+                    "folds": [g.safe_fold(i) for i in shared]}))
             for grp in grps:
                 if grp.kind == "unused":
                     blocks += self.unused_block(grp)
         return blocks
+
+    def saves(self, same):
+        """Several saves to one file › sheet in one container."""
+        g = self.g
+        quiet = all(all(self.t[x].kind == "Output" for r in grp.rows for x in r["tools"]) for grp in same)
+        if not quiet:
+            out = []
+            for n, grp in enumerate(same):
+                out.append(self.story(grp, "%s — %s save" % (grp.title, ORDINAL[n] if n < len(ORDINAL) else "%dth" % (n + 1))))
+            return out
+        first = same[0]
+        for grp in same[1:]:
+            grp.merged = True
+        append = all(self.t[grp.ends[0]].ir["options"].get("OutputOption") == "Append" for grp in same)
+        rows, folds, hk = [], [], []
+        self.ctx = None
+        for n, grp in enumerate(same, 1):
+            o = grp.ends[0]
+            srcs = self.sources(grp) or ["earlier steps"]
+            r = {"num": str(n), "anchor": "s" + g.sid[o].replace(".", "-"), "anchors": [grp.anchor] if n > 1 else [],
+                 "text": "Save %d: the rows of %s." % (n, _and(srcs)), "lines": [], "cols": "", "split": "",
+                 "small": "Output Data · step %s · tool #%s" % (g.sid[o], o), "note": self.t[o].note, "hand": "",
+                 "folds": [g.safe_fold(o)]}
+            rows.append(r)
+            h = self.housekeeping(grp)
+            if h:
+                hk.append(h)
+        intro = ["Saved %d times in this container. %s" % (len(same), "Each save adds its rows to the sheet." if append else
+                                                            "Each save replaces the last, so all but the last are most "
+                                                            "likely there only to control the run order.")]
+        merged_hk = None
+        if hk:
+            merged_hk = {"anchor": "h" + first.anchor, "title": "%d housekeeping step%s not shown" % (
+                sum(len(h["items"]) for h in hk), "" if sum(len(h["items"]) for h in hk) == 1 else "s"),
+                "items": [x for h in hk for x in h["items"]], "anchors": [x for h in hk for x in h["anchors"]],
+                "folds": [x for h in hk for x in h["folds"]]}
+        badge = "container %d · disabled in the saved file" % g.cnum[first.key] if first.key in g.off else ""
+        return [("acts", first.anchor, "output", first.title, badge, intro, rows, merged_hk, [])]
 
     def group_name(self, i):
         grp = self.group_of.get(i)
@@ -814,9 +1405,9 @@ class Layout:
             gb, ga = self.group_of.get(before), self.group_of.get(after)
             if gb is None or ga is None:
                 continue
-            if gb is ga:
-                continue
-            pairs.append((gb, ga))
+            bs = self.users(before, None) if gb.kind == "pass" else [self.first_of(gb)]
+            as_ = self.users(after, None) if ga.kind == "pass" else [self.first_of(ga)]
+            pairs += [(b, a) for b in bs for a in as_ if b is not a and b.kind != "unused" and a.kind != "unused"]
         pairs = list(dict.fromkeys(pairs))
         for gb, ga in pairs[:40]:
             items.append("**[[%s|%s]]** finishes before **[[%s|%s]]** starts (a Block Until Done tool forces this)." % (
@@ -826,12 +1417,15 @@ class Layout:
         for x in (x for x in self.groups if x.kind == "story"):
             for i in x.ends:
                 if self.t[i].kind == "RunCommand" and x.ends[0] != i:
-                    ir = self.t[i].ir
-                    words_ = ("%s %s" % (ir.get("command") or "", ir.get("args") or "")).split()
-                    prog = next((w for w in words_ if re.search(r"\.(vbs|bat|cmd|ps1|py|js)$", w, re.I)),
-                                (words_ or ["the program"])[0])
-                    prog = os.path.basename(prog.strip('"').replace("\\", "/"))
+                    prog = self.program(i)[1]
                     items.append("In **[[%s|%s]]**, `%s` runs after the file is saved." % (x.anchor, x.title, prog))
+        many = Counter((x.key, x.title) for x in self.groups if x.kind == "story")
+        for (key, title), n in many.items():
+            if n > 1:
+                first = next(x for x in self.groups if x.kind == "story" and x.title == title and x.key == key)
+                items.append("**[[%s|%s]]** is saved %d times, one after another%s." % (
+                    first.anchor, title, n, " (Block Until Done tools set the order)" if any(
+                        self.t[i].kind in BLOCKERS for grp in self.groups if grp.key == key for i in grp.tools) else ""))
         for b, a in wf.dropped[:20]:
             nb, na = self.group_name(b), self.group_name(a)
             items.append("Could not keep: **%s** before **%s**, because the connections need the opposite order "
@@ -844,7 +1438,7 @@ class Layout:
         if not items:
             items.append("Nothing forces an order beyond the connections: each story's steps run in the order shown.")
         return [("h", 2, "3. Run order", "order"),
-                ("p", "Inside a story, steps run in the order shown. What must finish before what:"),
+                ("p", "Inside a table, the rows run in the order shown. What must finish before what:"),
                 ("steps", [{"text": x} for x in items], True)]
 
     def section_files(self):
@@ -887,7 +1481,7 @@ class Layout:
             index.append(["[[s%s|%s]]" % (g.sid[i].replace(".", "-"), g.sid[i]), designer(self.t[i].kind),
                           "[[%s|%s]]" % (anchor, text) if anchor else text, "#%s" % i])
         legend = [
-            "**Rule and pandas**, under each step, holds the step's exact rule (`when … → …` lines are read top down; "
+            "**Rule and pandas**, on each row, holds the step's exact rule (`when … → …` lines are read top down; "
             "the first true condition gives the value) and the same step in pandas, to paste into the steps "
             "notebook. Its first line gives the step number, the Designer tool and its ID, and whether the generated "
             "Python converts it exactly.",
@@ -895,6 +1489,10 @@ class Layout:
             "its rows that pass; `src_…` is a file as loaded in the notebook's Load cell, and `FOLDER` is the "
             "workflow's folder. The steps notebook is laid out by Designer's branches; find a step here by its "
             "number (the index below lists them all).",
+            "Rows show only the steps that change which rows or which values reach the output. The others (opening "
+            "a file, a Select that only keeps or retypes columns, Block Until Done, a lookup's preparation, a settings "
+            "value attached to every row) are listed under **housekeeping steps not shown** at the end of each "
+            "table, with their pandas.",
             "**A1, A2…** in a status are Alteryx behaviours the Python assumes; they are listed in what to check."]
         inner = [("steps", [{"text": x} for x in legend], False),
                  ("p", "The pandas uses two helpers, because Alteryx compares text ignoring case and treats null and "
@@ -903,13 +1501,44 @@ class Layout:
                 ("details", 3, "How to read the pandas", "legend", inner, False),
                 ("details", 2, "Before relying on this", "check", checks, False)] + \
             [c for c in cols if c[0] == "details"] + \
-            [("details", 3, "Every step by number (%d)" % len(index), "index",
+            [("details", 3, "Every step by number: %d" % len(index), "index",
               [("table", ["Step", "Tool", "Told in", "Tool ID"], index)], False)]
 
 
 def _and(xs):
     xs = list(xs)
     return xs[0] if len(xs) == 1 else ", ".join(xs[:-1]) + " and " + xs[-1] if xs else ""
+
+
+def _letters(n):
+    """0 -> A, 25 -> Z, 26 -> AA."""
+    out = ""
+    n += 1
+    while n:
+        n, r = divmod(n - 1, 26)
+        out = chr(65 + r) + out
+    return out
+
+
+def _span(sids):
+    """Step numbers in small print: 1.3, or 1.3–1.5, or 1.3, 1.7 +4."""
+    if len(sids) == 1:
+        return sids[0]
+    if len(sids) <= 3 and len({x.split(".")[0] for x in sids}) == 1:
+        return "%s–%s" % (sids[0], sids[-1].split(".", 1)[1]) if len(sids) > 1 else sids[0]
+    return "%s–%s (%d steps)" % (sids[0], sids[-1], len(sids))
+
+
+def _cap(s):
+    return s[:1].upper() + s[1:] if s else s
+
+
+def _lower(s):
+    return s[:1].lower() + s[1:] if s and not s[:2].isupper() else s
+
+
+def _plain(text):
+    return re.sub(r"\{\{\w\|(.+?)\}\}", r"\1", _md_plain(text))
 
 
 def build(g):

@@ -6,7 +6,7 @@ Written 21 Nov 2026. Everything measured below was measured on **synthetic** wor
 
 | | Outcome 1: generate Python directly | Outcome 2: extract the logic for a person or a model | Recommendation |
 |---|---|---|---|
-| **Alteryx** | Works for every data tool in the reference workflow's mix. On a 930-tool synthetic workflow with the reference workflow's tool counts, 857 of the 872 tools that run became Python and 15 (all Run Command) became stubs that raise. | Works. The same 930 tools give a migration guide: what each container opens and saves, then one numbered story per output from its source files to the saved sheet, with shared work told once as a named working table and each step's rule and pandas form folded under it; a columns table per container. | **Use both, with the generated code as the baseline.** Generate the code, settle the open Alteryx behaviours with the probe (section 5), then prove parity against a real run. Use the migration guide to review, and to write cleaner code later if wanted. |
+| **Alteryx** | Works for every data tool in the reference workflow's mix. On a 930-tool synthetic workflow with the reference workflow's tool counts, 857 of the 872 tools that run became Python and 15 (all Run Command) became stubs that raise. | Works. The same 930 tools give a migration guide: what each container opens and saves, then one compact table per output with only the steps that change its rows or values, each with its rule (the rest listed, folded, as housekeeping), shared work told once as Table A, B…, and each step's pandas folded under it; a columns table per container. | **Use both, with the generated code as the baseline.** Generate the code, settle the open Alteryx behaviours with the probe (section 5), then prove parity against a real run. Use the migration guide to review, and to write cleaner code later if wanted. |
 | **VBA** | Works for the mechanical idioms: 208 of 212 statements in macros written in the style of real recorded macros. The result imitates Excel statement by statement, on a library that is not Excel. | Works. 355 lines of VBA give a 233-line logic document with every Select/Activate chain resolved to a workbook, sheet and range. | **Outcome 2.** Implement from the logic document. Keep the generated code as a cross-check to run on copies of the workbooks, not as the code to maintain. |
 
 Why the two answers differ:
@@ -24,7 +24,7 @@ Why the two answers differ:
 | `vba2py` | VBA text, or `.xlsm` / `.xls` / `vbaProject.bin` read without Excel | logic document per Sub (Markdown and HTML); Python on openpyxl; `xl_runtime.py`; the extracted VBA text | standard library only |
 | generated code | | | pandas (Alteryx side), openpyxl (VBA side, and Excel files on the Alteryx side) |
 
-Both tools only read their sources. 118 tests pass (`python run_tests.py`). Neither depends on a particular workflow or macro: `examples/` runs them on a sales report and a month-end macro, and a test runs the sales report's generated Python against a hand-computed result.
+Both tools only read their sources. 123 tests pass (`python run_tests.py`). Neither depends on a particular workflow or macro: `examples/` runs them on a sales report and a month-end macro, and a test runs the sales report's generated Python against a hand-computed result.
 
 Design decisions that matter when judging the result:
 
@@ -185,7 +185,7 @@ A person or a model must decide these; no converter can.
 - **Every Alteryx XML layout.** The synthetic workflows follow what an earlier extraction script reads (it ran on a real workflow) for Formula, Filter, Select, Join, Append Fields, Sort, Unique, Summarize, Transpose, Multi-Field Formula, Find Replace, Union, Text Input, Tool Container and the recorded field types. The layouts of Sample, Record ID, DateTime, Directory, Dynamic Input, Input and Output options, Message, the Cleanse values and the Parallel Block Until Done anchor names are from memory. If a required setting is not where expected, the tool becomes a stub with a message; an optional setting that is laid out differently could be missed silently. On the first real run, compare a few tools of each kind against the workflow's XML.
 - **Every expected result.** Expected frames were computed by hand from the rules in sections 3 to 5. A wrong belief about Alteryx would pass these tests. Only the probe and a parity run can catch that.
 - **The factoring of repeated sub-chains.** It found the tree repeated four times in the synthetic workflow (47 tools, 4 copies). Real copies that differ in one setting will split into smaller blocks around the difference; the generated code then has more functions, never fewer rules.
-- **Sizes.** The sizes assume that only the scenario tree repeats and every other rule is unique and of moderate length. A simpler extractor needed 1,114 lines for one of the reference workflow's four containers, without its Select tools, The migration guide for the same 930 tools is 11,389 Markdown lines (868 steps); read it as the HTML page, where rules and pandas fold.
+- **Sizes.** The sizes assume that only the scenario tree repeats and every other rule is unique and of moderate length. A simpler extractor needed 1,114 lines for one of the reference workflow's four containers, without its Select tools, The migration guide for the same 930 tools is 8,378 Markdown lines (868 steps in 452 rows); read it as the HTML page, where the pandas folds.
 - **The VBA tools**, against macros written in the style of real recorded macros, and workbooks built with openpyxl. The conditional formats were read back with openpyxl, not opened in Excel.
 - **The `.xlsm` reader**, as described in section 7.
 - **Windows.** Paths, encodings and console output were written for Windows and Python 3.12 but run only on macOS here.
@@ -195,6 +195,6 @@ A person or a model must decide these; no converter can.
 
 1. Run `python run_tests.py`. It needs no real data.
 2. Open `probe/semantics_probe.yxmd` in Designer, run it, compare with the expected file. Change the switches that differ.
-3. Run `ayx2py` on the real workflow. Open the migration guide's HTML page: what each container does, then the story of each output, and what to check (in Detail).
+3. Run `ayx2py` on the real workflow. Open the migration guide's HTML page: what each container does, then the table for each output, and what to check (in Detail).
 4. Run `vba2py` on `Configuration.xlsm`.
 5. Open the generated `_steps.ipynb`, point its file paths at one day's files, and rebuild the workflow branch by branch with the guide's pandas lines, comparing each output with that day's real output file (README: Rebuilding it in pandas, step by step). To run the generated code instead, add `--runner-notebook`.
