@@ -1,23 +1,20 @@
-"""Migration guide: a workflow explained for an engineer who has never opened Designer.
+"""Migration guide: what each step of a workflow does, for an engineer who has never opened Designer.
 
-Top level: the containers, the files (with sheet and cells) each reads and writes, and which
-containers feed which (by a connection or through a file one writes and another reads). Inside a
-container: its branches, as Designer draws them, each labelled by its first tool's annotation or its
-filter test. Inside a branch: one table that reads like the canvas (step, tool, what it does,
-columns it creates or changes, next step), then each step's full rule and pandas form folded away.
-Per container: a table of the columns it creates or changes and where each is used later. Repeated
-sub-chains are described once. Deterministic; standard library only.
+Guide numbers the steps (container k, step k.n, in branch order, as the steps notebook uses them), names the files
+each reads and writes, and describes every step: a sentence, the columns it reads and makes, its exact rule and the
+same step in pandas. layout.py arranges these into the page (one table per output). Deterministic; standard library
+only.
 """
 import fnmatch
 import os
 import re
 import traceback
-from collections import Counter, defaultdict
+from collections import defaultdict
 
 from . import codegen, expr, sketch
 from .spec import describe
 from .logic import BLOCKERS, CLEANSE_WORDS, CODE_PAGES, STRING, WIDTH, Logic, _file, _names
-from .workflow import STATUS, _id_key
+from .workflow import STATUS
 
 ANCHOR = {"True": "True", "False": "False", "Join": "J: matched", "Left": "L: left only", "Right": "R: right only",
           "Unique": "U: first of each", "Duplicates": "D: duplicates"}
@@ -221,6 +218,7 @@ def where_raised(exc):
 class Guide:
     def __init__(self, wf):
         self.wf, self.t = wf, wf.tools
+        self.hook = None                 # the page layout, while it builds: names places instead of step numbers
         self.errors = []                 # (exception type, where, tool id, tool kind): shown in the guide, and --diagnose
         self.L = Logic(wf)
         self.fn, _ = codegen.function_names(wf)
@@ -360,14 +358,15 @@ class Guide:
 
     # ---- references
     def ref(self, i):
+        if self.hook is not None:
+            return self.hook.ref(i)
         if i in self.fold_of:
             return self.read_label(i)
         return "[[s%s|%s]]" % (self.sid[i].replace(".", "-"), self.sid[i])
 
-    def bref(self, s):
-        return "[[b%s|branch %s]]" % (self.bid[s].replace(".", "-"), self.bid[s])
-
     def src(self, e):
+        if self.hook is not None:
+            return self.hook.src(e)
         text = self.ref(e[0])
         kind = self.t[e[0]].kind
         if kind in ("Filter", "Join", "Unique"):
@@ -384,37 +383,11 @@ class Guide:
             v += "_" + anchor.lower()
         return v
 
-    def ins_text(self, i):
-        ins, kind = self.wf.ins.get(i, []), self.t[i].kind
-        if not ins:
-            return "—" if kind in SOURCES else "nothing connected"
-        if kind in ("Join", "FindReplace", "AppendFields") or kind in BLOCKERS:
-            return "; ".join("%s ← %s" % (e[3], self.src(e)) for e in ins)
-        return ", ".join(self.src(e) for e in ins)
-
     def outs(self, i):
         groups = defaultdict(list)
         for e in self.wf.outs.get(i, []):
             groups[e[1]].append(e[2])
         return groups
-
-    def outs_text(self, i):
-        t, groups = self.t[i], self.outs(i)
-        if t.kind in ("Filter", "Join", "Unique"):
-            names = {"Filter": ("True", "False"), "Join": ("Join", "Left", "Right"), "Unique": ("Unique", "Duplicates")}[t.kind]
-            parts = []
-            for a in names:
-                dst = groups.get(a)
-                parts.append("%s → %s" % (ANCHOR[a], ", ".join(self.ref(d) for d in dst)) if dst else
-                             "%s: not used (these rows are dropped)" % ANCHOR[a])
-            return "; ".join(parts)
-        if len(groups) > 1:
-            return "; ".join("%s → %s" % (re.sub(r"(\D+)(\d+)", r"\1 \2", a).lower(), ", ".join(self.ref(d) for d in v))
-                             for a, v in sorted(groups.items()))
-        dst = [d for v in groups.values() for d in v]
-        if dst:
-            return ", ".join(self.ref(d) for d in dst)
-        return "—" if t.kind in ("Output", "RunCommand", "Message") else "not used (the stream ends here)"
 
     def input_columns(self, i):
         """Column names arriving at the tool's main input, when the workflow recorded them."""
@@ -488,12 +461,6 @@ class Guide:
                             % (designer(t.kind), what),
                     "rule": ["setting: " + x for x in describe(t)], "reads": [], "writes": [],
                     "py": ["# not converted (%s): write this step by hand from its settings" % what], "notes": []}
-
-    def guard(self, i, fn, *args):
-        try:
-            return fn(*args)
-        except Exception as exc:  # noqa: BLE001 - reported in the row and in the last section
-            return "(could not describe: %s)" % self.failed(i, exc)
 
     # ---- one card
     def card(self, i):
@@ -720,7 +687,8 @@ class Guide:
                          "Calculates over all rows: %s." % ", ".join("**%s**" % r for _, _, r, _ in aggs))
             c["reads"] = list(dict.fromkeys([f for f, _ in group] + [f for f, _, _, _ in aggs]))
             for f, a, r, o in aggs:
-                how = 'all [%s] joined with "%s"' % (f, o.get("Separator", "")) if a == "Concat" else \
+                how = 'all [%s] joined with "%s"' % (f, o.get("Separator", "").replace("\n", "\\n").replace(
+                    "\r", "\\r").replace("\t", "\\t")) if a == "Concat" else \
                     AGG_WORDS.get(a, a + " of [%s]") % ((f,) if "%s" in AGG_WORDS.get(a, "%s") else ())
                 c["rule"].append("%s = %s" % (r, how))
                 write(r, None, how)
@@ -941,222 +909,10 @@ class Guide:
     def cname(self, key):
         return key or "Outside any container"
 
-    def cref(self, key):
-        return "[[c%d|%d. %s]]" % (self.cnum[key], self.cnum[key], self.cname(key))
-
-    # ---- the document
     def build(self):
-        wf, L, blocks = self.wf, self.L, []
-        name = os.path.basename(wf.source)
-        live = [self.t[i] for i in self.order]
-        status = Counter(t.status for t in live)
-        links = self.links()
-        blocks += [("h", 1, "Migration guide: %s" % name, "top"),
-                   ("p", "Generated by ayx2py from `%s` (sha256 %s…). It explains the workflow for someone who has never "
-                         "opened Alteryx Designer, so it can be rebuilt in Python step by step." % (name, wf.sha256[:12])),
-                   ("h", 2, "How to read this", "howto"),
-                   ("steps", [{"text": t} for t in [
-                       "**Containers** are the boxes Designer draws around groups of tools. They are numbered 1, 2, 3… "
-                       "in the order they run. Each starts with the files it opens and saves: file › sheet › first row "
-                       "or cells.",
-                       "**Opening a file**: in Alteryx every file read is its own tool box. Here it is shown inside the "
-                       "step that uses it (\"matches its rows with `Config.xlsm` › sheet `Clients` on [ID]\"); only a "
-                       "file that starts a flow of rows gets its own row (\"opens …\").",
-                       "**Branches**: inside a container, the rows flow along branches. A branch is a chain of tools with "
-                       "no split or merge in it; it is named after its first tool's note or its filter test. Branch 3.4 "
-                       "is the 4th branch of container 3.",
-                       "**Steps**: each branch is one table, a row per tool as it sits on the canvas: step number (3.14 "
-                       "is step 14 of container 3), the tool's name in Designer and its note, what it does, the columns "
-                       "it adds or changes, and the next step. A filter's outputs are T (true) and F (false); a join's "
-                       "are J (matched), L (left rows with no match) and R (right rows with no match). An output that "
-                       "nothing uses is dropped.",
-                       "**Under each table**, one folded line per step holds its full rule (`when … → …` lines are read "
-                       "top down; the first true condition gives the value) and the same step in pandas, to paste into "
-                       "the steps notebook: `df` is the table flowing through the branch, `s2_7` is step 2.7's output "
-                       "and `s2_7_true` its True output; `src_…` is a file as loaded in the notebook's Load cell, and "
-                       "`FOLDER` the workflow's folder. It also says whether the generated code converts the step "
-                       "exactly and names its function. ⚠ marks a step that is not converted.",
-                       ]], False),
-                   ("p", "The pandas lines use two helpers, because Alteryx compares text ignoring case and treats null "
-                         "and the empty string separately:"),
-                   ("pre", HELPERS),
-                   ("h", 2, "Summary", "summary"),
-                   ("steps", [{"text": x} for x in [
-                       "%d containers%s, %d tools, %d branches." % (
-                           len(self.tops), ", %d disabled in the saved file (documented anyway)" % len(self.off & set(self.tops))
-                           if self.off & set(self.tops) else "", len(live), len({b for b in self.bid.values()})),
-                       "**Python:** %d steps convert exactly, %d with a stated assumption, %d are not converted." % (
-                           status["exact"], status["caveat"], status["stub"]),
-                       "**Before relying on it:** see [[check|the last section]]."]], False)]
-
-        rows, nodes, edges = [], [], []
-        for key in self.tops:
-            reads, writes, runs, _ = self.files(key)
-            reads = list(dict.fromkeys(reads))
-            empty = not any(self.top_of[i] == key for i in self.order)
-            disabled = key in self.off
-            n_tools = sum(1 for i in self.order if self.top_of[i] == key)
-            fed = list(dict.fromkeys(self.cref(a) for a, b, _ in links if b == key))
-            feeds = list(dict.fromkeys(self.cref(b) for a, b, _ in links if a == key))
-            base = lambda xs: ", ".join(dict.fromkeys(place_text(x, bold=False).replace("`" + place(x)[0] + "`", os.path.basename(
-                place(x)[0].replace("\\", "/"))) for x in xs)) or "—"
-            rows.append([self.cref(key), ("no: disabled in the saved file" + (" (left out: --enabled-only)" if empty else
-                                                                               " (documented anyway)")) if disabled else "yes", n_tools,
-                         len({self.bid[s] for s in self.bid if self.top_of[L.stages[s][0]] == key}),
-                         ", ".join([base([r for r in reads if not r.startswith(("files named", "folder "))])] * any(
-                             not r.startswith(("files named", "folder ")) for r in reads) +
-                                   [r for r in reads if r.startswith(("files named", "folder "))]) or "—",
-                         base(writes) + ("; runs %d command%s" % (len(runs), "" if len(runs) == 1 else "s") if runs else ""),
-                         ", ".join(fed) or "—", ", ".join(feeds) or "—"])
-            nodes.append({"id": "c%d" % self.cnum[key], "label": "%d. %s" % (self.cnum[key], self.cname(key)),
-                          "sub": ("disabled · %d tools" if disabled else "%d tools") % n_tools,
-                          "kind": "stub" if disabled else "stage",
-                          "href": "c%d" % self.cnum[key]})
-        edges = [("c%d" % self.cnum[a], "c%d" % self.cnum[b]) for a, b, _ in links]
-        toc = []
-        for key in self.tops:
-            kids = []
-            for path, ss in self.sections.get(key, []):
-                seen = set()
-                items = []
-                for st in ss:
-                    if st in L.copy_of:
-                        if L.copy_of[st] in seen:
-                            continue
-                        seen.add(L.copy_of[st])
-                    items.append({"text": "[[b%s|Branch %s]] — %s" % (self.bid[st].replace(".", "-"), self.bid[st],
-                                                                     "repeat" if st in L.copy_of else self.label(st))})
-                if len(path) > 1:
-                    kids.append({"text": "Inside " + " > ".join(path[1:]), "children": items})
-                else:
-                    kids += items
-            toc.append({"text": self.cref(key) + (" (disabled in the saved file)" if key in self.off else ""), "children": kids})
-        blocks.append(("details", 2, "Contents", "toc", [("steps", toc, False)], False))
-        blocks += [("h", 2, "Containers", "containers"),
-                   ("table", ["Container", "Runs", "Tools", "Branches", "Reads", "Writes", "Fed by", "Feeds"], rows),
-                   ("diagram", nodes, edges)]
-
-        for key in self.tops:
-            blocks.append(self.container(key, links))
-        blocks += self.checks(live)
-        return blocks
-
-    def container(self, key, links):
-        L, k = self.L, self.cnum[key]
-        tools = [i for i in self.order if self.top_of[i] == key]
-        title = "%d. %s" % (k, self.cname(key))
-        if not tools:
-            n = sum(1 for t in self.t.values() if t.path[:1] == [key] and t.disabled)
-            kinds = Counter(t.kind for t in self.t.values() if t.path[:1] == [key] and t.disabled)
-            return ("details", 2, title + " — disabled in the saved file", "c%d" % k, [
-                ("p", "Disabled in the saved file, and left out because the guide was made with --enabled-only: its %d "
-                      "tools are not described. Kinds: %s." % (n, ", ".join("%s %d" % kv for kv in kinds.most_common())))],
-                    False)
-        reads, writes, runs, _ = self.files(key)
-        reads, writes = list(dict.fromkeys(reads)), list(dict.fromkeys(writes))
-        inner, facts = [], []
-        frows = []
-        for i in tools:
-            t = self.t[i]
-            if t.kind in ("Input", "Output", "DynamicInput"):
-                path, sheet, cells, line = place(t.ir["file"], t.ir["options"])
-                what = "opens each file listed in [%s], like" % t.ir["field"] if t.kind == "DynamicInput" else \
-                    "opens" if t.kind == "Input" else "saves"
-                extra = [x for x in (("from row %d" % line) if line else "",
-                                     OUT_MODE.get(t.ir["options"].get("OutputOption", ""), "") if t.kind == "Output" else "") if x]
-                at = self.ref(self.folded[self.fold_of[i]][0]) + " (inside)" if i in self.fold_of else self.ref(i)
-                frows.append([at, what, "`%s`" % path, sheet or "—", cells.upper() or "all", "; ".join(extra)])
-            elif t.kind == "Directory":
-                frows.append([self.ref(i), "lists", "`%s`" % t.ir["dir"], "—", "—", "files named `%s`" % t.ir["spec"]])
-        if runs:
-            facts.append({"text": "**Runs:** " + "; ".join("`%s`" % r for r in runs)})
-        def grouped(pairs):
-            by = defaultdict(list)
-            for other, how in pairs:
-                by[other].append(how)
-            return "; ".join("%s (%s)" % (self.cref(o), ", ".join(dict.fromkeys(h))) for o, h in by.items())
-        fed = grouped((a, how) for a, b, how in links if b == key)
-        feeds = grouped((b, how) for a, b, how in links if a == key)
-        facts.append({"text": "**Fed by:** " + (fed or "nothing from other containers")})
-        facts.append({"text": "**Feeds:** " + (feeds or "no other container")})
-        nested = [p for p, _ in self.sections[key] if len(p) > 1]
-        if nested:
-            facts.append({"text": "**Containers inside:** " + "; ".join(" > ".join(p[1:]) for p in nested)})
-        stubs = [i for i in tools if self.t[i].status == "stub"]
-        if stubs:
-            facts.append({"text": "**Not converted to Python:** steps " + ", ".join(self.ref(i) for i in stubs)})
-        off = [p for p, dis in self.wf.containers if dis and p[:1] == [key] and len(p) > 1]
-        if off and key not in self.off:
-            facts.append({"text": "**Disabled in the saved file, inside it:** " + "; ".join(" > ".join(p[1:]) for p in off) +
-                                  " (documented below anyway)"})
-        if key in self.off:
-            facts.insert(0, {"text": "**Disabled in the saved file.** Alteryx skips this container until someone "
-                                     "enables it (teams often run one container at a time this way). It is documented "
-                                     "and converted like the others; in the generated code run it with `only=%d`." % k})
-        if frows:
-            inner += [("p", "**Files it opens and saves:**"), ("table", ["Step", "", "File", "Sheet", "Cells", "Notes"], frows)]
-        inner.append(("steps", facts, False))
-
-        # branch map
-        branches = sorted({s for s in self.bid if self.top_of[L.stages[s][0]] == key}, key=lambda s: _bkey(self.bid[s]))
-        groups = defaultdict(list)
-        for s in branches:
-            if s in L.copy_of:
-                groups[L.copy_of[s]].append(s)
-        shown, rows, nodes, edges = set(), [], [], []
-        for s in branches:
-            if s in L.copy_of:
-                g = groups[L.copy_of[s]]
-                if s != g[0]:
-                    continue
-                label, ids = "repeat of " + self.span_text([self.twin_stage(x) for x in g], branch=True), g
-                bid = "%s–%s" % (self.bid[g[0]], self.bid[g[-1]].split(".")[1]) if len(g) > 1 else self.bid[g[0]]
-            else:
-                label, ids, bid = self.label(s), [s], self.bid[s]
-            first, last = L.stages[ids[0]][0], L.stages[ids[-1]][-1]
-            members = {i for x in ids for i in L.stages[x]}
-            ins = list(dict.fromkeys(self.src(e) for x in ids for i in L.stages[x] for e in self.wf.ins.get(i, [])
-                                     if e[0] not in members))
-            outs = list(dict.fromkeys(self.ref(e[2]) for x in ids for i in L.stages[x] for e in self.wf.outs.get(i, [])
-                                      if e[2] not in members))
-            rows.append(["[[b%s|%s]]" % (self.bid[ids[0]].replace(".", "-"), bid), label,
-                         "%s–%s" % (self.sid[first], self.sid[last].split(".")[1]) if first != last else self.sid[first],
-                         ", ".join(ins) or "—", ", ".join(outs) or "—"])
-            nodes.append({"id": "b" + self.bid[ids[0]].replace(".", "-"), "label": "Branch " + bid, "sub": label,
-                          "kind": "repeat" if ids[0] in L.copy_of else "stub" if any(self.t[i].status == "stub" for i in members)
-                          else "input" if self.t[first].kind in SOURCES else "output" if self.t[last].kind == "Output" else "stage",
-                          "href": "b" + self.bid[ids[0]].replace(".", "-")})
-            for x in ids:
-                for i in L.stages[x]:
-                    for e in self.wf.outs.get(i, []):
-                        d = L.stage_of[e[2]]
-                        if d in self.bid and self.top_of[e[2]] == key and d not in ids:
-                            dg = groups[L.copy_of[d]][0] if d in L.copy_of else d
-                            edges.append(("b" + self.bid[ids[0]].replace(".", "-"), "b" + self.bid[dg].replace(".", "-")))
-        inner += [("h", 3, "Branches", None), ("table", ["Branch", "Label", "Steps", "In", "Out"], rows)]
-        if len(nodes) <= 120:
-            inner.append(("diagram", nodes, edges))
-
-        # sections and branches
-        for path, ss in self.sections[key]:
-            body = []
-            seen_groups = set()
-            for s in sorted(ss, key=lambda s: _bkey(self.bid[s])):
-                if s in L.copy_of:
-                    if L.copy_of[s] in seen_groups:
-                        continue
-                    seen_groups.add(L.copy_of[s])
-                    body.append(self.repeat(groups[L.copy_of[s]]))
-                    continue
-                body.append(self.branch(s))
-            if len(path) > 1:
-                inner.append(("details", 3, "Inside " + " > ".join(path[1:]), None, body, True))
-            else:
-                inner += body
-        inner.append(self.columns(key, tools))
-        return ("details", 2, "%s%s — %d tool%s, %d branch%s" % (
-            title, " — disabled in the saved file" if key in self.off else "", len(tools), "" if len(tools) == 1 else "s",
-            len(branches), "" if len(branches) == 1 else "es"), "c%d" % k, inner, False)
+        """The page: see layout.py."""
+        from . import layout
+        return layout.Layout(self).build()
 
     def twin_stage(self, s):
         b, c = self.L.copy_of[s]
@@ -1205,19 +961,6 @@ class Guide:
         kinds = list(dict.fromkeys(self.t[i].kind for i in L.stages[s]))
         return " → ".join(kinds[:4]) + (" → …" if len(kinds) > 4 else "")
 
-    def branch(self, s):
-        L = self.L
-        ids = L.stages[s]
-        first, last = ids[0], ids[-1]
-        ins = [self.src(e) for i in ids for e in self.wf.ins.get(i, []) if e[0] not in ids]
-        outs = [self.ref(e[2]) for e in self.wf.outs.get(last, [])]
-        head = "Branch %s — %s · steps %s" % (self.bid[s], self.label(s), self.sid[first] if first == last else
-                                               "%s–%s" % (self.sid[first], self.sid[last].split(".")[1]))
-        body = [("p", "**In:** %s.  **Out:** %s." % (", ".join(dict.fromkeys(ins)) or "— (starts here)",
-                                                     ", ".join(dict.fromkeys(outs)) or "— (ends here)"))]
-        body += self.step_table(ids)
-        return ("details", 4, head, "b" + self.bid[s].replace(".", "-"), body, False)
-
     def cond_text(self, t, n=70):
         ir = t.ir
         if ir["mode"] == "simple":
@@ -1243,7 +986,8 @@ class Guide:
         if k == "Directory":
             return "lists the files in folder `%s` named `%s`" % (ir["dir"], ir["spec"])
         if k == "TextInput":
-            return "starts from a typed table: %d rows of %s" % (len(ir["rows"]), _list(ir["columns"], 4))
+            return "starts from a typed table: %d row%s of %s" % (len(ir["rows"]), "" if len(ir["rows"]) == 1 else "s",
+                                                                 _list(ir["columns"], 4))
         if k == "Select":
             real = [f for f in ir["fields"] if f[0] != "*Unknown"]
             ren = [(f, r) for f, sel, r, _, _ in real if sel and r and r != f]
@@ -1355,28 +1099,6 @@ class Guide:
             ir.get("kind"), "the files given by column [%s] (mode %s/%s, not known to the converter; template %s)"
             % (ir["field"], ir.get("mode"), ir.get("how"), like))
 
-    def new_cols(self, i):
-        w = [x[0] for x in self.cards[i]["writes"]]
-        if self.t[i].kind in SOURCES + ("DynamicInput",):
-            return "%d columns" % len(w) if w else ""
-        return _list(w, 5, True) if w else ""
-
-    def next_text(self, i):
-        t, groups = self.t[i], self.outs(i)
-        if t.kind in ("Filter", "Join", "Unique"):
-            names = {"Filter": ("True", "False"), "Join": ("Join", "Left", "Right"), "Unique": ("Unique", "Duplicates")}[t.kind]
-            short = {"True": "T", "False": "F", "Join": "J", "Left": "L", "Right": "R", "Unique": "U", "Duplicates": "D"}
-            used = ["%s → %s" % (short[a], ", ".join(self.ref(d) for d in groups[a])) for a in names if groups.get(a)]
-            dropped = [short[a] for a in names if not groups.get(a)]
-            return "; ".join(used + (["%s dropped" % ", ".join(dropped)] if dropped else []))
-        if len(groups) > 1:
-            return "; ".join("%s → %s" % (re.sub(r"\D+", "", a) or a, ", ".join(self.ref(d) for d in v))
-                             for a, v in sorted(groups.items()))
-        dst = [d for v in groups.values() for d in v]
-        if dst:
-            return ", ".join(self.ref(d) for d in dst)
-        return "—" if t.kind in ("Output", "RunCommand", "Message") else "ends (rows dropped)"
-
     def status(self, i):
         t = self.t[i]
         if t.status == "stub":
@@ -1404,17 +1126,6 @@ class Guide:
             lines.append("# pandas:")
         return {"anchor": "r" + self.sid[i].replace(".", "-"), "summary": summary, "lines": lines + py}
 
-    def step_table(self, ids):
-        rows, anchors = [], []
-        for i in ids:
-            t = self.t[i]
-            tool = designer(t.kind) + (" “%s”" % _short(t.note, 40) if t.note else "")
-            rows.append(["[[r%s|%s]]" % (self.sid[i].replace(".", "-"), self.sid[i]), tool + (" ⚠" if t.status == "stub" else ""),
-                         self.guard(i, self.short, i), self.guard(i, self.new_cols, i), self.guard(i, self.next_text, i)])
-            anchors.append("s" + self.sid[i].replace(".", "-"))
-        return [("table", ["Step", "Tool", "What it does", "New / changed columns", "Next"], rows, anchors),
-                ("folds", [self.safe_fold(i) for i in ids])]
-
     def safe_fold(self, i):
         try:
             return self.fold(i)
@@ -1422,42 +1133,6 @@ class Guide:
             return {"anchor": "r" + self.sid[i].replace(".", "-"), "lines": ["setting: " + x for x in describe(self.t[i])],
                     "summary": "**%s** %s #%s · could not describe: %s" % (self.sid[i], designer(self.t[i].kind), i,
                                                                            self.failed(i, exc))}
-
-    def repeat(self, group):
-        L = self.L
-        b, c = L.copy_of[group[0]]
-        copy, first = L.blocks[b - 1][c], L.blocks[b - 1][0]
-        twin = dict(zip(copy, first))
-        tools = sorted((i for s in group for i in L.stages[s]), key=lambda i: self.pos[i])
-        orig = [twin[i] for i in tools]
-        mem = set(tools)
-        lines = []
-        for i in tools:
-            for e in self.wf.ins.get(i, []):
-                if e[0] not in mem:
-                    mirror = next((f for f in self.wf.ins.get(twin[i], []) if f[3] == e[3]), None)
-                    lines.append("step %s takes %s, where step %s takes %s" % (
-                        self.ref(i), self.src(e), self.ref(twin[i]), self.src(mirror) if mirror else "—"))
-            for e in self.wf.outs.get(i, []):
-                if e[2] not in mem:
-                    lines.append("step %s sends its rows to %s" % (self.ref(i), self.ref(e[2])))
-        span = lambda xs: "%s–%s" % (self.sid[xs[0]], self.sid[xs[-1]].split(".")[1]) if len(xs) > 1 else self.sid[xs[0]]
-        delta = {self.pos[x] - self.pos[y] for x, y in zip(tools, orig)}
-        same_c = len({self.sid[x].split(".")[0] for x in orig}) == 1
-        mapping = "Step for step: %s here is %s there, in the same order." % (span(tools), span(sorted(orig, key=lambda i: self.pos[i]))) \
-            if same_c else "Step for step: " + ", ".join("%s = %s" % (self.sid[x], self.sid[y]) for x, y in zip(tools, orig))
-        head = "Branches %s — repeat of %s · steps %s" % (
-            self.bid[group[0]] if len(group) == 1 else "%s–%s" % (self.bid[group[0]], self.bid[group[-1]].split(".")[1]),
-            self.span_text([self.twin_stage(s) for s in group], branch=True), span(tools))
-        return ("details", 4, head, "b" + self.bid[group[0]].replace(".", "-"), [
-            ("p", "These %d steps have the same rules and wiring as steps %s (see there); only the rows differ:" % (
-                len(tools), span(sorted(orig, key=lambda i: self.pos[i])))),
-            ("steps", [{"text": x} for x in dict.fromkeys(lines)], False),
-            ("p", mapping + " Tool IDs: %s." % _id_map(tools, orig)),
-            ("folds", [{"anchor": "r" + self.sid[tools[0]].replace(".", "-"),
-                        "summary": "**Steps %s** in pandas: the same lines as there, with this copy's tables" % span(tools),
-                        "lines": [x for i in tools for x in ["# step %s %s" % (self.sid[i], designer(self.t[i].kind))] +
-                                  self.cards[i]["py"]]}])], False)
 
     def columns(self, key, tools):
         made = defaultdict(list)
@@ -1483,7 +1158,7 @@ class Guide:
                          how if len(how) <= 120 else how[:118] + "…", shown or "not read by a later step"])
         if not rows:
             return ("p", "")
-        return ("details", 3, "Columns created or changed in container %d (%d)" % (self.cnum[key], len(rows)),
+        return ("details", 3, "Columns created or changed in container %d: %d" % (self.cnum[key], len(rows)),
                 "cols%d" % self.cnum[key],
                 [("p", "Each column this container creates or changes: the type Alteryx gives it, the steps that set it, "
                        "how, and the later steps (anywhere in the workflow) that use a column of that name."),
@@ -1574,14 +1249,6 @@ def _wrap(text, width):
 
 def _bkey(bid):
     return tuple(int(x) for x in bid.split("."))
-
-
-def _id_map(copy, first):
-    if all(x.isdigit() for x in copy + first):
-        deltas = {int(x) - int(y) for x, y in zip(copy, first)}
-        if len(deltas) == 1:
-            return "each is the original's ID %+d" % deltas.pop()
-    return ", ".join("#%s = #%s" % (x, y) for x, y in zip(copy, first))
 
 
 def build(wf):

@@ -386,6 +386,12 @@ def _parse(t):
         ir["files"] = list(dict.fromkeys(
             flat(e.text) for e in cfg.iter() if e.text and e.tag not in ("Command", "CommandArguments") and
             re.search(r"\.(csv|txt|xlsx|xlsm|xls|yxdb|json|xml|dat)(\|\|\|.*)?$", flat(e.text), re.I)))
+        # the program, under whichever name the settings use; and the file the incoming rows are written to first
+        # (Run Command can write its input to a file, often a .bat or .vbs it then runs, and read a result back)
+        ir["program"] = next((flat(cfg.findtext(n, "")) for n in ("Command", "RunCommand", "CommandLine", "Program")
+                              if flat(cfg.findtext(n, ""))), "")
+        ir["write"] = next((flat(f.text) for el in cfg.iter() if "write" in el.tag.lower()
+                            for f in el.iter("File") if f.text and flat(f.text)), "")
     elif k == "TextInput":
         ir["columns"] = [f.get("name", "") for f in cfg.findall("Fields/Field")]
         ir["rows"] = [[c.text for c in r.findall("c")] for r in cfg.findall("Data/r")]

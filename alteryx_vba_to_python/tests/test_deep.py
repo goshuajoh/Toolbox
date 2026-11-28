@@ -192,8 +192,9 @@ class Deep(unittest.TestCase):
         finally:
             codegen.tool_code = real
         self.assertEqual(wf.tools["2"].status, "stub")
-        self.assertTrue(re.search(r"^\| 1\.2 \| Formula ⚠ \| fills column \*\*Hit\*\* \(see the rule\) \| \*\*Hit\*\* \| ends \(rows dropped\) \|$",
-                                  md, re.M), md[:3000])
+        line = next(x for x in md.splitlines() if x.startswith("- (1.2) Formula #2: "))
+        self.assertTrue(line.startswith("- (1.2) Formula #2: Sets 1 column: **Hit** = `IF ") and " …` · ⚠ not converted: "
+                        "write by hand" in line, line)                     # the rule's start; all of it is folded
         fold = md[md.index("- **1.2** Formula #2"):]
         self.assertTrue("**not converted**: the generated Python does not compile: RecursionError" in fold.split("\n")[0])
         self.assertTrue('      when (read top down: each line combines with everything above it)' in fold or

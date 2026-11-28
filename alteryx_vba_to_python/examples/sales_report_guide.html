@@ -2,52 +2,232 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Migration guide: sales_report.yxmd</title><style>
-:root{--ink:#1f2328;--muted:#59636e;--line:#d1d9e0;--soft:#f6f8fa;--accent:#0b5cad;--warn:#9a3412;--box:#eef4fb}
-@media (prefers-color-scheme:dark){:root{--ink:#e6edf3;--muted:#9da7b3;--line:#3d444d;--soft:#151b23;--accent:#58a6ff;
---warn:#f0883e;--box:#16273d}}
-body{font:15px/1.55 -apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--soft);margin:0}
-main{max-width:1150px;margin:0 auto;padding:24px 16px 80px;background:transparent}
-h1{font-size:1.6em;margin:.2em 0 .6em}h2{font-size:1.3em;margin:2em 0 .5em;padding-bottom:.25em;border-bottom:1px solid var(--line)}
-h3{font-size:1.1em;margin:1.6em 0 .4em}h4{font-size:1em;margin:1.2em 0 .3em;color:var(--muted)}
+:root{--bg:#fbfbfc;--ink:#1c1d21;--muted:#676973;--line:#dfe1e6;--card:#fff;--accent:#1f5fbf;--warn:#9a3412;--box:#f1f1f4;
+--file:#e9f2ff;--filefg:#134a9c;--out:#e6f6ec;--outfg:#17643a;--tab:#f3ecfb;--tabfg:#5b2d91;--hand:#fff4dc;--handfg:#8a5a00;
+--off:#f4e9ea;--offfg:#8c2f39;--soft:#fbfbfc}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#131417;--ink:#ecedf1;--muted:#9c9fab;--line:#2b2d34;
+--card:#1b1c21;--accent:#7fb0ff;--warn:#f0883e;--box:#26272e;--file:#172a47;--filefg:#a9cbff;--out:#16301f;--outfg:#8fd9aa;
+--tab:#2b2140;--tabfg:#cdb4f5;--hand:#3a2e12;--handfg:#f0c36a;--off:#3a1f23;--offfg:#f0a3ab;--soft:#131417}}
+:root[data-theme="dark"]{--bg:#131417;--ink:#ecedf1;--muted:#9c9fab;--line:#2b2d34;--card:#1b1c21;--accent:#7fb0ff;
+--warn:#f0883e;--box:#26272e;--file:#172a47;--filefg:#a9cbff;--out:#16301f;--outfg:#8fd9aa;--tab:#2b2140;--tabfg:#cdb4f5;
+--hand:#3a2e12;--handfg:#f0c36a;--off:#3a1f23;--offfg:#f0a3ab;--soft:#131417}
+*{box-sizing:border-box}
+body{font:15px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--bg);margin:0}
+main{max-width:980px;margin:0 auto;padding:20px 16px 80px}
+h1{font-size:1.5em;margin:.2em 0 .3em}h2{font-size:1.25em;margin:2em 0 .5em;padding-bottom:.25em;border-bottom:1px solid var(--line)}
+h3{font-size:1.05em;margin:1.4em 0 .4em}h4{font-size:1em;margin:1.2em 0 .3em;color:var(--muted)}
 p{margin:.4em 0 .8em}a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
-code{font:13px ui-monospace,Consolas,monospace;background:var(--box);padding:1px 4px;border-radius:4px}
-pre{font:13px/1.45 ui-monospace,Consolas,monospace;background:var(--box);padding:8px 12px;border-radius:6px;overflow-x:auto;
-margin:.4em 0 .7em}li{margin:.25em 0}li>pre.rule{margin-top:.3em}
-table{border-collapse:collapse;margin:.5em 0 1.2em;font-size:14px;width:100%}
-th,td{border:1px solid var(--line);padding:4px 8px;text-align:left;vertical-align:top}th{background:var(--box)}
-section.stage{background:var(--soft);border-left:3px solid var(--line);padding:0 0 0 14px;margin:1em 0}
-.diagram{overflow:auto;border:1px solid var(--line);border-radius:6px;background:var(--soft);margin:.6em 0 1.2em}
-.diagram svg{display:block}.warn{color:var(--warn)}
-details{margin:.5em 0}details>summary{cursor:pointer;list-style:none;padding:6px 10px;border-radius:6px;background:var(--box)}
-details>summary::-webkit-details-marker{display:none}details>summary::before{content:"▸ ";color:var(--muted)}
-details[open]>summary::before{content:"▾ "}details>.inner{padding:4px 0 4px 14px;border-left:2px solid var(--line);margin-left:6px}
-summary .h2{font-size:1.25em;font-weight:650}summary .h3{font-size:1.08em;font-weight:600}summary .h4{font-weight:600}
-details.d2{margin-top:1.4em}
-.card{border:1px solid var(--line);border-radius:8px;margin:.7em 0;background:var(--soft);scroll-margin-top:12px}
+code{font:12.5px ui-monospace,Menlo,Consolas,monospace;background:var(--box);padding:1px 4px;border-radius:4px;
+overflow-wrap:anywhere}
+pre{font:12.5px/1.45 ui-monospace,Menlo,Consolas,monospace;background:var(--box);padding:8px 10px;border-radius:6px;
+overflow-x:auto;margin:.4em 0 .7em}li{margin:.25em 0}li>pre.rule{margin-top:.3em}
+table{border-collapse:collapse;margin:.5em 0 1.2em;font-size:13.5px;width:100%;display:block;overflow-x:auto}
+th,td{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;vertical-align:top}
+th{color:var(--muted);font-weight:600;font-size:12.5px}
+.chip{display:inline-block;border-radius:6px;padding:0 7px;font-size:13px;overflow-wrap:anywhere}
+.chip.f{background:var(--file);color:var(--filefg)}.chip.o{background:var(--out);color:var(--outfg)}
+.chip.w{background:var(--tab);color:var(--tabfg)}
+.col{background:var(--box);border-radius:4px;padding:0 5px;font-size:13px}
+.badge{font-size:11.5px;font-weight:650;border-radius:999px;padding:1px 8px;background:var(--off);color:var(--offfg);
+white-space:nowrap}
+.hand{background:var(--hand);color:var(--handfg);border-radius:6px;padding:1px 7px;font-size:12px;font-weight:600}
+small.sid,.sub{color:var(--muted)}small.sid{font-size:11.5px}
+.kind{font-size:11.5px;font-weight:650;color:var(--tabfg);text-transform:uppercase;letter-spacing:.03em}
+nav.toc{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:6px 14px;margin:12px 0}
+nav.toc ul{margin:.2em 0;padding-left:1.3em}nav.toc li{margin:.1em 0}
+.box{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:12px 0;
+scroll-margin-top:12px}.box>h3{margin:0 0 6px}
+.meta{font-size:13px;color:var(--muted);display:grid;grid-template-columns:90px 1fr;gap:2px 8px;margin:4px 0}
+.meta b{font-weight:600}.meta span{color:var(--ink);min-width:0;overflow-wrap:anywhere}
+ol.steps{list-style:none;padding:0;margin:8px 0 0;counter-reset:s}
+ol.steps>li{counter-increment:s;display:grid;grid-template-columns:30px 1fr;gap:10px;padding:10px 0;
+border-top:1px solid var(--line);margin:0;scroll-margin-top:12px}
+ol.steps>li::before{content:counter(s);width:26px;height:26px;border-radius:50%;background:var(--box);display:grid;
+place-items:center;font-weight:650;font-size:13px}
+ol.steps>li.side{counter-increment:none;display:block;padding:6px 0 6px 40px}ol.steps>li.side::before{content:none}
+.tool{font-size:12px;font-weight:650;color:var(--accent);text-transform:uppercase;letter-spacing:.03em}
+.tool small,.tool i{color:var(--muted);font-weight:400;text-transform:none;letter-spacing:0}
+.does{margin:1px 0 4px;overflow-wrap:anywhere}.split{font-size:13px;margin-top:4px;overflow-wrap:anywhere}
+details{margin:.5em 0}details>summary{cursor:pointer;color:var(--accent)}
+details.rule{margin:6px 0 0;font-size:13px}details.rule .fs{color:var(--muted);font-size:12.5px;margin:4px 0}
+details.side{background:var(--soft);border-left:3px solid var(--tabfg);border-radius:6px;padding:4px 10px;margin:4px 0}
+details.side>summary{font-size:13.5px;font-weight:600}
+details.d2>summary .h2{font-size:1.1em;font-weight:650;color:var(--ink)}details.d3>summary .h3{font-weight:600;color:var(--ink)}
+details>.inner{padding:4px 0 4px 14px;border-left:2px solid var(--line);margin-left:6px}
+section.stage{border-left:3px solid var(--line);padding:0 0 0 14px;margin:1em 0}
+.diagram{overflow:auto;border:1px solid var(--line);border-radius:6px;margin:.6em 0 1.2em}.diagram svg{display:block}
+.warn{color:var(--warn)}
+.card{border:1px solid var(--line);border-radius:8px;margin:.7em 0;background:var(--card);scroll-margin-top:12px}
 .card-h{font-weight:600;padding:6px 10px;border-bottom:1px solid var(--line);background:var(--box);border-radius:8px 8px 0 0}
 .card dl{display:grid;grid-template-columns:7.5em 1fr;gap:3px 10px;margin:0;padding:8px 10px}
 .card dt{color:var(--muted);font-size:13px;padding-top:2px}.card dd{margin:0;min-width:0}
 .card pre.rule{margin:.2em 0}.card dd code{white-space:pre-wrap;word-break:break-word}
 :target{outline:2px solid var(--accent);outline-offset:2px}tr:target{background:var(--box)}
-details.fold{margin:.15em 0}details.fold>summary{background:transparent;padding:2px 6px;font-size:14px}
-details.fold>pre{margin:.2em 0 .6em 1.2em}div.fold{padding:2px 6px 2px 22px;font-size:14px}td:first-child{white-space:nowrap}
+details.fold{margin:.15em 0}details.fold>summary{padding:2px 6px;font-size:14px}
+details.fold>pre{margin:.2em 0 .6em 1.2em}div.fold{padding:2px 6px 2px 22px;font-size:14px}
+table.acts{display:table;width:100%;margin:8px 0}table.acts td{border-bottom:1px solid var(--line)}
+table.acts td.n{font-weight:650;color:var(--muted);width:2.2em;white-space:nowrap}
+table.acts td.cols{width:16%;font-size:12.5px}table.acts td.tl{width:15%;font-size:12px;color:var(--muted)}
+table.acts tr.sub td{background:var(--soft);font-size:13.5px}table.acts tr.sub td.n{padding-left:16px}
+table.acts .ln{margin:1px 0 1px 10px;overflow-wrap:anywhere}table.acts .does{overflow-wrap:anywhere}
+table.mini{display:table;width:100%;font-size:12.5px;margin:4px 0}table.mini td:first-child{width:48%}table.mini td:last-child{width:5.5em;color:var(--muted)}table.mini td,table.mini th{padding:3px 6px}
+details.hk{font-size:13px;margin:6px 0 0}details.hk ul{margin:4px 0;padding-left:1.2em}
+@media (max-width:600px){.meta{grid-template-columns:1fr}table.acts,table.acts tbody,table.acts tr,table.acts td{display:block;
+width:auto!important}table.acts thead{display:none}table.acts tr{border-top:1px solid var(--line);padding:6px 0}
+table.acts td{border:0;padding:2px 4px}table.mini{display:block;overflow-x:auto}}
 </style></head><body><main>
-<h1 id="top">Migration guide: sales_report.yxmd</h1>
-<p>Generated by ayx2py from <code>sales_report.yxmd</code>. It explains the workflow for someone who has never opened Alteryx Designer, so it can be rebuilt in Python step by step.</p>
-<h2 id="howto">How to read this</h2>
+<h1 id="top">How sales_report.yxmd works</h1>
+<p>Made by ayx2py from <code>sales_report.yxmd</code>, for someone who has never opened Alteryx Designer. 2 containers, 17 tools, 3 outputs.</p>
+<p><b>Python:</b> steps converted exactly 5, with a stated assumption 12, not converted 0. Before relying on it, read <a href="#check">what to check</a> in the Detail section.</p>
+<nav class="toc">
 <ul>
-<li><b>Containers</b> are the boxes Designer draws around groups of tools. They are numbered 1, 2, 3… in the order they run. Each starts with the files it opens and saves: file › sheet › first row or cells.
+<li><a href="#does">1. What this workflow does</a>
+<ul>
+<li><a href="#c1">1. Prepare orders</a>
 </li>
-<li><b>Opening a file</b>: in Alteryx every file read is its own tool box. Here it is shown inside the step that uses it ("matches its rows with <code>Config.xlsm</code> › sheet <code>Clients</code> on [ID]"); only a file that starts a flow of rows gets its own row ("opens …").
-</li>
-<li><b>Branches</b>: inside a container, the rows flow along branches. A branch is a chain of tools with no split or merge in it; it is named after its first tool's note or its filter test. Branch 3.4 is the 4th branch of container 3.
-</li>
-<li><b>Steps</b>: each branch is one table, a row per tool as it sits on the canvas: step number (3.14 is step 14 of container 3), the tool's name in Designer and its note, what it does, the columns it adds or changes, and the next step. A filter's outputs are T (true) and F (false); a join's are J (matched), L (left rows with no match) and R (right rows with no match). An output that nothing uses is dropped.
-</li>
-<li><b>Under each table</b>, one folded line per step holds its full rule (<code>when … → …</code> lines are read top down; the first true condition gives the value) and the same step in pandas, to paste into the steps notebook: <code>df</code> is the table flowing through the branch, <code>s2_7</code> is step 2.7's output and <code>s2_7_true</code> its True output; <code>src_…</code> is a file as loaded in the notebook's Load cell, and <code>FOLDER</code> the workflow's folder. It also says whether the generated code converts the step exactly and names its function. ⚠ marks a step that is not converted.
+<li><a href="#c2">2. Summarise</a>
 </li>
 </ul>
-<p>The pandas lines use two helpers, because Alteryx compares text ignoring case and treats null and the empty string separately:</p>
+</li>
+<li><a href="#made">2. How each output is made</a>
+<ul>
+<li>Container 1: <a href="#o8">duplicate_orders.csv</a>, <a href="#o17">cancelled_by_region.csv</a> (and 2 working tables)
+</li>
+<li>Container 2: <a href="#o15">sales_summary.xlsx › Summary</a>
+</li>
+</ul>
+</li>
+<li><a href="#order">3. Run order</a>
+</li>
+<li><a href="#files">4. Files, sheets and scripts</a>
+</li>
+<li><a href="#detail">5. Detail</a>: how to read the pandas, what to check, columns, every step by number
+</li>
+</ul>
+</nav>
+<h2 id="does">1. What this workflow does</h2>
+<div class="box" id="c1"><h3>1. Prepare orders</h3>
+<p>It opens 1 source, filters rows, totals rows, calculates columns, removes duplicates and saves 2 tables, in 10 steps.</p>
+<div class="meta"><b>Opens</b><span><span class="chip f">orders.csv</span></span><b>Saves</b><span><a href="#o8"><span class="chip o">duplicate_orders.csv</span></a><br><a href="#o17"><span class="chip o">cancelled_by_region.csv</span></a></span><b>Used by</b><span><a href="#c2">container 2</a></span></div>
+</div>
+<div class="box" id="c2"><h3>2. Summarise</h3>
+<p>It matches tables, totals rows, calculates columns, stacks tables and saves 1 table, in 7 steps.</p>
+<p>It takes rows from <b><a href="#w7">Table B</a></b> (container 1).</p>
+<div class="meta"><b>Opens</b><span>—</span><b>Saves</b><span><span class="chip o">sales_summary.xlsx</span> › <a href="#o15">Summary</a></span></div>
+</div>
+<h2 id="made">2. How each output is made</h2>
+<p>One table per output: the steps that decide which rows and which values reach it, in the order they run, each with its rule. Steps that only open files, keep or retype columns, or set the run order are presumed; each table lists them, folded, at its end. Work that several outputs share is told once as Table A, B…, and the tables that use it start from it. Open <b>Rule and pandas</b> on a row for its exact rule and the same step in pandas.</p>
+<section class="stage" id="m1">
+<h3>Container 1. Prepare orders</h3>
+<div class="box story" id="w3"><h3><span class="kind">working table</span> <span class="chip w">Table A</span></h3>
+<p class="sub">From <span class="chip f">orders.csv</span>; last, splits the rows on: <span class="col">Status</span> is not "Cancelled"</p>
+<p class="sub">Used by <b><a href="#w7">Table B</a></b> and <b><a href="#o17">cancelled_by_region.csv</a></b>.</p>
+<table class="acts"><thead><tr><th>#</th><th>What happens</th><th>Columns</th><th>Tool</th></tr></thead><tbody>
+<tr id="s1-2"><td class="n">1</td><td><div class="does">Cleans the columns <span class="col">Region</span>, <span class="col">Product</span>, <span class="col">Status</span>: remove leading and trailing spaces.</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>1.2</b> Data Cleansing #2 · converted, assuming A1 · <code>t2</code></div><pre id="r1-2"># note: Options read from the macro's numbered check boxes: confirm them in the tool's settings.
+# pandas:
+cols = ["Region", "Product", "Status"]
+df[cols] = df[cols].apply(lambda s: s.str.strip())</pre></details></td><td class="cols"><span class="col">Region</span> <span class="col">Product</span> <span class="col">Status</span></td><td class="tl"><small>Data Cleansing · step 1.2 · tool #2</small></td></tr>
+<tr id="s1-3"><td class="n">2</td><td><div class="does">Splits the rows on: <span class="col">Status</span> is not "Cancelled".</div><div class="split">↳ <b>rows that pass</b> → <b><a href="#w7">Table B</a></b> · <b>rows that fail</b> → <b><a href="#o17">cancelled_by_region.csv</a></b></div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>1.3</b> Filter #3 · exact · <code>t3</code></div><pre id="r1-3">m = ~eq(df["Status"], 'Cancelled')
+s1_3_true, s1_3_false = df[m], df[~m]</pre></details></td><td class="cols"></td><td class="tl"><small>Filter · step 1.3 · tool #3</small></td></tr>
+</tbody></table>
+<details class="hk" id="hw3"><summary>1 housekeeping step not shown</summary><ul><li id="s1-1"><small class="sid">1.1</small> Input Data #1: opens what the story starts from (named at the top)</li></ul><details class="rule"><summary>Their rule and pandas</summary><div class="fs"><b>1.1</b> Input Data #1 · converted, assuming A3 · <code>t1</code></div><pre id="r1-1"># columns: OrderID (V_String), OrderDate (V_String), Region (V_String), Product (V_String), Qty (V_String),
+# columns: UnitPrice (V_String), Status (V_String)
+# note: Read as: UTF-8.
+# pandas:
+src_orders = pd.read_csv(ORDERS_CSV, sep=',', encoding="utf-8-sig", dtype=str, keep_default_na=False).replace("", None)</pre></details></details>
+</div>
+<div class="box story" id="w7"><h3><span class="kind">working table</span> <span class="chip w">Table B</span></h3>
+<p class="sub">From the rows that pass <b><a href="#w3">Table A</a></b>; last, removes duplicate rows by <span class="col">OrderID</span> (keeps the first)</p>
+<p class="sub">Used by <b><a href="#o8">duplicate_orders.csv</a></b> and <b><a href="#o15">sales_summary.xlsx › Summary</a></b> (container 2).</p>
+<table class="acts"><thead><tr><th>#</th><th>What happens</th><th>Columns</th><th>Tool</th></tr></thead><tbody>
+<tr id="s1-4"><td class="n">1</td><td><div class="does">Sets the type of <span class="col">Qty</span> to Int32, <span class="col">UnitPrice</span> to Double.</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>1.4</b> Select #4 · exact · <code>t4</code></div><pre id="r1-4">change type: [Qty] to Int32, [UnitPrice] to Double
+# pandas:
+df = df.astype({"Qty": Int64, "UnitPrice": float})</pre></details></td><td class="cols"></td><td class="tl"><small>Select · step 1.4 · tool #4</small></td></tr>
+<tr id="s1-5"><td class="n">2</td><td><div class="does">Adds column <b>Order Day</b> = <span class="col">OrderDate</span> read as a date <code>dd/MM/yyyy</code>.</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>1.5</b> DateTime #5 · converted, assuming A2 · <code>t5</code> · <code>df["Order Day"] = pd.to_datetime(df["OrderDate"], format="%d/%m/%Y", errors="coerce")</code></div><span id="r1-5"></span></details></td><td class="cols"><span class="col">Order Day</span></td><td class="tl"><small>DateTime · step 1.5 · tool #5</small></td></tr>
+<tr id="s1-6"><td class="n">3</td><td><div class="does">Sets 4 columns:</div><div class="ln"><b>Month</b> = <code>DateTimeFormat([Order Day], "%Y-%m")</code></div><div class="ln"><b>Gross</b> = <span class="col">Qty</span> × <span class="col">UnitPrice</span></div><div class="ln"><b>Discount</b> = 0.1 when <span class="col">Gross</span> ≥ 10000; 0.05 when <span class="col">Gross</span> ≥ 5000 and <span class="col">Region</span> is one of "North", "East", otherwise 0</div><div class="ln"><b>Net</b> = <code>Round([Gross] * (1 - [Discount]), 0.01)</code></div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>1.6</b> Formula #6 · exact · <code>t6</code></div><pre id="r1-6">Month = DateTimeFormat([Order Day], "%Y-%m")
+Gross = [Qty] × [UnitPrice]
+Discount =
+    when [Gross] ≥ 10000                                       → 0.1
+    when [Gross] ≥ 5000 and [Region] is one of "North", "East" → 0.05
+    otherwise                                                  → 0
+Net = Round([Gross] × (1 - [Discount]), 0.01)
+# pandas:
+# df["Month"] = df.apply(x6_1, axis=1)  # generated code; no one-line form
+df["Gross"] = (df["Qty"] * df["UnitPrice"])
+df["Discount"] = np.select([(df["Gross"] &gt;= 10000), ((df["Gross"] &gt;= 5000) &amp; df["Region"].isin(['North', 'East']))], [0.1, 0.05], default=0)
+df["Net"] = (((df["Gross"] * (1 - df["Discount"])) / 0.01).round() * 0.01)</pre></details></td><td class="cols"><span class="col">Month</span> <span class="col">Gross</span> <span class="col">Discount</span> <span class="col">Net</span></td><td class="tl"><small>Formula · step 1.6 · tool #6</small></td></tr>
+<tr id="s1-7"><td class="n">4</td><td><div class="does">Removes duplicate rows by <span class="col">OrderID</span> (keeps the first).</div><div class="split">↳ <b>unique rows</b> → <b><a href="#o15">sales_summary.xlsx › Summary</a></b> (container 2) · <b>duplicate rows</b> → <b><a href="#o8">duplicate_orders.csv</a></b></div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>1.7</b> Unique #7 · converted, assuming A9 · <code>t7</code></div><pre id="r1-7">s1_7_unique = df.drop_duplicates(["OrderID"])
+s1_7_duplicates = df[df.duplicated(["OrderID"])]</pre></details></td><td class="cols"></td><td class="tl"><small>Unique · step 1.7 · tool #7</small></td></tr>
+</tbody></table>
+</div>
+<div class="box story" id="o8"><h3><span class="chip o">duplicate_orders.csv</span></h3>
+<p class="sub"><b>Starts from:</b> the duplicate rows of <b><a href="#w7">Table B</a></b>.</p>
+<table class="acts"><thead><tr><th>#</th><th>What happens</th><th>Columns</th><th>Tool</th></tr></thead><tbody>
+<tr id="s1-8"><td class="n">1</td><td><div class="does">Saves the table to <span class="chip o">duplicate_orders.csv</span>.</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>1.8</b> Output Data #8 · converted, assuming A5 · <code>t8</code> · <code>s1_8 = df  # the rows this step saves; the notebook's last cell writes them to OUT</code></div><span id="r1-8"></span></details></td><td class="cols"></td><td class="tl"><small>Output Data · step 1.8 · tool #8</small></td></tr>
+</tbody></table>
+</div>
+<div class="box story" id="o17"><h3><span class="chip o">cancelled_by_region.csv</span></h3>
+<p class="sub"><b>Starts from:</b> the rows that fail <b><a href="#w3">Table A</a></b>.</p>
+<table class="acts"><thead><tr><th>#</th><th>What happens</th><th>Columns</th><th>Tool</th></tr></thead><tbody>
+<tr id="s1-9"><td class="n">1</td><td><div class="does">Groups the rows by <span class="col">Region</span>; for each group:</div><div class="ln"><b>Cancelled orders</b> = number of rows</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>1.9</b> Summarize #16 · converted, assuming A7 · <code>t16</code></div><pre id="r1-9">Cancelled orders = number of rows
+# pandas:
+df = df.groupby(["Region"], sort=True, dropna=False).agg(**{"Cancelled orders": ("OrderID", "size")}).reset_index()</pre></details></td><td class="cols"><span class="col">Cancelled orders</span></td><td class="tl"><small>Summarize · step 1.9 · tool #16</small></td></tr>
+<tr id="s1-10"><td class="n">2</td><td><div class="does">Saves the table to <span class="chip o">cancelled_by_region.csv</span>.</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>1.10</b> Output Data #17 · converted, assuming A5 · <code>t17</code> · <code>s1_10 = df  # the rows this step saves; the notebook's last cell writes them to OUT</code></div><span id="r1-10"></span></details></td><td class="cols"></td><td class="tl"><small>Output Data · step 1.10 · tool #17</small></td></tr>
+</tbody></table>
+</div>
+</section>
+<section class="stage" id="m2">
+<h3>Container 2. Summarise</h3>
+<div class="box story" id="o15"><h3><span class="chip o">sales_summary.xlsx › Summary</span></h3>
+<p class="sub"><b>Starts from:</b> the unique rows of <b><a href="#w7">Table B</a></b> (container 1).</p>
+<table class="acts"><thead><tr><th>#</th><th>What happens</th><th>Columns</th><th>Tool</th></tr></thead><tbody>
+<tr id="s2-1"><td class="n">1</td><td><div class="does">Matches the rows with a typed table (<span class="col">Product</span>, <span class="col">Category</span>) on <span class="col">Product</span>.</div><div class="split">↳ <b>matched rows</b> → <a href="#s2-3">row 3</a> · <b>rows only in the first input</b> → <a href="#s2-2">row 2</a> · <b>rows only in the second input</b> → dropped</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.1</b> Join #10 · converted, assuming A4 · <code>t10</code></div><pre id="r2-1">keys: left [Product] = right [Product]
+drop Right_Product
+# pandas:
+right = src_typed_product_category.rename(columns=lambda c: "Right_" + c if c in df.columns else c)  # as Alteryx: only clashing names get Right_
+m = df.merge(right, how="outer", left_on=["Product"], right_on=[c if c in right.columns else "Right_" + c for c in ["Product"]], indicator=True)
+m = m.drop(columns=["Right_Product"], errors="ignore")
+s2_1_join = m[m["_merge"] == "both"].drop(columns="_merge")
+s2_1_left = m[m["_merge"] == "left_only"][[c for c in df.columns if c in m.columns]]</pre></details></td><td class="cols"></td><td class="tl"><small>Join · step 2.1 · tool #10</small></td></tr>
+<tr id="s2-2"><td class="n">2</td><td><div class="does">On the rows only in the first input of <a href="#s2-1">row 1</a>: Sets 1 column:</div><div class="ln"><b>Category</b> = "Unknown"</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.2</b> Formula #11 · exact · <code>t11</code></div><pre id="r2-2">Category = "Unknown"
+# pandas:
+df["Category"] = 'Unknown'</pre></details></td><td class="cols"><span class="col">Category</span></td><td class="tl"><small>Formula · step 2.2 · tool #11</small></td></tr>
+<tr id="s2-3"><td class="n">3</td><td><div class="does">Stacks the matched rows of <a href="#s2-1">row 1</a> and the rows of <a href="#s2-2">row 2</a> into one table.</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.3</b> Union #12 · converted, assuming A8 · <code>t12</code> · <code>df = pd.concat([s2_1_join, s2_2], ignore_index=True)</code></div><span id="r2-3"></span></details></td><td class="cols"></td><td class="tl"><small>Union · step 2.3 · tool #12</small></td></tr>
+<tr id="s2-4"><td class="n">4</td><td><div class="does">Groups the rows by <span class="col">Region</span>, <span class="col">Month</span>, <span class="col">Category</span>; for each group:</div><div class="ln"><b>Net sales</b> = sum of <span class="col">Net</span></div><div class="ln"><b>Orders</b> = number of different <span class="col">OrderID</span></div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.4</b> Summarize #13 · converted, assuming A7 · <code>t13</code></div><pre id="r2-4">Net sales = sum of [Net]
+Orders = number of different [OrderID]
+# pandas:
+df = df.groupby(["Region", "Month", "Category"], sort=True, dropna=False).agg(**{"Net sales": ("Net", "sum"), "Orders": ("OrderID", "nunique")}).reset_index()</pre></details></td><td class="cols"><span class="col">Net sales</span> <span class="col">Orders</span></td><td class="tl"><small>Summarize · step 2.4 · tool #13</small></td></tr>
+<tr id="s2-5"><td class="n">5</td><td><div class="does">Sorts by <span class="col">Region</span> A→Z, <span class="col">Month</span> A→Z.</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.5</b> Sort #14 · converted, assuming A6 · <code>t14</code> · <code>df = df.sort_values(["Region", "Month"], ascending=[True, True], kind="stable", na_position="first")</code></div><span id="r2-5"></span></details></td><td class="cols"></td><td class="tl"><small>Sort · step 2.5 · tool #14</small></td></tr>
+<tr id="s2-6"><td class="n">6</td><td><div class="does">Saves the table to <span class="chip o">sales_summary.xlsx › Summary</span> (replaces the sheet).</div><details class="rule"><summary>Rule and pandas</summary><div class="fs"><b>2.6</b> Output Data #15 · converted, assuming A5 · <code>t15</code> · <code>s2_6 = df  # the rows this step saves; the notebook's last cell writes them to OUT</code></div><span id="r2-6"></span></details></td><td class="cols"></td><td class="tl"><small>Output Data · step 2.6 · tool #15</small></td></tr>
+</tbody></table>
+</div>
+</section>
+<h2 id="order">3. Run order</h2>
+<p>Inside a table, the rows run in the order shown. What must finish before what:</p>
+<ol>
+<li>Container 2 runs after container 1: it takes rows from <b><a href="#w7">Table B</a></b>.
+</li>
+</ol>
+<h2 id="files">4. Files, sheets and scripts</h2>
+<table><thead><tr><th>File</th><th>Sheet</th><th>Cells</th><th>Used</th><th>Columns</th><th>Where</th></tr></thead><tbody>
+<tr><td><span class="chip f">orders.csv</span></td><td>—</td><td>all</td><td>opened</td><td><span class="col">OrderID</span>, <span class="col">OrderDate</span>, <span class="col">Region</span>, <span class="col">Product</span>, <span class="col">Qty</span>, <span class="col">UnitPrice</span> +1 more</td><td><a href="#w3">Table A</a> <small class="sid">1.1</small></td></tr>
+<tr><td><span class="chip o">duplicate_orders.csv</span></td><td>—</td><td>all</td><td>saved</td><td>—</td><td><a href="#o8">duplicate_orders.csv</a> <small class="sid">1.8</small></td></tr>
+<tr><td><span class="chip o">cancelled_by_region.csv</span></td><td>—</td><td>all</td><td>saved</td><td>—</td><td><a href="#o17">cancelled_by_region.csv</a> <small class="sid">1.10</small></td></tr>
+<tr><td><span class="chip o">sales_summary.xlsx</span></td><td>Summary</td><td>all</td><td>saved</td><td>—</td><td><a href="#o15">sales_summary.xlsx › Summary</a> <small class="sid">2.6</small></td></tr>
+</tbody></table>
+<h2 id="detail">5. Detail</h2>
+<details class="d3" id="legend"><summary><span class="h3">How to read the pandas</span></summary><div class="inner">
+<ul>
+<li><b>Rule and pandas</b>, on each row, holds the step's exact rule (<code>when … → …</code> lines are read top down; the first true condition gives the value) and the same step in pandas, to paste into the steps notebook. Its first line gives the step number, the Designer tool and its ID, and whether the generated Python converts it exactly.
+</li>
+<li>In the pandas, <code>df</code> is the table flowing through the step; <code>s2_7</code> is step 2.7's output and <code>s2_7_true</code> its rows that pass; <code>src_…</code> is a file as loaded in the notebook's Load cell, and <code>FOLDER</code> is the workflow's folder. The steps notebook is laid out by Designer's branches; find a step here by its number (the index below lists them all).
+</li>
+<li>Rows show only the steps that change which rows or which values reach the output. The others (opening a file, a Select that only keeps or retypes columns, Block Until Done, a lookup's preparation, a settings value attached to every row) are listed under <b>housekeeping steps not shown</b> at the end of each table, with their pandas.
+</li>
+<li><b>A1, A2…</b> in a status are Alteryx behaviours the Python assumes; they are listed in what to check.
+</li>
+</ul>
+<p>The pandas uses two helpers, because Alteryx compares text ignoring case and treats null and the empty string separately:</p>
 <pre>import functools, glob, operator, os, subprocess
 import numpy as np
 import pandas as pd
@@ -64,245 +244,8 @@ def eq(a, b):
         x.casefold() if isinstance(x, str) else x)
     null = lambda x: x.isna() if isinstance(x, pd.Series) else x is None
     return (fold(a) == fold(b)) | (null(a) &amp; null(b))</pre>
-<h2 id="summary">Summary</h2>
-<ul>
-<li>2 containers, 17 tools, 7 branches.
-</li>
-<li><b>Python:</b> 5 steps convert exactly, 12 with a stated assumption, 0 are not converted.
-</li>
-<li><b>Before relying on it:</b> see <a href="#check">the last section</a>.
-</li>
-</ul>
-<details class="d2" id="toc"><summary><span class="h2">Contents</span></summary><div class="inner">
-<ul>
-<li><a href="#c1">1. Prepare orders</a>
-<ul>
-<li><a href="#b1-1">Branch 1.1</a> — Read orders.csv
-</li>
-<li><a href="#b1-2">Branch 1.2</a> — passes: [Status] ≠ "Cancelled"
-</li>
-<li><a href="#b1-3">Branch 1.3</a> — Write duplicate_orders.csv
-</li>
-<li><a href="#b1-4">Branch 1.4</a> — Summarize by [Region]
-</li>
-</ul>
-</li>
-<li><a href="#c2">2. Summarise</a>
-<ul>
-<li><a href="#b2-1">Branch 2.1</a> — Join on [Product]
-</li>
-<li><a href="#b2-2">Branch 2.2</a> — Formula
-</li>
-<li><a href="#b2-3">Branch 2.3</a> — Union of 2 inputs
-</li>
-</ul>
-</li>
-</ul>
 </div></details>
-<h2 id="containers">Containers</h2>
-<table><thead><tr><th>Container</th><th>Runs</th><th>Tools</th><th>Branches</th><th>Reads</th><th>Writes</th><th>Fed by</th><th>Feeds</th></tr></thead><tbody>
-<tr><td><a href="#c1">1. Prepare orders</a></td><td>yes</td><td>10</td><td>4</td><td>orders.csv</td><td>duplicate_orders.csv, cancelled_by_region.csv</td><td>—</td><td><a href="#c2">2. Summarise</a></td></tr>
-<tr><td><a href="#c2">2. Summarise</a></td><td>yes</td><td>7</td><td>3</td><td>—</td><td>sales_summary.xlsx · sheet <b>Summary</b></td><td><a href="#c1">1. Prepare orders</a></td><td>—</td></tr>
-</tbody></table>
-<div class="diagram"><svg xmlns="http://www.w3.org/2000/svg" width="282" height="192" font-family="Segoe UI,Roboto,sans-serif">
-<defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8c959f"/></marker></defs>
-<path d="M141,58 C141,81 141,81 141,102" fill="none" stroke="#8c959f" stroke-width="1.2" marker-end="url(#ah)"/>
-<a href="#c1"><rect x="26" y="16" width="230" height="42" rx="7" fill="#e3eefb" stroke="#8c959f"/><text x="34" y="33" font-size="12.5" font-weight="600" fill="#1f2328">1. Prepare orders</text><text x="34" y="49" font-size="11.5" fill="#424a53">10 tools</text><title>1. Prepare orders — 10 tools</title></a>
-<a href="#c2"><rect x="26" y="104" width="230" height="42" rx="7" fill="#e3eefb" stroke="#8c959f"/><text x="34" y="121" font-size="12.5" font-weight="600" fill="#1f2328">2. Summarise</text><text x="34" y="137" font-size="11.5" fill="#424a53">7 tools</text><title>2. Summarise — 7 tools</title></a>
-</svg></div>
-<details class="d2" id="c1"><summary><span class="h2">1. Prepare orders — 10 tools, 4 branches</span></summary><div class="inner">
-<p><b>Files it opens and saves:</b></p>
-<table><thead><tr><th>Step</th><th></th><th>File</th><th>Sheet</th><th>Cells</th><th>Notes</th></tr></thead><tbody>
-<tr><td><a href="#s1-1">1.1</a></td><td>opens</td><td><code>Input\orders.csv</code></td><td>—</td><td>all</td><td></td></tr>
-<tr><td><a href="#s1-8">1.8</a></td><td>saves</td><td><code>Output\duplicate_orders.csv</code></td><td>—</td><td>all</td><td></td></tr>
-<tr><td><a href="#s1-10">1.10</a></td><td>saves</td><td><code>Output\cancelled_by_region.csv</code></td><td>—</td><td>all</td><td></td></tr>
-</tbody></table>
-<ul>
-<li><b>Fed by:</b> nothing from other containers
-</li>
-<li><b>Feeds:</b> <a href="#c2">2. Summarise</a> (step <a href="#s1-7">1.7</a> → <a href="#s2-1">2.1</a>)
-</li>
-</ul>
-<section class="stage">
-<h3>Branches</h3>
-<table><thead><tr><th>Branch</th><th>Label</th><th>Steps</th><th>In</th><th>Out</th></tr></thead><tbody>
-<tr><td><a href="#b1-1">1.1</a></td><td>Read orders.csv</td><td>1.1–3</td><td>—</td><td><a href="#s1-4">1.4</a>, <a href="#s1-9">1.9</a></td></tr>
-<tr><td><a href="#b1-2">1.2</a></td><td>passes: [Status] ≠ "Cancelled"</td><td>1.4–7</td><td><a href="#s1-3">1.3</a> (True)</td><td><a href="#s1-8">1.8</a>, <a href="#s2-1">2.1</a></td></tr>
-<tr><td><a href="#b1-3">1.3</a></td><td>Write duplicate_orders.csv</td><td>1.8</td><td><a href="#s1-7">1.7</a> (D: duplicates)</td><td>—</td></tr>
-<tr><td><a href="#b1-4">1.4</a></td><td>Summarize by [Region]</td><td>1.9–10</td><td><a href="#s1-3">1.3</a> (False)</td><td>—</td></tr>
-</tbody></table>
-<div class="diagram"><svg xmlns="http://www.w3.org/2000/svg" width="538" height="280" font-family="Segoe UI,Roboto,sans-serif">
-<defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8c959f"/></marker></defs>
-<path d="M269,58 C269,81 141,81 141,102" fill="none" stroke="#8c959f" stroke-width="1.2" marker-end="url(#ah)"/>
-<path d="M269,58 C269,81 397,81 397,102" fill="none" stroke="#8c959f" stroke-width="1.2" marker-end="url(#ah)"/>
-<path d="M141,146 C141,169 269,169 269,190" fill="none" stroke="#8c959f" stroke-width="1.2" marker-end="url(#ah)"/>
-<a href="#b1-1"><rect x="154" y="16" width="230" height="42" rx="7" fill="#dff3e4" stroke="#8c959f"/><text x="162" y="33" font-size="12.5" font-weight="600" fill="#1f2328">Branch 1.1</text><text x="162" y="49" font-size="11.5" fill="#424a53">Read orders.csv</text><title>Branch 1.1 — Read orders.csv</title></a>
-<a href="#b1-2"><rect x="26" y="104" width="230" height="42" rx="7" fill="#e3eefb" stroke="#8c959f"/><text x="34" y="121" font-size="12.5" font-weight="600" fill="#1f2328">Branch 1.2</text><text x="34" y="137" font-size="11.5" fill="#424a53">passes: [Status] ≠ &quot;Cancelled&quot;</text><title>Branch 1.2 — passes: [Status] ≠ &quot;Cancelled&quot;</title></a>
-<a href="#b1-3"><rect x="154" y="192" width="230" height="42" rx="7" fill="#fde8d7" stroke="#8c959f"/><text x="162" y="209" font-size="12.5" font-weight="600" fill="#1f2328">Branch 1.3</text><text x="162" y="225" font-size="11.5" fill="#424a53">Write duplicate_orders.csv</text><title>Branch 1.3 — Write duplicate_orders.csv</title></a>
-<a href="#b1-4"><rect x="282" y="104" width="230" height="42" rx="7" fill="#fde8d7" stroke="#8c959f"/><text x="290" y="121" font-size="12.5" font-weight="600" fill="#1f2328">Branch 1.4</text><text x="290" y="137" font-size="11.5" fill="#424a53">Summarize by [Region]</text><title>Branch 1.4 — Summarize by [Region]</title></a>
-</svg></div>
-</section>
-<details class="d4" id="b1-1"><summary><span class="h4">Branch 1.1 — Read orders.csv · steps 1.1–3</span></summary><div class="inner">
-<p><b>In:</b> — (starts here).  <b>Out:</b> <a href="#s1-4">1.4</a>, <a href="#s1-9">1.9</a>.</p>
-<table><thead><tr><th>Step</th><th>Tool</th><th>What it does</th><th>New / changed columns</th><th>Next</th></tr></thead><tbody>
-<tr id="s1-1"><td><a href="#r1-1">1.1</a></td><td>Input Data</td><td>opens <code>orders.csv</code></td><td>7 columns</td><td><a href="#s1-2">1.2</a></td></tr>
-<tr id="s1-2"><td><a href="#r1-2">1.2</a></td><td>Data Cleansing</td><td>cleans the columns [Region], [Product], [Status]: remove leading and trailing spaces</td><td><b>Region</b>, <b>Product</b>, <b>Status</b></td><td><a href="#s1-3">1.3</a></td></tr>
-<tr id="s1-3"><td><a href="#r1-3">1.3</a></td><td>Filter</td><td>splits the rows in two: where [Status] ≠ "Cancelled" (T), and the rest (F)</td><td></td><td>T → <a href="#s1-4">1.4</a>; F → <a href="#s1-9">1.9</a></td></tr>
-</tbody></table>
-<details class="fold"><summary><b>1.1</b> Input Data #1 · converted, assuming A3 · <code>t1</code></summary><pre class="rule" id="r1-1"># columns: OrderID (V_String), OrderDate (V_String), Region (V_String), Product (V_String), Qty (V_String),
-# columns: UnitPrice (V_String), Status (V_String)
-# note: Read as: UTF-8.
-# pandas:
-src_orders = pd.read_csv(ORDERS_CSV, sep=',', encoding="utf-8-sig", dtype=str, keep_default_na=False).replace("", None)</pre></details>
-<details class="fold"><summary><b>1.2</b> Data Cleansing #2 · converted, assuming A1 · <code>t2</code></summary><pre class="rule" id="r1-2"># note: Options read from the macro's numbered check boxes: confirm them in the tool's settings.
-# pandas:
-cols = ["Region", "Product", "Status"]
-df[cols] = df[cols].apply(lambda s: s.str.strip())</pre></details>
-<details class="fold"><summary><b>1.3</b> Filter #3 · exact · <code>t3</code></summary><pre class="rule" id="r1-3">m = ~eq(df["Status"], 'Cancelled')
-s1_3_true, s1_3_false = df[m], df[~m]</pre></details>
-</div></details>
-<details class="d4" id="b1-2"><summary><span class="h4">Branch 1.2 — passes: [Status] ≠ "Cancelled" · steps 1.4–7</span></summary><div class="inner">
-<p><b>In:</b> <a href="#s1-3">1.3</a> (True).  <b>Out:</b> <a href="#s1-8">1.8</a>, <a href="#s2-1">2.1</a>.</p>
-<table><thead><tr><th>Step</th><th>Tool</th><th>What it does</th><th>New / changed columns</th><th>Next</th></tr></thead><tbody>
-<tr id="s1-4"><td><a href="#r1-4">1.4</a></td><td>Select</td><td>sets the type of [Qty], [UnitPrice]</td><td><b>Qty</b>, <b>UnitPrice</b></td><td><a href="#s1-5">1.5</a></td></tr>
-<tr id="s1-5"><td><a href="#r1-5">1.5</a></td><td>DateTime</td><td>adds column <b>Order Day</b> = [OrderDate] read as a date <code>dd/MM/yyyy</code></td><td><b>Order Day</b></td><td><a href="#s1-6">1.6</a></td></tr>
-<tr id="s1-6"><td><a href="#r1-6">1.6</a></td><td>Formula</td><td>fills column <b>Month</b> = DateTimeFormat([Order Day], "%Y-%m"); fills column <b>Gross</b> = [Qty] × [UnitPrice]; fills column <b>Discount</b> (see the rule) … (4 columns)</td><td><b>Month</b>, <b>Gross</b>, <b>Discount</b>, <b>Net</b></td><td><a href="#s1-7">1.7</a></td></tr>
-<tr id="s1-7"><td><a href="#r1-7">1.7</a></td><td>Unique</td><td>removes duplicate rows by [OrderID] (keeps the first)</td><td></td><td>U → <a href="#s2-1">2.1</a>; D → <a href="#s1-8">1.8</a></td></tr>
-</tbody></table>
-<details class="fold"><summary><b>1.4</b> Select #4 · exact · <code>t4</code></summary><pre class="rule" id="r1-4">change type: [Qty] to Int32, [UnitPrice] to Double
-# pandas:
-df = df.astype({"Qty": Int64, "UnitPrice": float})</pre></details>
-<div class="fold" id="r1-5"><b>1.5</b> DateTime #5 · converted, assuming A2 · <code>t5</code> · <code>df["Order Day"] = pd.to_datetime(df["OrderDate"], format="%d/%m/%Y", errors="coerce")</code></div>
-<details class="fold"><summary><b>1.6</b> Formula #6 · exact · <code>t6</code></summary><pre class="rule" id="r1-6">Month = DateTimeFormat([Order Day], "%Y-%m")
-Gross = [Qty] × [UnitPrice]
-Discount =
-    when [Gross] ≥ 10000                                       → 0.1
-    when [Gross] ≥ 5000 and [Region] is one of "North", "East" → 0.05
-    otherwise                                                  → 0
-Net = Round([Gross] × (1 - [Discount]), 0.01)
-# pandas:
-# df["Month"] = df.apply(x6_1, axis=1)  # generated code; no one-line form
-df["Gross"] = (df["Qty"] * df["UnitPrice"])
-df["Discount"] = np.select([(df["Gross"] &gt;= 10000), ((df["Gross"] &gt;= 5000) &amp; df["Region"].isin(['North', 'East']))], [0.1, 0.05], default=0)
-df["Net"] = (((df["Gross"] * (1 - df["Discount"])) / 0.01).round() * 0.01)</pre></details>
-<details class="fold"><summary><b>1.7</b> Unique #7 · converted, assuming A9 · <code>t7</code></summary><pre class="rule" id="r1-7">s1_7_unique = df.drop_duplicates(["OrderID"])
-s1_7_duplicates = df[df.duplicated(["OrderID"])]</pre></details>
-</div></details>
-<details class="d4" id="b1-3"><summary><span class="h4">Branch 1.3 — Write duplicate_orders.csv · steps 1.8</span></summary><div class="inner">
-<p><b>In:</b> <a href="#s1-7">1.7</a> (D: duplicates).  <b>Out:</b> — (ends here).</p>
-<table><thead><tr><th>Step</th><th>Tool</th><th>What it does</th><th>New / changed columns</th><th>Next</th></tr></thead><tbody>
-<tr id="s1-8"><td><a href="#r1-8">1.8</a></td><td>Output Data</td><td>saves the table to <code>duplicate_orders.csv</code></td><td></td><td>—</td></tr>
-</tbody></table>
-<div class="fold" id="r1-8"><b>1.8</b> Output Data #8 · converted, assuming A5 · <code>t8</code> · <code>s1_8 = df  # the rows this step saves; the notebook's last cell writes them to OUT</code></div>
-</div></details>
-<details class="d4" id="b1-4"><summary><span class="h4">Branch 1.4 — Summarize by [Region] · steps 1.9–10</span></summary><div class="inner">
-<p><b>In:</b> <a href="#s1-3">1.3</a> (False).  <b>Out:</b> — (ends here).</p>
-<table><thead><tr><th>Step</th><th>Tool</th><th>What it does</th><th>New / changed columns</th><th>Next</th></tr></thead><tbody>
-<tr id="s1-9"><td><a href="#r1-9">1.9</a></td><td>Summarize</td><td>groups the rows by [Region] and calculates <b>Cancelled orders</b> (like a pivot table)</td><td><b>Cancelled orders</b></td><td><a href="#s1-10">1.10</a></td></tr>
-<tr id="s1-10"><td><a href="#r1-10">1.10</a></td><td>Output Data</td><td>saves the table to <code>cancelled_by_region.csv</code></td><td></td><td>—</td></tr>
-</tbody></table>
-<details class="fold"><summary><b>1.9</b> Summarize #16 · converted, assuming A7 · <code>t16</code></summary><pre class="rule" id="r1-9">Cancelled orders = number of rows
-# pandas:
-df = df.groupby(["Region"], sort=True, dropna=False).agg(**{"Cancelled orders": ("OrderID", "size")}).reset_index()</pre></details>
-<div class="fold" id="r1-10"><b>1.10</b> Output Data #17 · converted, assuming A5 · <code>t17</code> · <code>s1_10 = df  # the rows this step saves; the notebook's last cell writes them to OUT</code></div>
-</div></details>
-<details class="d3" id="cols1"><summary><span class="h3">Columns created or changed in container 1 (13)</span></summary><div class="inner">
-<p>Each column this container creates or changes: the type Alteryx gives it, the steps that set it, how, and the later steps (anywhere in the workflow) that use a column of that name.</p>
-<table><thead><tr><th>Column</th><th>Type</th><th>Set at</th><th>How</th><th>Used later by</th></tr></thead><tbody>
-<tr><td><b>OrderID</b></td><td>V_String</td><td><a href="#s1-1">1.1</a></td><td>read from the file</td><td><a href="#s1-7">1.7</a>, <a href="#s1-9">1.9</a>, <a href="#s2-4">2.4</a></td></tr>
-<tr><td><b>OrderDate</b></td><td>V_String</td><td><a href="#s1-1">1.1</a></td><td>read from the file</td><td><a href="#s1-5">1.5</a></td></tr>
-<tr><td><b>Region</b></td><td>V_String</td><td><a href="#s1-1">1.1</a>, <a href="#s1-2">1.2</a></td><td>read from the file / cleaned: remove leading and trailing spaces</td><td><a href="#s1-2">1.2</a>, <a href="#s1-6">1.6</a>, <a href="#s1-9">1.9</a>, <a href="#s2-4">2.4</a>, <a href="#s2-5">2.5</a></td></tr>
-<tr><td><b>Product</b></td><td>V_String</td><td><a href="#s1-1">1.1</a>, <a href="#s1-2">1.2</a></td><td>read from the file / cleaned: remove leading and trailing spaces</td><td><a href="#s1-2">1.2</a>, <a href="#s2-1">2.1</a></td></tr>
-<tr><td><b>Qty</b></td><td>V_String, Int32</td><td><a href="#s1-1">1.1</a>, <a href="#s1-4">1.4</a></td><td>read from the file / type changed</td><td><a href="#s1-4">1.4</a>, <a href="#s1-6">1.6</a></td></tr>
-<tr><td><b>UnitPrice</b></td><td>V_String, Double</td><td><a href="#s1-1">1.1</a>, <a href="#s1-4">1.4</a></td><td>read from the file / type changed</td><td><a href="#s1-4">1.4</a>, <a href="#s1-6">1.6</a></td></tr>
-<tr><td><b>Status</b></td><td>V_String</td><td><a href="#s1-1">1.1</a>, <a href="#s1-2">1.2</a></td><td>read from the file / cleaned: remove leading and trailing spaces</td><td><a href="#s1-2">1.2</a>, <a href="#s1-3">1.3</a></td></tr>
-<tr><td><b>Order Day</b></td><td></td><td><a href="#s1-5">1.5</a></td><td>[OrderDate] read as a date (dd/MM/yyyy)</td><td><a href="#s1-6">1.6</a></td></tr>
-<tr><td><b>Month</b></td><td>V_WString</td><td><a href="#s1-6">1.6</a></td><td>DateTimeFormat([Order Day], "%Y-%m")</td><td><a href="#s2-4">2.4</a>, <a href="#s2-5">2.5</a></td></tr>
-<tr><td><b>Gross</b></td><td>Double</td><td><a href="#s1-6">1.6</a></td><td>[Qty] × [UnitPrice]</td><td>not read by a later step</td></tr>
-<tr><td><b>Discount</b></td><td>Double</td><td><a href="#s1-6">1.6</a></td><td>(when [Gross] ≥ 10000 → 0.1; when [Gross] ≥ 5000 and [Region] is one of "North", "East" → 0.05; otherwise 0)</td><td>not read by a later step</td></tr>
-<tr><td><b>Net</b></td><td>Double</td><td><a href="#s1-6">1.6</a></td><td>Round([Gross] × (1 - [Discount]), 0.01)</td><td><a href="#s2-4">2.4</a></td></tr>
-<tr><td><b>Cancelled orders</b></td><td></td><td><a href="#s1-9">1.9</a></td><td>number of rows</td><td>not read by a later step</td></tr>
-</tbody></table>
-</div></details>
-</div></details>
-<details class="d2" id="c2"><summary><span class="h2">2. Summarise — 7 tools, 3 branches</span></summary><div class="inner">
-<p><b>Files it opens and saves:</b></p>
-<table><thead><tr><th>Step</th><th></th><th>File</th><th>Sheet</th><th>Cells</th><th>Notes</th></tr></thead><tbody>
-<tr><td><a href="#s2-6">2.6</a></td><td>saves</td><td><code>Output\sales_summary.xlsx</code></td><td>Summary</td><td>all</td><td>replaces the sheet</td></tr>
-</tbody></table>
-<ul>
-<li><b>Fed by:</b> <a href="#c1">1. Prepare orders</a> (step <a href="#s1-7">1.7</a> → <a href="#s2-1">2.1</a>)
-</li>
-<li><b>Feeds:</b> no other container
-</li>
-</ul>
-<section class="stage">
-<h3>Branches</h3>
-<table><thead><tr><th>Branch</th><th>Label</th><th>Steps</th><th>In</th><th>Out</th></tr></thead><tbody>
-<tr><td><a href="#b2-1">2.1</a></td><td>Join on [Product]</td><td>2.1</td><td><a href="#s1-7">1.7</a> (U: first of each), a typed table ([Product], [Category]; 3 rows)</td><td><a href="#s2-2">2.2</a>, <a href="#s2-3">2.3</a></td></tr>
-<tr><td><a href="#b2-2">2.2</a></td><td>Formula</td><td>2.2</td><td><a href="#s2-1">2.1</a> (L: left only)</td><td><a href="#s2-3">2.3</a></td></tr>
-<tr><td><a href="#b2-3">2.3</a></td><td>Union of 2 inputs</td><td>2.3–6</td><td><a href="#s2-1">2.1</a> (J: matched), <a href="#s2-2">2.2</a></td><td>—</td></tr>
-</tbody></table>
-<div class="diagram"><svg xmlns="http://www.w3.org/2000/svg" width="282" height="280" font-family="Segoe UI,Roboto,sans-serif">
-<defs><marker id="ah" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#8c959f"/></marker></defs>
-<path d="M141,58 C141,81 141,81 141,102" fill="none" stroke="#8c959f" stroke-width="1.2" marker-end="url(#ah)"/>
-<path d="M141,58 C141,125 141,125 141,190" fill="none" stroke="#8c959f" stroke-width="1.2" marker-end="url(#ah)"/>
-<path d="M141,146 C141,169 141,169 141,190" fill="none" stroke="#8c959f" stroke-width="1.2" marker-end="url(#ah)"/>
-<a href="#b2-1"><rect x="26" y="16" width="230" height="42" rx="7" fill="#e3eefb" stroke="#8c959f"/><text x="34" y="33" font-size="12.5" font-weight="600" fill="#1f2328">Branch 2.1</text><text x="34" y="49" font-size="11.5" fill="#424a53">Join on [Product]</text><title>Branch 2.1 — Join on [Product]</title></a>
-<a href="#b2-2"><rect x="26" y="104" width="230" height="42" rx="7" fill="#e3eefb" stroke="#8c959f"/><text x="34" y="121" font-size="12.5" font-weight="600" fill="#1f2328">Branch 2.2</text><text x="34" y="137" font-size="11.5" fill="#424a53">Formula</text><title>Branch 2.2 — Formula</title></a>
-<a href="#b2-3"><rect x="26" y="192" width="230" height="42" rx="7" fill="#fde8d7" stroke="#8c959f"/><text x="34" y="209" font-size="12.5" font-weight="600" fill="#1f2328">Branch 2.3</text><text x="34" y="225" font-size="11.5" fill="#424a53">Union of 2 inputs</text><title>Branch 2.3 — Union of 2 inputs</title></a>
-</svg></div>
-</section>
-<details class="d4" id="b2-1"><summary><span class="h4">Branch 2.1 — Join on [Product] · steps 2.1</span></summary><div class="inner">
-<p><b>In:</b> <a href="#s1-7">1.7</a> (U: first of each), a typed table ([Product], [Category]; 3 rows).  <b>Out:</b> <a href="#s2-2">2.2</a>, <a href="#s2-3">2.3</a>.</p>
-<table><thead><tr><th>Step</th><th>Tool</th><th>What it does</th><th>New / changed columns</th><th>Next</th></tr></thead><tbody>
-<tr id="s2-1"><td><a href="#r2-1">2.1</a></td><td>Join</td><td>matches its rows with a typed table ([Product], [Category]; 3 rows) on [Product]</td><td></td><td>J → <a href="#s2-3">2.3</a>; L → <a href="#s2-2">2.2</a>; R dropped</td></tr>
-</tbody></table>
-<details class="fold"><summary><b>2.1</b> Join #10 · converted, assuming A4 · <code>t10</code></summary><pre class="rule" id="r2-1">keys: left [Product] = right [Product]
-drop Right_Product
-# pandas:
-right = src_typed_product_category.rename(columns=lambda c: "Right_" + c if c in df.columns else c)  # as Alteryx: only clashing names get Right_
-m = df.merge(right, how="outer", left_on=["Product"], right_on=[c if c in right.columns else "Right_" + c for c in ["Product"]], indicator=True)
-m = m.drop(columns=["Right_Product"], errors="ignore")
-s2_1_join = m[m["_merge"] == "both"].drop(columns="_merge")
-s2_1_left = m[m["_merge"] == "left_only"][[c for c in df.columns if c in m.columns]]</pre></details>
-</div></details>
-<details class="d4" id="b2-2"><summary><span class="h4">Branch 2.2 — Formula · steps 2.2</span></summary><div class="inner">
-<p><b>In:</b> <a href="#s2-1">2.1</a> (L: left only).  <b>Out:</b> <a href="#s2-3">2.3</a>.</p>
-<table><thead><tr><th>Step</th><th>Tool</th><th>What it does</th><th>New / changed columns</th><th>Next</th></tr></thead><tbody>
-<tr id="s2-2"><td><a href="#r2-2">2.2</a></td><td>Formula</td><td>fills column <b>Category</b> = "Unknown"</td><td><b>Category</b></td><td><a href="#s2-3">2.3</a></td></tr>
-</tbody></table>
-<details class="fold"><summary><b>2.2</b> Formula #11 · exact · <code>t11</code></summary><pre class="rule" id="r2-2">Category = "Unknown"
-# pandas:
-df["Category"] = 'Unknown'</pre></details>
-</div></details>
-<details class="d4" id="b2-3"><summary><span class="h4">Branch 2.3 — Union of 2 inputs · steps 2.3–6</span></summary><div class="inner">
-<p><b>In:</b> <a href="#s2-1">2.1</a> (J: matched), <a href="#s2-2">2.2</a>.  <b>Out:</b> — (ends here).</p>
-<table><thead><tr><th>Step</th><th>Tool</th><th>What it does</th><th>New / changed columns</th><th>Next</th></tr></thead><tbody>
-<tr id="s2-3"><td><a href="#r2-3">2.3</a></td><td>Union</td><td>stacks the tables <a href="#s2-1">2.1</a> (J: matched), <a href="#s2-2">2.2</a> (columns matched by name)</td><td></td><td><a href="#s2-4">2.4</a></td></tr>
-<tr id="s2-4"><td><a href="#r2-4">2.4</a></td><td>Summarize</td><td>groups the rows by [Region], [Month], [Category] and calculates <b>Net sales</b>, <b>Orders</b> (like a pivot table)</td><td><b>Net sales</b>, <b>Orders</b></td><td><a href="#s2-5">2.5</a></td></tr>
-<tr id="s2-5"><td><a href="#r2-5">2.5</a></td><td>Sort</td><td>sorts by [Region] A→Z, [Month] A→Z</td><td></td><td><a href="#s2-6">2.6</a></td></tr>
-<tr id="s2-6"><td><a href="#r2-6">2.6</a></td><td>Output Data</td><td>saves the table to <code>sales_summary.xlsx</code>, sheet <code>Summary</code> (replaces the sheet)</td><td></td><td>—</td></tr>
-</tbody></table>
-<div class="fold" id="r2-3"><b>2.3</b> Union #12 · converted, assuming A8 · <code>t12</code> · <code>df = pd.concat([s2_1_join, s2_2], ignore_index=True)</code></div>
-<details class="fold"><summary><b>2.4</b> Summarize #13 · converted, assuming A7 · <code>t13</code></summary><pre class="rule" id="r2-4">Net sales = sum of [Net]
-Orders = number of different [OrderID]
-# pandas:
-df = df.groupby(["Region", "Month", "Category"], sort=True, dropna=False).agg(**{"Net sales": ("Net", "sum"), "Orders": ("OrderID", "nunique")}).reset_index()</pre></details>
-<div class="fold" id="r2-5"><b>2.5</b> Sort #14 · converted, assuming A6 · <code>t14</code> · <code>df = df.sort_values(["Region", "Month"], ascending=[True, True], kind="stable", na_position="first")</code></div>
-<div class="fold" id="r2-6"><b>2.6</b> Output Data #15 · converted, assuming A5 · <code>t15</code> · <code>s2_6 = df  # the rows this step saves; the notebook's last cell writes them to OUT</code></div>
-</div></details>
-<details class="d3" id="cols2"><summary><span class="h3">Columns created or changed in container 2 (4)</span></summary><div class="inner">
-<p>Each column this container creates or changes: the type Alteryx gives it, the steps that set it, how, and the later steps (anywhere in the workflow) that use a column of that name.</p>
-<table><thead><tr><th>Column</th><th>Type</th><th>Set at</th><th>How</th><th>Used later by</th></tr></thead><tbody>
-<tr><td><b>Product</b></td><td></td><td>a typed table ([Product], [Category]; 3 rows)</td><td>typed in the workflow</td><td><a href="#s2-1">2.1</a></td></tr>
-<tr><td><b>Category</b></td><td>V_WString</td><td>a typed table ([Product], [Category]; 3 rows), <a href="#s2-2">2.2</a></td><td>typed in the workflow / "Unknown"</td><td><a href="#s2-4">2.4</a></td></tr>
-<tr><td><b>Net sales</b></td><td></td><td><a href="#s2-4">2.4</a></td><td>sum of [Net]</td><td>not read by a later step</td></tr>
-<tr><td><b>Orders</b></td><td></td><td><a href="#s2-4">2.4</a></td><td>number of different [OrderID]</td><td>not read by a later step</td></tr>
-</tbody></table>
-</div></details>
-</div></details>
-<h2 id="check">Before relying on this</h2>
+<details class="d2" id="check"><summary><span class="h2">Before relying on this</span></summary><div class="inner">
 <ul>
 <li><b>Alteryx behaviours the Python assumes</b> (steps refer to them as A1, A2…; settle them once with the probe workflow):
 <ul>
@@ -327,4 +270,52 @@ df = df.groupby(["Region", "Month", "Category"], sort=True, dropna=False).agg(**
 </ul>
 </li>
 </ul>
+</div></details>
+<details class="d3" id="cols1"><summary><span class="h3">Columns created or changed in container 1: 13</span></summary><div class="inner">
+<p>Each column this container creates or changes: the type Alteryx gives it, the steps that set it, how, and the later steps (anywhere in the workflow) that use a column of that name.</p>
+<table><thead><tr><th>Column</th><th>Type</th><th>Set at</th><th>How</th><th>Used later by</th></tr></thead><tbody>
+<tr><td><b>OrderID</b></td><td>V_String</td><td><a href="#s1-1">1.1</a></td><td>read from the file</td><td><a href="#s1-7">1.7</a>, <a href="#s1-9">1.9</a>, <a href="#s2-4">2.4</a></td></tr>
+<tr><td><b>OrderDate</b></td><td>V_String</td><td><a href="#s1-1">1.1</a></td><td>read from the file</td><td><a href="#s1-5">1.5</a></td></tr>
+<tr><td><b>Region</b></td><td>V_String</td><td><a href="#s1-1">1.1</a>, <a href="#s1-2">1.2</a></td><td>read from the file / cleaned: remove leading and trailing spaces</td><td><a href="#s1-2">1.2</a>, <a href="#s1-6">1.6</a>, <a href="#s1-9">1.9</a>, <a href="#s2-4">2.4</a>, <a href="#s2-5">2.5</a></td></tr>
+<tr><td><b>Product</b></td><td>V_String</td><td><a href="#s1-1">1.1</a>, <a href="#s1-2">1.2</a></td><td>read from the file / cleaned: remove leading and trailing spaces</td><td><a href="#s1-2">1.2</a>, <a href="#s2-1">2.1</a></td></tr>
+<tr><td><b>Qty</b></td><td>V_String, Int32</td><td><a href="#s1-1">1.1</a>, <a href="#s1-4">1.4</a></td><td>read from the file / type changed</td><td><a href="#s1-4">1.4</a>, <a href="#s1-6">1.6</a></td></tr>
+<tr><td><b>UnitPrice</b></td><td>V_String, Double</td><td><a href="#s1-1">1.1</a>, <a href="#s1-4">1.4</a></td><td>read from the file / type changed</td><td><a href="#s1-4">1.4</a>, <a href="#s1-6">1.6</a></td></tr>
+<tr><td><b>Status</b></td><td>V_String</td><td><a href="#s1-1">1.1</a>, <a href="#s1-2">1.2</a></td><td>read from the file / cleaned: remove leading and trailing spaces</td><td><a href="#s1-2">1.2</a>, <a href="#s1-3">1.3</a></td></tr>
+<tr><td><b>Order Day</b></td><td></td><td><a href="#s1-5">1.5</a></td><td><span class="col">OrderDate</span> read as a date (dd/MM/yyyy)</td><td><a href="#s1-6">1.6</a></td></tr>
+<tr><td><b>Month</b></td><td>V_WString</td><td><a href="#s1-6">1.6</a></td><td>DateTimeFormat(<span class="col">Order Day</span>, "%Y-%m")</td><td><a href="#s2-4">2.4</a>, <a href="#s2-5">2.5</a></td></tr>
+<tr><td><b>Gross</b></td><td>Double</td><td><a href="#s1-6">1.6</a></td><td><span class="col">Qty</span> × <span class="col">UnitPrice</span></td><td>not read by a later step</td></tr>
+<tr><td><b>Discount</b></td><td>Double</td><td><a href="#s1-6">1.6</a></td><td>(when <span class="col">Gross</span> ≥ 10000 → 0.1; when <span class="col">Gross</span> ≥ 5000 and <span class="col">Region</span> is one of "North", "East" → 0.05; otherwise 0)</td><td>not read by a later step</td></tr>
+<tr><td><b>Net</b></td><td>Double</td><td><a href="#s1-6">1.6</a></td><td>Round(<span class="col">Gross</span> × (1 - <span class="col">Discount</span>), 0.01)</td><td><a href="#s2-4">2.4</a></td></tr>
+<tr><td><b>Cancelled orders</b></td><td></td><td><a href="#s1-9">1.9</a></td><td>number of rows</td><td>not read by a later step</td></tr>
+</tbody></table>
+</div></details>
+<details class="d3" id="cols2"><summary><span class="h3">Columns created or changed in container 2: 4</span></summary><div class="inner">
+<p>Each column this container creates or changes: the type Alteryx gives it, the steps that set it, how, and the later steps (anywhere in the workflow) that use a column of that name.</p>
+<table><thead><tr><th>Column</th><th>Type</th><th>Set at</th><th>How</th><th>Used later by</th></tr></thead><tbody>
+<tr><td><b>Product</b></td><td></td><td>a typed table (<span class="col">Product</span>, <span class="col">Category</span>; 3 rows)</td><td>typed in the workflow</td><td><a href="#s2-1">2.1</a></td></tr>
+<tr><td><b>Category</b></td><td>V_WString</td><td>a typed table (<span class="col">Product</span>, <span class="col">Category</span>; 3 rows), <a href="#s2-2">2.2</a></td><td>typed in the workflow / "Unknown"</td><td><a href="#s2-4">2.4</a></td></tr>
+<tr><td><b>Net sales</b></td><td></td><td><a href="#s2-4">2.4</a></td><td>sum of <span class="col">Net</span></td><td>not read by a later step</td></tr>
+<tr><td><b>Orders</b></td><td></td><td><a href="#s2-4">2.4</a></td><td>number of different <span class="col">OrderID</span></td><td>not read by a later step</td></tr>
+</tbody></table>
+</div></details>
+<details class="d3" id="index"><summary><span class="h3">Every step by number: 16</span></summary><div class="inner">
+<table><thead><tr><th>Step</th><th>Tool</th><th>Told in</th><th>Tool ID</th></tr></thead><tbody>
+<tr><td><a href="#s1-1">1.1</a></td><td>Input Data</td><td><a href="#w3">Table A</a></td><td>#1</td></tr>
+<tr><td><a href="#s1-2">1.2</a></td><td>Data Cleansing</td><td><a href="#w3">Table A</a></td><td>#2</td></tr>
+<tr><td><a href="#s1-3">1.3</a></td><td>Filter</td><td><a href="#w3">Table A</a></td><td>#3</td></tr>
+<tr><td><a href="#s1-4">1.4</a></td><td>Select</td><td><a href="#w7">Table B</a></td><td>#4</td></tr>
+<tr><td><a href="#s1-5">1.5</a></td><td>DateTime</td><td><a href="#w7">Table B</a></td><td>#5</td></tr>
+<tr><td><a href="#s1-6">1.6</a></td><td>Formula</td><td><a href="#w7">Table B</a></td><td>#6</td></tr>
+<tr><td><a href="#s1-7">1.7</a></td><td>Unique</td><td><a href="#w7">Table B</a></td><td>#7</td></tr>
+<tr><td><a href="#s1-8">1.8</a></td><td>Output Data</td><td><a href="#o8">duplicate_orders.csv</a></td><td>#8</td></tr>
+<tr><td><a href="#s1-9">1.9</a></td><td>Summarize</td><td><a href="#o17">cancelled_by_region.csv</a></td><td>#16</td></tr>
+<tr><td><a href="#s1-10">1.10</a></td><td>Output Data</td><td><a href="#o17">cancelled_by_region.csv</a></td><td>#17</td></tr>
+<tr><td><a href="#s2-1">2.1</a></td><td>Join</td><td><a href="#o15">sales_summary.xlsx › Summary</a></td><td>#10</td></tr>
+<tr><td><a href="#s2-2">2.2</a></td><td>Formula</td><td><a href="#o15">sales_summary.xlsx › Summary</a></td><td>#11</td></tr>
+<tr><td><a href="#s2-3">2.3</a></td><td>Union</td><td><a href="#o15">sales_summary.xlsx › Summary</a></td><td>#12</td></tr>
+<tr><td><a href="#s2-4">2.4</a></td><td>Summarize</td><td><a href="#o15">sales_summary.xlsx › Summary</a></td><td>#13</td></tr>
+<tr><td><a href="#s2-5">2.5</a></td><td>Sort</td><td><a href="#o15">sales_summary.xlsx › Summary</a></td><td>#14</td></tr>
+<tr><td><a href="#s2-6">2.6</a></td><td>Output Data</td><td><a href="#o15">sales_summary.xlsx › Summary</a></td><td>#15</td></tr>
+</tbody></table>
+</div></details>
 </main></body></html>
