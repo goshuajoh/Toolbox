@@ -31,7 +31,7 @@ The pandas lines use two helpers, because Alteryx compares text ignoring case an
 
 ## Summary
 
-- 2 containers, 17 tools that run, 7 branches.
+- 2 containers, 17 tools, 7 branches.
 - **Python:** 5 steps convert exactly, 12 with a stated assumption, 0 are not converted.
 - **Before relying on it:** see the last section.
 

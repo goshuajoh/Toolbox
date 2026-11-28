@@ -1167,12 +1167,43 @@ def dynamic_input(df, template_spec, options, field, mode="FullPath", recorded_t
     if tool_id is not None and tool_id in _CTX.inputs:
         src = _CTX.inputs[tool_id]
         return from_pandas(src) if isinstance(src, pd.DataFrame) else read_file(src, options, recorded_types)
-    if mode != "FullPath":
-        raise NotConverted("Dynamic Input mode %r is not supported" % mode)
-    parts = [read_file(r[field], options, recorded_types) for r in rows_of(df) if not is_empty(r[field])]
+    parts = [read_file(listed_spec(template_spec, str(r[field]), mode), options, recorded_types)
+             for r in rows_of(df) if not is_empty(r[field])]
     if not parts:
         return frame(list(recorded_types or {}), [], recorded_types)
     return union(*parts)
+
+
+def listed_spec(template_spec, value, mode="path"):
+    """The file one row of a Dynamic Input names. mode: "path" (the value is the whole path, maybe with |||sheet),
+    "name" (a file name in the template's folder), "prefix" / "suffix" (added to the template's file name).
+    The template's sheet or range is kept unless the value brings its own."""
+    tpl, _, sheet = str(template_spec).partition("|||")
+    value, _, own = value.partition("|||")
+    sheet = own or sheet
+    m = re.match(r"^(.*[\\/])?([^\\/]*)$", tpl.strip())
+    folder, name = m.group(1) or "", m.group(2)
+    stem, ext = os.path.splitext(name)
+    mode = {"FullPath": "path"}.get(mode, mode)
+    if mode == "path":
+        path = value
+    elif mode == "name":
+        path = folder + value
+    elif mode == "prefix":
+        path = folder + value + name
+    elif mode == "suffix":
+        path = folder + stem + value + ext
+    else:
+        raise NotConverted("Dynamic Input mode %r is not supported" % mode)
+    return path + ("|||" + sheet if sheet else "")
+
+
+def external(tool_id, command, args="", *inputs):
+    """Run Command: Alteryx starts an outside program here. It is not run: the step is logged and its first input
+    passed on, so the rest of the container still runs. Replace it with the program's work, written by hand."""
+    _CTX.log.append("#%s external program not run: %s %s" % (tool_id, command, args))
+    _CTX.external = getattr(_CTX, "external", []) + [(tool_id, command, args)]
+    return inputs[0] if inputs else frame([], [])
 
 
 def text_input(columns, rows, types=None, tool_id=None):
@@ -1787,21 +1818,26 @@ def _shape(out):
     return type(out).__name__
 
 
-def run_steps(steps, ctx=None, only=None, s=None, keep_going=False, report=False, links=None, containers=None):
+def run_steps(steps, ctx=None, only=None, s=None, keep_going=False, report=False, links=None, containers=None,
+              disabled=(), off=()):
     """Run generated steps in order. steps: [(tool id, container no., step no., tool, source tool ids, call)].
     only: a container's number or name: its steps, plus any step they need that s does not hold yet.
     keep_going: a step that fails is recorded in ctx.errors, the steps that need it are skipped, the rest run.
-    links: {input tool id: output tool id}: the Input reads what that Output got in this run."""
+    links: {input tool id: output tool id}: the Input reads what that Output got in this run.
+    disabled: containers disabled in the saved workflow: left out unless only names one.
+    off: tools in a disabled container nested inside another: always left out. A Union runs on the inputs left."""
     ctx = use(ctx)
     s = {} if s is None else s
     containers = containers or {}
     key = _container_key(only, containers)
     by_id = {st[0]: st for st in steps}
-    need = {st[0] for st in steps if key is None or st[1] == key}
+    skip = set() if key is not None else set(disabled)
+    off = set(off)
+    need = {st[0] for st in steps if ((key is None and st[1] not in skip) or st[1] == key) and st[0] not in off}
     todo = list(need)
     while todo:
         for d in by_id[todo.pop()][4]:
-            if d not in need and d not in s:
+            if d not in need and d not in s and by_id[d][1] not in skip and d not in off:
                 need.add(d)
                 todo.append(d)
     if report and key is not None:
@@ -1813,11 +1849,13 @@ def run_steps(steps, ctx=None, only=None, s=None, keep_going=False, report=False
         where = "" if key is None or c == key else "   (from container %d, needed here)" % c
         line = "  %-7s %-22s #%-6s " % (step, tool[:22], tid)
         missing = [d for d in deps if d not in s]
+        if missing and tool == "Union" and len(missing) < len(deps) and all(d in off or by_id[d][1] in skip for d in missing):
+            missing = []                              # Alteryx stacks the inputs that are on
         if missing:
             m = by_id[missing[0]]
             ctx.errors[tid] = "skipped: needs step %s (%s), which %s" % (
                 m[2], m[3], ("was skipped" if ctx.errors[m[0]].startswith("skipped") else "failed") if m[0] in ctx.errors
-                else "has not run")
+                else "is in container %d, disabled in the saved workflow" % m[1] if m[1] in skip else "has not run")
             s.pop(tid, None)
             counts["skipped"] += 1
             if report:
@@ -1848,6 +1886,8 @@ def run_steps(steps, ctx=None, only=None, s=None, keep_going=False, report=False
             note = " (rows of step %s's output)" % by_id[linked][2] if injected else ""
             if tool == "Output Data" and not ctx.write:
                 note += " (kept in memory, no file written)"
+            if tool == "Run Command":
+                note += " (external program NOT run: replace it by hand)"
             print(line + _shape(out) + note + where)
     if report:
         print("  -- %d ran, %d failed, %d skipped" % (counts["ran"], counts["failed"], counts["skipped"]))

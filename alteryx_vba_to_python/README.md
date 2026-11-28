@@ -49,6 +49,8 @@ Options:
 - `--runner-notebook`: also write `workflow_test.ipynb`, which runs the generated code container by container on your files (see [Running the generated code container by container](#running-the-generated-code-container-by-container)).
 - `--tool-listing`: also write `workflow_tools.txt`, every tool with every setting in flow order, for tracing a single tool.
 - `--name NAME`: prefix of the output files.
+- `--enabled-only`: leave out containers that are disabled in the saved file. By default they are documented and converted like the others: teams often run one container at a time by disabling the rest before saving.
+- `--diagnose REPORT.txt`: also write a short structure-only report: tool kinds, containers (enabled or disabled, size, nesting), anchors, loops, dropped ordering preferences, and every error the converter met. It contains no rules, file names, field names, captions or notes, so it can be shared when the workflow cannot.
 - `--and-before-or`: see probe item P08.
 
 ### How the guide is organised
@@ -83,6 +85,14 @@ Options:
    - the Alteryx behaviours the Python assumes, numbered A1, A2…
 
 About the pandas lines: `df` is the table flowing through the branch; other tables are named after the step that made them (`s2_7`, or `s2_7_true` for a True output); `src_…` is a file as the notebook's Load cell reads it, and `FOLDER` the workflow's folder. They are written to be pasted into the notebook, where every name they use exists. Where an expression has no honest pandas form (a `\G` regex, `FindString`, a multi-row reference), the line is a comment naming the generated function instead. The tests check that the one-liners compute what the converter's runtime computes for the common expressions, and that the notebook runs top to bottom with every line pasted in.
+
+### What the guide does with awkward workflows
+
+- **Containers disabled in the saved file** are documented and converted in full, with a "disabled in the saved file" badge; the summary counts them. The generated `run(ctx)` skips them, as Alteryx does, and `run(ctx, only=3)` runs one. In both notebooks they come in a last section, after Save and compare.
+- **Run order** follows the connections. Block Until Done only decides which ready branch goes first. A Block Until Done preference that the connections contradict is dropped and listed ("could not honour: step 1.123 before step 1.120"). It never shows up as a loop. Only a real loop in the connections is reported as one, with its connections.
+- **Dynamic Input** "read a list of data sources" is described and converted for each way the listed value is used: the whole path, a file name in the template's folder, or a prefix or suffix on the template's file name. The template's sheet is kept. Any other mode is described and marked not converted.
+- **Run Command** is described as a step ("runs `ImportAll.vbs` outside Alteryx: write this step by hand"), with its program, arguments, folder and the files named in its settings. In the generated code it only logs and passes its rows on, so the container keeps running. The last section and the command line list these steps once.
+- **If the converter fails on a step**, the step is still listed with its tool, what it does, and its settings from the file. The last section names the error and where it came from.
 
 ### Long and deeply nested rules
 
@@ -240,7 +250,7 @@ print(app.log)
 | `logicdoc.py` | Writes the documents (Markdown, HTML with folding sections, diagrams) | yes |
 | `examples/` | Two workflows and a macro, with their documents, and a pandas notebook template | no |
 | `probe/` | The workflow that checks the assumed Alteryx behaviours | once |
-| `tests/`, `run_tests.py` | 99 tests on synthetic input | optional |
+| `tests/`, `run_tests.py` | 108 tests on synthetic input | optional |
 | `REPORT.md` | Feasibility report | no |
 
 The tools use the standard library only (written and tested on Python 3.12). The code they generate needs pandas (Alteryx side) and openpyxl (VBA side, and Excel files on the Alteryx side).
@@ -251,4 +261,4 @@ The tools use the standard library only (written and tested on Python 3.12). The
 python run_tests.py
 ```
 
-99 tests, about 6 seconds. They need pandas and openpyxl, and no real data. `python examples/make_examples.py` and `python probe/make_probe.py` re-create the example and probe files; the tests check that they are current.
+108 tests, about 6 seconds. They need pandas and openpyxl, and no real data. `python examples/make_examples.py` and `python probe/make_probe.py` re-create the example and probe files; the tests check that they are current.

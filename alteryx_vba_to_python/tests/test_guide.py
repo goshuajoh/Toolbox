@@ -38,12 +38,15 @@ class DatasetAudit(unittest.TestCase):
         md = self.md
         self.assertTrue("| 1. Import and consolidate | yes | 4 | 1 | datasets_export.csv | Consolidated Datasets.xlsx · sheet "
                         "**Datasets** | — | 2. Dataset audit |" in md)
-        self.assertTrue("| 3. Old checks | no (disabled) | 0 | 0 |" in md)
+        self.assertTrue("| 3. Old checks | no: disabled in the saved file (documented anyway) | 2 | 1 | old_rules.csv | — | — | — |"
+                        in md)
+        self.assertTrue("3 containers, 1 disabled in the saved file (documented anyway), 34 tools" in md)
         self.assertTrue("| 1.4 | saves | `Output\\Consolidated Datasets.xlsx` | Datasets | all | replaces the sheet |" in md)
         self.assertTrue("| 2.6 | opens each file listed in [Source], like | `Output\\template.xlsx` | Datasets | all |  |" in md)
         self.assertTrue("- **Fed by:** 1. Import and consolidate (file `Output\\Consolidated Datasets.xlsx`)" in md)
         self.assertTrue("- **Containers inside:** Checks" in md)
-        self.assertTrue("Disabled in the workflow: its 2 tools do not run" in md)
+        self.assertTrue("- **Disabled in the saved file.** Alteryx skips this container until someone enables it" in md)
+        self.assertTrue("| 3.2 | Formula | fills column **Old** = 1 | **Old** |" in md)        # documented all the same
 
     def test_branches_follow_the_flow_and_carry_annotations(self):
         heads = re.findall(r"^#### Branch (\S+) — ([^·]+) ·", self.md, re.M)
@@ -58,7 +61,7 @@ class DatasetAudit(unittest.TestCase):
         tables = re.findall(r"^\| Step \| Tool \| What it does \| New / changed columns \| Next \|\n\|.*\n((?:\|.*\n)+)", md, re.M)
         steps = [re.fullmatch(r"\| (\S+) \| (.*?) \| (.*?) \| (.*?) \| (.*?) \|", line).groups()
                  for t in tables for line in t.splitlines()]
-        self.assertEqual(len(steps), 4 + 27)                     # every step once; the typed table is read inside 2.15
+        self.assertEqual(len(steps), 4 + 27 + 2)        # every step once (the typed table is read inside 2.15)
         by = {r[0]: r[1:] for r in steps}
         self.assertEqual(by["1.1"], ("Input Data", "opens `datasets_export.csv`", "9 columns", "1.2"))
         self.assertEqual(by["2.16"], ("Filter “Data Quality”", "keeps only the rows where [DQScore] < 0.8", "", "T → 2.17; F dropped"))

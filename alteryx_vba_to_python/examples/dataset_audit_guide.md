@@ -31,8 +31,8 @@ The pandas lines use two helpers, because Alteryx compares text ignoring case an
 
 ## Summary
 
-- 3 containers, 32 tools that run, 9 branches.
-- **Python:** 18 steps convert exactly, 13 with a stated assumption, 1 are not converted.
+- 3 containers, 1 disabled in the saved file (documented anyway), 34 tools, 10 branches.
+- **Python:** 19 steps convert exactly, 14 with a stated assumption, 1 are not converted.
 - **Before relying on it:** see the last section.
 
 ## Contents
@@ -49,7 +49,8 @@ The pandas lines use two helpers, because Alteryx compares text ignoring case an
     - Branch 2.6 — Virtualizable
     - Branch 2.7 — Read/Write
   - Branch 2.8 — All issues
-- 3. Old checks (disabled)
+- 3. Old checks (disabled in the saved file)
+  - Branch 3.1 — Read old_rules.csv
 
 ## Containers
 
@@ -57,7 +58,7 @@ The pandas lines use two helpers, because Alteryx compares text ignoring case an
 |---|---|---|---|---|---|---|---|
 | 1. Import and consolidate | yes | 4 | 1 | datasets_export.csv | Consolidated Datasets.xlsx · sheet **Datasets** | — | 2. Dataset audit |
 | 2. Dataset audit | yes | 28 | 8 | folder Output (\*.xlsx), files named in [Source] | Dataset audit.xlsx · sheet **Issues** | 1. Import and consolidate | — |
-| 3. Old checks | no (disabled) | 0 | 0 | — | — | — | — |
+| 3. Old checks | no: disabled in the saved file (documented anyway) | 2 | 1 | old_rules.csv | — | — | — |
 
 ## 1. Import and consolidate — 4 tools, 1 branch
 
@@ -167,7 +168,7 @@ Each column this container creates or changes: the type Alteryx gives it, the st
 | 2.3 | Sort | sorts by [CreationTime] Z→A |  | 2.4 |
 | 2.4 | Sample | keeps the first row |  | 2.5 |
 | 2.5 | Formula | fills column **Source** = [FullPath] + "\|\|\|Datasets" | **Source** | 2.6 |
-| 2.6 | Dynamic Input | opens every file listed in [Source] (each like `template.xlsx`, sheet `Datasets`) and stacks them | 9 columns | 2.7, 2.10, 2.13, 2.16, 2.19, 2.22 |
+| 2.6 | Dynamic Input | opens every file listed in column [Source] (the column holds the whole path; sheet as in the template `template.xlsx`, sheet `Datasets`), and stacks them | 9 columns | 2.7, 2.10, 2.13, 2.16, 2.19, 2.22 |
 
 - **2.1** Directory #30 · converted, assuming A2 · `t30`
 
@@ -198,7 +199,7 @@ Each column this container creates or changes: the type Alteryx gives it, the st
       # columns: Name (V_String), Owner (V_String), CreationMode (V_String), Scenario (V_String), Tags (V_String),
       # columns: DQScore (Double), Virtualizable (V_String), SizeGB (Double), Access (V_String)
       # pandas:
-      files = [pd.read_excel(os.path.join(FOLDER, p.split("|||")[0].replace("\\", os.sep)), sheet_name="Datasets") for p in df["Source"]]
+      files = [pd.read_excel(os.path.join(FOLDER, p.split("|||")[0].replace("\\", os.sep)), sheet_name="Datasets") for p in df["Source"].dropna()]
       df = pd.concat(files or [pd.read_excel(os.path.join(FOLDER, "Output", "template.xlsx"), sheet_name="Datasets", nrows=0)], ignore_index=True)  # no file listed: the template's columns, no rows
 
 ### Inside Checks
@@ -386,9 +387,50 @@ Each column this container creates or changes: the type Alteryx gives it, the st
 | **Team** |  | a typed table ([Owner], [Team]; 2 rows) | typed in the workflow | not read by a later step |
 | **Audit Date** | Date | 2.26 | DateTimeToday() | not read by a later step |
 
-## 3. Old checks — disabled
+## 3. Old checks — disabled in the saved file — 2 tools, 1 branch
 
-Disabled in the workflow: its 2 tools do not run, and are not described here. Kinds: Input 1, Formula 1.
+**Files it opens and saves:**
+
+| Step |  | File | Sheet | Cells | Notes |
+|---|---|---|---|---|---|
+| 3.1 | opens | `Input\old_rules.csv` | — | all |  |
+
+- **Disabled in the saved file.** Alteryx skips this container until someone enables it (teams often run one container at a time this way). It is documented and converted like the others; in the generated code run it with `only=3`.
+- **Fed by:** nothing from other containers
+- **Feeds:** no other container
+
+### Branches
+
+| Branch | Label | Steps | In | Out |
+|---|---|---|---|---|
+| 3.1 | Read old_rules.csv | 3.1–2 | — | — |
+
+#### Branch 3.1 — Read old_rules.csv · steps 3.1–2
+
+**In:** — (starts here).  **Out:** — (ends here).
+
+| Step | Tool | What it does | New / changed columns | Next |
+|---|---|---|---|---|
+| 3.1 | Input Data | opens `old_rules.csv` |  | 3.2 |
+| 3.2 | Formula | fills column **Old** = 1 | **Old** | ends (rows dropped) |
+
+- **3.1** Input Data #100 · converted, assuming A4; note: the workflow holds no recorded field types for this input · `t100`
+
+      src_old_rules = pd.read_csv(OLD_RULES_CSV, sep=',', dtype=str, keep_default_na=False).replace("", None)
+
+- **3.2** Formula #101 · exact · `t101`
+
+      Old = 1
+      # pandas:
+      df["Old"] = 1
+
+### Columns created or changed in container 3 (1)
+
+Each column this container creates or changes: the type Alteryx gives it, the steps that set it, how, and the later steps (anywhere in the workflow) that use a column of that name.
+
+| Column | Type | Set at | How | Used later by |
+|---|---|---|---|---|
+| **Old** | V_WString | 3.2 | 1 | not read by a later step |
 
 ## Before relying on this
 
@@ -397,7 +439,7 @@ Disabled in the workflow: its 2 tools do not run, and are not described here. Ki
 - **Alteryx behaviours the Python assumes** (steps refer to them as A1, A2…; settle them once with the probe workflow):
   - **A1** — Cleanse: the check-box numbers are mapped to options from memory of the standard macro; confirm against Cleanse.yxmc
   - **A2** — Directory: file times come from the operating system
-  - **A3** — DynamicInput: as Input; only 'read a list of data sources' with a full path
+  - **A3** — DynamicInput: as Input; 'read a list of data sources' (whole path, file name, prefix or suffix)
   - **A4** — Input: column types depend on Alteryx's file driver; the types recorded in the workflow are applied when present
   - **A5** — Join: row order of the three outputs and null = null on keys are not documented
   - **A6** — Output: cell formats written by Alteryx are not reproduced; writes only with Context(write=True)

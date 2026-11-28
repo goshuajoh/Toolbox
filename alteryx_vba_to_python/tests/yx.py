@@ -1,7 +1,8 @@
 """Builds synthetic .yxmd text with the XML shapes Alteryx Designer writes. Test helper only."""
 from xml.sax.saxutils import escape, quoteattr as q
 
-GUI = {"Input": "AlteryxBasePluginsGui.DbFileInput.DbFileInput", "Output": "AlteryxBasePluginsGui.DbFileOutput.DbFileOutput",
+GUI = {"BlockUntilDone": "AlteryxBasePluginsGui.BlockUntilDone.BlockUntilDone",
+       "Input": "AlteryxBasePluginsGui.DbFileInput.DbFileInput", "Output": "AlteryxBasePluginsGui.DbFileOutput.DbFileOutput",
        "Select": "AlteryxBasePluginsGui.AlteryxSelect.AlteryxSelect", "Formula": "AlteryxBasePluginsGui.Formula.Formula",
        "Filter": "AlteryxBasePluginsGui.Filter.Filter", "Join": "AlteryxBasePluginsGui.Join.Join",
        "Union": "AlteryxBasePluginsGui.Union.Union", "Summarize": "AlteryxSpatialPluginsGui.Summarize.Summarize",
